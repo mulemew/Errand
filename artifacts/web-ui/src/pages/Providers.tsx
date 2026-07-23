@@ -40,7 +40,7 @@ const CAPS: Record<PType, { stealth: boolean; blockAds: boolean; ignoreHttps: bo
   camoufox:     { stealth: false, blockAds: true,  ignoreHttps: true,  sessionTimeout: false, viewport: true,  humanize: true,  blockWebrtc: true },
   seleniumbase: { stealth: false, blockAds: false, ignoreHttps: false, sessionTimeout: false, viewport: true,  humanize: false, blockWebrtc: false },
 };
-const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true, stealth: false, blockAds: false, ignoreHttps: false, timeoutMin: "", resolution: "", humanize: false, blockWebrtc: true };
+const EMPTY = { name: "", type: "seleniumbase" as PType, url: "", concurrency: 1, enabled: true, stealth: false, blockAds: false, ignoreHttps: false, timeoutMin: "", resolution: "", humanize: true, blockWebrtc: true };
 const isBrowserless = (t: PType) => t === "playwright" || t === "puppeteer";
 
 export default function Providers() {
@@ -73,7 +73,7 @@ export default function Providers() {
       stealth: p.stealth ?? false, blockAds: p.blockAds ?? false, ignoreHttps: p.ignoreHttps ?? false,
       timeoutMin: p.sessionTimeoutMs != null ? String(Math.round(p.sessionTimeoutMs / 60000)) : "",
       resolution: p.viewportWidth && p.viewportHeight ? `${p.viewportWidth}x${p.viewportHeight}` : "",
-      humanize: p.humanize ?? false, blockWebrtc: p.blockWebrtc ?? true,
+      humanize: p.humanize ?? true, blockWebrtc: p.blockWebrtc ?? true,
     });
     setDialogOpen(true);
   };

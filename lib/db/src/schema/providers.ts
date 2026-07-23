@@ -37,7 +37,7 @@ export const providersTable = pgTable("providers", {
   sessionTimeoutMs: integer("session_timeout_ms"),
   viewportWidth: integer("viewport_width"),
   viewportHeight: integer("viewport_height"),
-  // camoufox-only knobs (null = the sidecar default: humanize off, WebRTC blocked).
+  // camoufox-only knobs (null = the sidecar default: humanize ON, WebRTC blocked).
   humanize: boolean("humanize"),
   blockWebrtc: boolean("block_webrtc"),
   enabled: boolean("enabled").notNull().default(true),

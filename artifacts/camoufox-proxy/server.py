@@ -61,18 +61,22 @@ def _build_options(body: dict) -> dict:
             return default
         return v.strip().lower() in ("true", "1", "yes", "on")
 
+    # humanize / block_webrtc are configured PER-PROVIDER (Providers page) and sent in the
+    # body. When absent, fall back to env, then the sane default (camoufox's own default is
+    # humanize OFF; we default WebRTC BLOCKED to avoid the STUN IPv4-vs-IPv6 leak that
+    # lowers fingerprint scores — both are just defaults, the provider toggle wins).
+    def _bodyflag(key: str, env: str, default: bool) -> bool:
+        v = body.get(key)
+        if v is not None:
+            return bool(v)
+        return _envflag(env, default)
+
     opts: dict = {
         "headless": _headless,
         # Camoufox rotates a realistic, internally-consistent fingerprint for the OS.
         "geoip": True,
-        # Human-like cursor movement. On = more realistic but slower; CAMOUFOX_HUMANIZE=false
-        # for speed. (A body-level override still wins if the api-server ever sends one.)
-        "humanize": bool(body["humanize"]) if body.get("humanize") is not None else _envflag("CAMOUFOX_HUMANIZE", True),
-        # Block WebRTC entirely by default. Otherwise geoip spoofs a WebRTC IPv4 (the exit
-        # IP) which fingerprint checkers flag as inconsistent with the page's IPv6 — a
-        # STUN leak that LOWERS the score. Blocking it = no leak, no mismatch. Toggle with
-        # CAMOUFOX_BLOCK_WEBRTC=false to let camoufox spoof the WebRTC IP instead.
-        "block_webrtc": _envflag("CAMOUFOX_BLOCK_WEBRTC", True),
+        "humanize": _bodyflag("humanize", "CAMOUFOX_HUMANIZE", True),
+        "block_webrtc": _bodyflag("blockWebrtc", "CAMOUFOX_BLOCK_WEBRTC", True),
     }
     # Extra camoufox knobs, opt-in via env (all off by default):
     if _envflag("CAMOUFOX_BLOCK_IMAGES", False):
