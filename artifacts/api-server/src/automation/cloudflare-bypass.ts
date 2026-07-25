@@ -56,17 +56,37 @@ function withGuiLock<T>(fn: () => Promise<T> | T): Promise<T> {
 // Forcefully expands hidden/overflow:hidden containers around the Turnstile
 // widget so that the checkbox is visible and clickable.
 
+// IMPORTANT: this MUTATES the widget, and Turnstile restarts its verification when its
+// container is resized or moved. It used to run unconditionally — at bypass entry, in
+// every wait loop iteration, before every click — which kept the box spinning forever
+// because we reset its timer faster than it could finish. It now only touches a widget
+// that is actually unusable (clipped or zero-sized), and `expandTurnstileIfClipped()`
+// runs it at most once per page.
 const EXPAND_TURNSTILE_JS = `
 (function() {
-  var ts = document.querySelector('input[name="cf-turnstile-response"]');
-  if (!ts) {
-    // Also try shadow DOM host containers
-    var containers = document.querySelectorAll('.cf-turnstile, [data-sitekey]');
-    if (containers.length === 0) return 'no-turnstile';
+  var ts = document.querySelector('input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]');
+  var containers = document.querySelectorAll('.cf-turnstile, [data-sitekey], [id^="cf-chl-widget"]');
+  if (!ts && containers.length === 0) return 'no-turnstile';
+
+  // Is the widget already usable? Then touch NOTHING — every style change we make can
+  // restart the challenge.
+  var probe = (ts && ts.parentElement) || containers[0];
+  var frames = Array.prototype.filter.call(document.querySelectorAll('iframe'), function (f) {
+    return f.src && (f.src.indexOf('challenges.cloudflare.com') >= 0 || f.src.indexOf('turnstile') >= 0);
+  });
+  var target = frames[0] || probe;
+  if (target) {
+    var tr = target.getBoundingClientRect();
+    var ts_ = window.getComputedStyle(target);
+    var usable = tr.width >= 40 && tr.height >= 20 &&
+      ts_.visibility !== 'hidden' && ts_.display !== 'none' && parseFloat(ts_.opacity || '1') > 0.1;
+    if (usable) return 'already-visible';
   }
-  // Expand overflow:hidden ancestors
-  var el = ts ? ts : containers[0];
-  for (var i = 0; i < 20; i++) {
+
+  // Only now: un-clip the ancestors. Relaxing overflow does not move or resize the
+  // widget itself, so it is the safe half of the old script.
+  var el = probe;
+  for (var i = 0; i < 20 && el; i++) {
     el = el.parentElement;
     if (!el) break;
     var s = window.getComputedStyle(el);
@@ -75,21 +95,80 @@ const EXPAND_TURNSTILE_JS = `
     // NOTE: do NOT set minWidth:'max-content' on ancestors. It forces
     // long-text containers (e.g. the "Renew your Free plan" modal) to stop
     // wrapping and stretch to the full viewport width, distorting the dialog.
-    // Relaxing overflow is enough to un-clip the widget; iframe sizing is
-    // handled explicitly below.
   }
-  // Make Turnstile iframes visible and properly sized
-  document.querySelectorAll('iframe').forEach(function(f){
-    if (f.src && (f.src.includes('challenges.cloudflare.com') || f.src.includes('turnstile'))) {
-      f.style.width = '300px'; f.style.height = '65px';
-      f.style.minWidth = '300px';
-      f.style.visibility = 'visible'; f.style.opacity = '1';
-      f.style.position = 'relative'; f.style.zIndex = '999999';
-    }
+  // Last resort — resize the iframe itself, ONLY when it is still unusable. This is the
+  // change Turnstile is most likely to react to, so it is gated behind everything above.
+  frames.forEach(function (f) {
+    var r = f.getBoundingClientRect();
+    if (r.width >= 40 && r.height >= 20) return;
+    f.style.width = '300px'; f.style.height = '65px'; f.style.minWidth = '300px';
+    f.style.visibility = 'visible'; f.style.opacity = '1';
   });
-  return 'done';
+  return 'expanded';
 })()
 `;
+
+/** Run the expansion AT MOST ONCE per page, and only if the widget needs it. */
+const _expanded = new WeakSet<object>();
+async function expandTurnstileIfClipped(page: PageAdapter): Promise<void> {
+  if (_expanded.has(page as object)) return;
+  _expanded.add(page as object);
+  try {
+    const r = await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string);
+    if (r === "expanded") logger.info("Turnstile widget was clipped — un-clipped it once");
+  } catch { /* non-critical */ }
+}
+
+// ── Backend flavour ───────────────────────────────────────────────────────────
+
+/** Camoufox is a patched FIREFOX. Chromium-only tricks (window.chrome, the Network
+ *  Information API, xdotool against a "chrome" window class) are wrong there — injecting
+ *  them during a challenge is exactly the inconsistency CF is looking for. */
+const _isFirefox = new WeakMap<object, boolean>();
+async function isFirefoxPage(page: PageAdapter): Promise<boolean> {
+  const cached = _isFirefox.get(page as object);
+  if (cached !== undefined) return cached;
+  let v = false;
+  try {
+    v = (await page.evaluate(() => /Firefox\//.test(navigator.userAgent))) as boolean;
+  } catch { /* keep false */ }
+  _isFirefox.set(page as object, v);
+  return v;
+}
+
+/**
+ * Click like a hand does: land on the point, dwell, press, hold, release.
+ *
+ * `mouse.click()` fires mousedown and mouseup in the SAME millisecond — a press duration
+ * no human produces, and one of the cheapest bot signals Turnstile can read. Falls back
+ * to click() on adapters without down/up (cf-proxy drives the real OS mouse itself).
+ */
+async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<void> {
+  // Approach from slightly off-target so the widget sees pointer movement arriving,
+  // not a cursor teleporting onto the checkbox. On camoufox `humanize` turns each of
+  // these into a real interpolated trajectory inside the browser.
+  await page.mouse.move(x - rand(18, 45), y + rand(-14, 14)).catch(() => {});
+  await sleep(rand(90, 220));
+  await page.mouse.move(x, y).catch(() => {});
+  await sleep(rand(120, 350)); // dwell before pressing
+  if (page.mouse.down && page.mouse.up) {
+    await page.mouse.down();
+    await sleep(rand(60, 140)); // press duration
+    await page.mouse.up();
+  } else {
+    await page.mouse.click(x, y);
+  }
+}
+
+/** Turnstile checks document.hasFocus(); on the camoufox sidecar every concurrent
+ *  session shares one Xvfb, so only one window is focused. Raise ours and report. */
+async function ensureFocused(page: PageAdapter, where: string): Promise<void> {
+  try { await page.bringToFront?.(); } catch { /* not supported */ }
+  try {
+    const focused = (await page.evaluate(() => document.hasFocus())) as boolean;
+    if (!focused) logger.warn({ where }, "Page does NOT have focus — Turnstile may refuse to complete");
+  } catch { /* ignore */ }
+}
 
 // ── xdotool-based physical click ────────────────────────────────────────────
 // Uses OS-level X11 events that are indistinguishable from real human input.
@@ -484,6 +563,25 @@ const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min
 export async function simulateHumanMouseMovement(page: PageAdapter): Promise<void> {
   const vp = page.viewport() ?? { width: 1280, height: 800 };
 
+  // ── camoufox fast path ────────────────────────────────────────────────────
+  // Camoufox's `humanize` interpolates the cursor INSIDE the browser (a single move can
+  // take up to ~1.5 s of real, human-shaped motion). Feeding it the 49-200 move bezier
+  // sweep below therefore costs MINUTES per call — with this function invoked several
+  // times per bypass round, that alone burned the whole 30-minute task budget (the
+  // "mouse.move ×97" failures). Two humanized moves give the same liveness signal.
+  //
+  // It is also the more useful signal: a cross-origin Turnstile iframe cannot see pointer
+  // events that land on the host page at all, so sweeping the viewport was never what
+  // convinced it — only the approach into the widget (humanClickAt) counts.
+  if (await isFirefoxPage(page)) {
+    try {
+      await page.mouse.move(rand(vp.width * 0.25, vp.width * 0.65), rand(vp.height * 0.25, vp.height * 0.65));
+      await sleep(rand(120, 260));
+      await page.mouse.move(rand(vp.width * 0.35, vp.width * 0.75), rand(vp.height * 0.35, vp.height * 0.75));
+    } catch { /* non-critical */ }
+    return;
+  }
+
   // ── cf-proxy fast path ────────────────────────────────────────────────────
   // On the SeleniumBase/cf-proxy backend EVERY mouse.move is a separate HTTP
   // round-trip to the sidecar, so a full bezier sweep (4-9 curves × 12-25 steps
@@ -537,29 +635,18 @@ async function simulateHumanScroll(page: PageAdapter): Promise<void> {
 }
 
 /**
- * Simulate random keyboard events — pressing Tab, Arrow keys, etc.
- * These are cheap but CF's challenge JS observes keyboard activity.
+ * Combined human presence simulation.
+ *
+ * Keyboard simulation was REMOVED: it pressed Tab (which moves focus — Turnstile checks
+ * document.hasFocus() and reacts to focus leaving the widget) and arrow keys (which
+ * scroll). Both disturb a challenge that is mid-verification, which is a large part of
+ * why the checkbox "kept spinning". Scrolling is likewise skipped once a widget is on the
+ * page: moving the widget under the cursor both restarts it and invalidates coordinates
+ * we are about to click.
  */
-async function simulateHumanKeyboard(page: PageAdapter): Promise<void> {
-  const keys = ["Tab", "ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft"];
-  const count = rand(1, 4);
-  for (let i = 0; i < count; i++) {
-    const key = keys[rand(0, keys.length)];
-    await page.keyboard.press(key).catch(() => {});
-    await sleep(rand(100, 400));
-  }
-}
-
-/**
- * Combined human presence simulation — mouse + scroll + keyboard.
- * Presents a much more realistic interaction pattern than mouse-only.
- */
-async function simulateHumanPresence(page: PageAdapter): Promise<void> {
+async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?: boolean }): Promise<void> {
   await simulateHumanMouseMovement(page);
-  // 70% chance to also scroll
-  if (Math.random() < 0.7) await simulateHumanScroll(page);
-  // 50% chance to also use keyboard
-  if (Math.random() < 0.5) await simulateHumanKeyboard(page);
+  if (!opts?.widgetPresent && Math.random() < 0.5) await simulateHumanScroll(page);
 }
 
 // ── Turnstile checkbox click ──────────────────────────────────────────────────
@@ -574,6 +661,78 @@ async function simulateHumanPresence(page: PageAdapter): Promise<void> {
  *   3. CDP widget bounding box click (fallback)
  *   4. Cross-origin iframe element click (last resort)
  */
+/**
+ * Where the checkbox is, in main-frame viewport coordinates.
+ *
+ * Resolved in ONE evaluate, immediately before clicking, so nothing (a late layout shift,
+ * a scroll) can make the coordinates stale. Covers all three shapes:
+ *   • the Turnstile <iframe> when it is in the light DOM
+ *   • an embedded widget container (.cf-turnstile / [data-sitekey])
+ *   • the MODERN FULL-PAGE interstitial, whose container is a random id
+ *     (#cf-chl-widget-xxx) with its iframe inside a CLOSED shadow root — neither
+ *     `.cf-turnstile` nor `iframe[src*=…]` can see it, which is why those challenges sat
+ *     on screen unclicked.
+ */
+async function locateTurnstileCheckbox(page: PageAdapter): Promise<{ x: number; y: number } | null> {
+  try {
+    return (await page.evaluate(() => {
+      // The checkbox is a FIXED ~24px control after ~13px of padding, so its centre is
+      // ~30px from the widget's left edge whatever the widget's width is. A proportional
+      // offset lands in the padding and reads as "verification failed".
+      const point = (r: DOMRect) => ({
+        x: Math.round(r.x + Math.min(Math.max(r.width - 8, 8), 30)),
+        y: Math.round(r.y + r.height / 2),
+      });
+      const usable = (r: DOMRect) => r.width >= 20 && r.height >= 16;
+
+      for (const f of Array.from(document.querySelectorAll("iframe"))) {
+        const src = f.src || "";
+        if (!/cloudflare|turnstile|challenges/.test(src)) continue;
+        const r = f.getBoundingClientRect();
+        if (usable(r)) return point(r);
+      }
+      const resp = document.querySelector(
+        'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      const candidates: Element[] = [];
+      if (resp?.parentElement) candidates.push(resp.parentElement);
+      candidates.push(...Array.from(document.querySelectorAll(".cf-turnstile, [data-sitekey], [id^='cf-chl-widget']")));
+      for (const c of candidates) {
+        const r = c.getBoundingClientRect();
+        if (usable(r)) return point(r);
+      }
+      return null;
+    })) as { x: number; y: number } | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait for the click to be judged.
+ *
+ * Turnstile takes 1-4 s (sometimes more) to issue its token after a good click. The old
+ * code waited 500 ms, concluded "not solved", and clicked AGAIN from the next strategy —
+ * a second click on a widget that is mid-verification is exactly what turns it into
+ * "Verification failed". So: one click, then poll patiently, and never re-click here.
+ */
+async function waitForTurnstileSettled(page: PageAdapter, budgetMs: number): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  let round = 0;
+  while (Date.now() < deadline) {
+    await sleep(700);
+    round++;
+    // Cheap poll: ONE evaluate looking for the token. Deliberately not running the full
+    // detectCfChallenge (4-6 evaluates) every round — hammering the page with scripts
+    // while CF is watching is itself a signal, which is the mistake the JS-challenge
+    // loop already learned. The expensive check runs every ~3 s, for the full-page case
+    // where passing produces no token and the challenge simply disappears.
+    if (await isTurnstileSolved(page)) return true;
+    if (round % 4 === 0 && (await detectCfChallenge(page)) === "none") return true;
+  }
+  return (await isTurnstileSolved(page)) || (await detectCfChallenge(page)) === "none";
+}
+
 export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean> {
   try {
     // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
@@ -591,105 +750,57 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
       // result avoids ~minutes of doomed retries spamming xdo errors.
       return solved;
     }
-    // ── Step 0: Expand hidden Turnstile containers ──────────────────────
-    // Many sites hide the Turnstile iframe inside overflow:hidden containers.
-    // Without expansion, the iframe may have zero dimensions and be unclickable.
-    try {
-      await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string);
-      await sleep(300);
-    } catch { /* non-critical */ }
+    // ── Step 0: un-clip the widget, but only if it actually needs it ────
+    await expandTurnstileIfClipped(page);
 
-    // ── Strategy 1: Physical OS-level click via xdotool ─────────────────
-    // This produces genuine X11 input events that are indistinguishable from
-    // real human mouse clicks. CF's Turnstile cannot detect these as automation.
+    // ── Step 1: Physical OS-level click via xdotool ─────────────────────
+    // Only ever true for the local/patchright backend, whose Chromium runs on THIS
+    // container's Xvfb. (The shipped image has no X server at all, and camoufox's Firefox
+    // lives in another container — deliberately: OS-level clicking there would make every
+    // concurrent session fight over one shared cursor, the exact race cf-proxy has.)
     if (isXdotoolAvailable()) {
       const clicked = await physicalClickTurnstile(page);
       if (clicked) return true;
     }
 
-    // ── Strategy 2: Click via the main-page widget/iframe bounding box ──
-    // This works reliably even for cross-origin iframes where we cannot
-    // access the frame's DOM. The Turnstile checkbox is typically at a
-    // fixed offset from the widget's left edge (~26px).
-    const widgetSelectors = [
-      ".cf-turnstile",
-      "[data-sitekey]",
-      "iframe[src*='turnstile']",
-      "iframe[src*='challenges.cloudflare.com']",
-    ];
-    for (const wSel of widgetSelectors) {
-      const widget = await page.$(wSel);
-      if (!widget) continue;
-      const wBox = await widget.boundingBox();
-      if (!wBox || wBox.width === 0 || wBox.height === 0) continue;
+    // ── Step 2: ONE well-formed click, then wait for the verdict ────────
+    // Turnstile must be focused to complete, and the click must look like a hand:
+    // approach, dwell, press for 60-140 ms, release. Coordinates are resolved right
+    // here so a late layout shift cannot make them stale.
+    await ensureFocused(page, "turnstile-click");
 
-      // Fixed ~30px offset lands on the checkbox itself (see checkboxOffsetX note
-      // in physicalClickTurnstile) — a proportional offset misses it to the left.
-      const clickX = wBox.x + Math.min(wBox.width - 8, 30) + (Math.random() * 4 - 2);
-      const clickY = wBox.y + wBox.height / 2 + (Math.random() * 4 - 2);
-      await page.mouse.move(clickX, clickY);
-      await sleep(150 + Math.random() * 200);
-      await page.mouse.click(clickX, clickY);
-      await sleep(500);
-      if (await isTurnstileSolved(page)) {
-        logger.info({ selector: wSel, x: clickX, y: clickY }, "Clicked Turnstile via widget coords");
-        return true;
-      }
-    }
-
-    // ── Strategy 3: Cross-origin iframe element click (when available) ──
-    // NOTE: Turnstile uses closed shadow DOM, so DOM-based iframe queries fail.
-    // The Playwright frames() API sees through shadow DOM boundaries.
+    // Prefer the checkbox element inside the CF frame (frames() sees through the closed
+    // shadow root that DOM queries cannot); fall back to widget geometry.
+    let target: { x: number; y: number } | null = null;
     const cfFrame = page
       .frames()
       .find((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)));
-
-    if (!cfFrame) {
-      logger.debug("Turnstile iframe not found in frame list");
+    if (cfFrame) {
+      const checkbox = await cfFrame
+        .$("input[type='checkbox'], .cb-lb input, .cf-checkbox-label, #challenge-stage input, .mark")
+        .catch(() => null);
+      const box = checkbox ? await checkbox.boundingBox().catch(() => null) : null;
+      if (box && box.width > 0 && box.height > 0) {
+        target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      }
+    }
+    if (!target) target = await locateTurnstileCheckbox(page);
+    if (!target) {
+      logger.warn("Turnstile widget is on the page but its checkbox could not be located");
       return false;
     }
 
-    // Try explicit checkbox selector first
-    const checkbox = await cfFrame.$(
-      "input[type='checkbox'], .cf-checkbox-label, #challenge-stage input, .mark",
-    );
-    if (checkbox) {
-      const box = await checkbox.boundingBox();
-      if (box) {
-        const clickX = box.x + Math.max(6, Math.min(16, box.width * 0.3));
-        const clickY = box.y + box.height / 2;
-        await page.mouse.move(clickX, clickY);
-        await sleep(200 + Math.random() * 200);
-        await page.mouse.click(clickX, clickY);
-        await sleep(500);
-        if (await isTurnstileSolved(page)) {
-          logger.info("Clicked Turnstile checkbox via iframe element");
-          return true;
-        }
-      }
-    }
+    // ±2px of jitter — a pixel-exact centre every time is itself a pattern.
+    const x = target.x + (Math.random() * 4 - 2);
+    const y = target.y + (Math.random() * 4 - 2);
+    logger.info({ x: Math.round(x), y: Math.round(y), viaFrame: !!cfFrame }, "Clicking Turnstile checkbox");
+    await humanClickAt(page, x, y);
 
-    // Fallback: click the centre of the iframe body
-    const body = await cfFrame.$("body");
-    if (body) {
-      const box = await body.boundingBox();
-      if (box) {
-        // Checkbox sits ~30px from the iframe's left edge (fixed control), not
-        // proportional to the iframe width.
-        const cx = box.x + Math.min(box.width - 8, 30);
-        const cy = box.y + box.height / 2;
-        await page.mouse.move(cx, cy);
-        await sleep(150);
-        await page.mouse.click(cx, cy);
-        await sleep(500);
-        if (await isTurnstileSolved(page)) {
-          logger.info("Clicked CF iframe body (fallback)");
-          return true;
-        }
-      }
-    }
-
-    return false;
+    // Patience, and NO second click: re-clicking a widget that is still verifying is what
+    // produces "Verification failed" (and it used to happen ~1 s after a good click).
+    const settled = await waitForTurnstileSettled(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000));
+    logger.info({ settled }, "Turnstile click settled");
+    return settled;
   } catch (err) {
     logger.debug({ err }, "Turnstile click failed");
     return false;
@@ -718,10 +829,11 @@ export async function bypassCloudflareChallenge(
 
   // Inject CF-specific environment patches before interacting.
   // These make the browser look more like a real user session to CF's JS probes.
+  // Chromium-only — see injectCfEnvironmentPatches.
   await injectCfEnvironmentPatches(page);
 
-  // Expand any hidden Turnstile iframes upfront
-  try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
+  // Expand hidden Turnstile iframes — once, and only when they are actually clipped.
+  await expandTurnstileIfClipped(page);
 
   // Quick check: Turnstile may have already been solved silently
   const alreadySolved = await isTurnstileSolved(page);
@@ -741,7 +853,9 @@ export async function bypassCloudflareChallenge(
     let attempt = 0;
     while (Date.now() < jsDeadline) {
       attempt++;
-      try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
+      // NOTE: no re-expansion and no keyboard/scroll here. A non-interactive challenge is
+      // verifying in the background; every DOM mutation we make restarts it, which is how
+      // "it just kept spinning" happened. Wait quietly, with a little pointer motion.
       await simulateHumanPresence(page);
       await sleep(attempt === 1 ? 4_000 + Math.random() * 2_000 : 3_000 + Math.random() * 1_500);
 
@@ -754,14 +868,13 @@ export async function bypassCloudflareChallenge(
         logger.info({ attempt }, "Turnstile token populated while waiting");
         return "passed";
       }
-      // If it upgraded to an interactive checkbox, click it.
+      // If it upgraded to an interactive checkbox, click it — once. clickTurnstileCheckbox
+      // now waits for the verdict itself, so there is nothing to re-check here.
       if (still === "turnstile_click") {
         logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
-        await simulateHumanPresence(page);
+        await simulateHumanPresence(page, { widgetPresent: true });
         await sleep(500 + Math.random() * 500);
-        await clickTurnstileCheckbox(page);
-        await sleep(3_000 + Math.random() * 2_000);
-        if (await isTurnstileSolved(page) || (await detectCfChallenge(page)) === "none") {
+        if (await clickTurnstileCheckbox(page)) {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
@@ -773,81 +886,41 @@ export async function bypassCloudflareChallenge(
   }
 
   if (challengeType === "turnstile_click") {
-    // Do NOT re-run the whole solve many times. The cf-proxy native clicker already
-    // retries thoroughly WITHIN a single call (several spaced uc_gui image clicks, then
-    // CDP, then coordinate fallbacks — ~2 min of work). Repeating that from out here does
-    // not help: a Turnstile that didn't pass on a clean click needs a FRESH page, not more
-    // clicks on the same widget. Hammering it (this loop used to run 8×) just mashes the
-    // checkbox into CF's "Verification failed" — which both EXPOSES the automation and
-    // dragged a failing login out to ~20 min (8 × a ~2 min native solve). So: one pass on
-    // cf-proxy; a few on the local backend, whose per-call click is a single cheap
-    // xdotool/CDP click rather than a full internal retry sweep.
-    const isCfProxyClicker =
-      "clickTurnstile" in page &&
-      typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function";
-    const maxAttempts = isCfProxyClicker ? 1 : 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // Expand hidden Turnstile containers before each attempt
-      try { await page.evaluate(EXPAND_TURNSTILE_JS as unknown as string); } catch { /* ignore */ }
-      // Full human presence simulation before clicking
-      await simulateHumanPresence(page);
-      await sleep(800 + Math.random() * 1200);
+    // ONE clean click per bypass round.
+    //
+    // clickTurnstileCheckbox now owns the whole sequence — focus, a human-shaped press,
+    // and up to ~12 s of waiting for the token / the challenge to disappear — so there is
+    // nothing left to re-check or re-try out here. Re-clicking a widget that is still
+    // verifying is precisely what turns it into "Verification failed": that is what the
+    // old 3-attempt loop (each attempt re-expanding the widget, then clicking again ~1 s
+    // after the previous click) was doing to challenges that had actually been passed.
+    //
+    // If a clean click does not pass, the answer is a FRESH page (the caller reloads) or a
+    // different exit IP — not more clicks on the same widget.
+    await simulateHumanPresence(page, { widgetPresent: true });
+    await sleep(600 + Math.random() * 900);
 
-      const clicked = await clickTurnstileCheckbox(page);
-
-      // A FULL-PAGE challenge passes with NO token — it redirects / disappears — so the
-      // native clicker reports solved:false even when it actually cleared the challenge.
-      // Verify the challenge is really still up BEFORE treating !clicked as a miss, or a
-      // full-page challenge we DID pass gets reported as a failure. This branch is
-      // full-page only (embedded/popup widgets return "none" and go through the token
-      // path), so the "challenge gone" signal here can never affect a widget.
-      if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
-        logger.info({ attempt }, "Cloudflare full-page challenge cleared after click");
-        return "passed";
-      }
-      if (!clicked) {
-        logger.warn({ attempt }, "Could not locate Turnstile checkbox, waiting for it to appear");
-        await sleep(2_000 + Math.random() * 1_000);
-        continue;
-      }
-
-      // A TOKEN is the real success signal for an EMBEDDED widget: unlike a full-page
-      // interstitial it does not redirect or disappear when passed (it just ticks), so
-      // waiting for the challenge to "go away" never succeeds and the loop failed after
-      // 8 clicks despite the checkbox being passed.
-      if (await isTurnstileSolved(page)) {
-        logger.info({ attempt }, "Turnstile solved (token present)");
-        return "passed";
-      }
-
-      // Wait for page navigation or challenge to clear — use domcontentloaded
-      // instead of networkidle2 to avoid premature timeouts on CF pages
-      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
-      await sleep(2_000 + Math.random() * 1_500);
-
-      if (await isTurnstileSolved(page)) {
-        logger.info({ attempt }, "Turnstile solved (token present after settle)");
-        return "passed";
-      }
-      const still = await detectCfChallenge(page);
-      if (still === "none") {
-        logger.info({ attempt }, "Cloudflare Turnstile click challenge bypassed");
-        return "passed";
-      }
-
-      // Challenge still active — simulate more complex human activity before retrying
-      logger.debug({ attempt }, "Turnstile still active after click, simulating more activity");
-      await simulateHumanPresence(page);
-      await sleep(2_000 + Math.random() * 2_000);
-
-      // Re-check — sometimes it clears with a delay
-      const recheck = await detectCfChallenge(page);
-      if (recheck === "none") {
-        logger.info({ attempt }, "Cloudflare Turnstile cleared after additional wait");
-        return "passed";
-      }
+    const clicked = await clickTurnstileCheckbox(page);
+    if (clicked) {
+      logger.info("Cloudflare Turnstile click challenge bypassed");
+      return "passed";
     }
-    logger.warn({ maxAttempts }, "Cloudflare Turnstile click challenge not bypassed");
+
+    // A full-page challenge passes with NO token — it just navigates away — and the
+    // cf-proxy native clicker cannot see that, so confirm independently before failing.
+    if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
+      logger.info("Cloudflare full-page challenge cleared after click");
+      return "passed";
+    }
+
+    // It may still be finishing a slow verification: give it one quiet grace period
+    // (no clicking, no DOM changes) before giving up.
+    await sleep(3_000 + Math.random() * 2_000);
+    if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
+      logger.info("Cloudflare Turnstile cleared during the grace period");
+      return "passed";
+    }
+    logger.warn("Cloudflare Turnstile click challenge not bypassed — needs a fresh page or a different exit IP");
     return "failed";
   }
 
@@ -958,6 +1031,15 @@ export async function clearCloudflareInterstitial(
  * only run when a CF challenge is actually detected.
  */
 async function injectCfEnvironmentPatches(page: PageAdapter): Promise<void> {
+  // CHROMIUM ONLY. Every patch below describes a Chromium environment: the Network
+  // Information API (navigator.connection) does not exist in Firefox at all, so adding it
+  // to a Firefox UA is a straight contradiction — and camoufox's whole value is an
+  // internally consistent Firefox. Overwriting performance.now is worse: a native function
+  // whose toString no longer looks native, injected at exactly the moment CF is probing.
+  if (await isFirefoxPage(page)) {
+    logger.debug("Firefox/camoufox — skipping Chromium-only CF environment patches");
+    return;
+  }
   try {
     await page.evaluate((() => {
       // CF checks window.navigator.connection — simulate a typical broadband connection

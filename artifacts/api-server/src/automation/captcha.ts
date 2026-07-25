@@ -975,16 +975,17 @@ export async function detectAndHandleCaptcha(
             // clickTurnstileCheckbox: cf-proxy backend uses the native clicker;
             // local/patchright uses xdotool/CDP. (It no longer falls through to
             // app-container xdotool on cf-proxy — that has no DISPLAY.)
+            // clickTurnstileCheckbox now performs ONE human-shaped click (focus, approach,
+            // 60-140 ms press) and then waits up to ~12 s for the token itself, so there is
+            // no extra settle sleep here and — crucially — no second click. The previous
+            // flow checked the token 500 ms after clicking and clicked again from the next
+            // strategy, which is what turned passed widgets into "Verification failed".
             const clicked = await clickTurnstileCheckbox(page);
             if (!clicked) {
-              logger.debug({ attempt }, "Could not locate Turnstile widget to click");
+              logger.debug({ attempt }, "Turnstile click did not result in a token");
               if (attempt < MAX_TS_CLICK_ATTEMPTS) await new Promise((r) => setTimeout(r, 2000));
               continue;
             }
-
-            // Wait for click to take effect — longer on first attempts (PoW takes time)
-            const waitMs = attempt <= 2 ? 6000 + Math.random() * 3000 : 3500 + Math.random() * 2000;
-            await new Promise((r) => setTimeout(r, waitMs));
 
             if (await checkTurnstileToken()) {
               logger.info({ attempt }, "Turnstile solved via click (token populated)");
@@ -998,16 +999,11 @@ export async function detectAndHandleCaptcha(
               return { detected: true, solved: true, message: "Turnstile widget solved (widget disappeared after click)" };
             }
 
-            // Reset Turnstile on failure so next attempt gets a fresh challenge
-            try {
-              await page.evaluate(() => {
-                // @ts-ignore
-                if (typeof turnstile !== "undefined" && turnstile?.reset) turnstile.reset();
-              });
-              await new Promise((r) => setTimeout(r, 2000));
-            } catch { /* non-critical */ }
-
-            logger.debug({ attempt }, "Token still empty after click, retrying...");
+            // Deliberately NOT calling turnstile.reset() here. With a single attempt there
+            // is nothing to reset FOR, and tearing the widget down on the way out leaves the
+            // form facing a brand-new unsolved challenge — plus a reset issued while the
+            // previous verification is still settling is itself a way to lose a pass.
+            logger.debug({ attempt }, "Token still empty after the click + wait");
           } catch (err) {
             logger.debug({ err, attempt }, "Turnstile click attempt threw");
           }

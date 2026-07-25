@@ -33,6 +33,11 @@ export interface KeyboardAdapter {
 export interface MouseAdapter {
   move(x: number, y: number): Promise<void>;
   click(x: number, y: number): Promise<void>;
+  /** Separate press/release so a click can hold for a human-length time. `click()`
+   *  fires mousedown+mouseup in the same millisecond, which Turnstile scores as a bot.
+   *  Optional: the cf-proxy adapter drives the real OS mouse and has no equivalent. */
+  down?(): Promise<void>;
+  up?(): Promise<void>;
 }
 
 export interface FrameAdapter {
@@ -61,6 +66,11 @@ export interface PageAdapter {
   waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter>;
   /** Returns true if the underlying page has been closed / detached. */
   isClosed(): boolean;
+  /** Raise/activate this page's window. Turnstile checks document.hasFocus(), and the
+   *  camoufox sidecar runs every concurrent session's headful Firefox on ONE Xvfb — so
+   *  without this only one window is focused and the rest fail the interactive check.
+   *  Optional: not available on the cf-proxy adapter. */
+  bringToFront?(): Promise<void>;
   /**
    * Returns all currently open non-closed pages in the same browser context.
    * Screenshot step uses this to auto-fallback when the current page is closed
@@ -169,7 +179,10 @@ export function wrapPuppeteerPage(page: PuppeteerPage): PageAdapter {
     mouse: {
       move: (x, y) => page.mouse.move(x, y),
       click: (x, y) => page.mouse.click(x, y),
+      down: () => page.mouse.down(),
+      up: () => page.mouse.up(),
     },
+    bringToFront: () => page.bringToFront(),
     viewport: () => page.viewport(),
     frames: () => page.frames().map(wrapPuppeteerFrame),
     waitForNewPage: async (_opts) => {
@@ -286,7 +299,10 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
     mouse: {
       move: (x, y) => page.mouse.move(x, y),
       click: (x, y) => page.mouse.click(x, y),
+      down: () => page.mouse.down(),
+      up: () => page.mouse.up(),
     },
+    bringToFront: () => page.bringToFront(),
     viewport: () => page.viewportSize(),
     frames: () => page.frames().map(wrapPlaywrightFrame),
     waitForNewPage: async (_opts) => {
