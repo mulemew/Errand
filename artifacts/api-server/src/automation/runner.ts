@@ -257,6 +257,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
   ): Promise<void> {
     if (runningTasks.has(taskId)) {
       logger.warn({ taskId, dryRun }, "Task already running, skipping");
+      // The poller CLEARED next_run_at before calling us, so an @after_completion task
+      // skipped here would lose its schedule forever (no next_run_at → never polled again).
+      // Re-arm the interval so the chain survives an overlapping trigger.
+      if (!dryRun) await schedulePostCompletionIfNeeded(taskId, dryRun);
       return;
     }
 
@@ -721,7 +725,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                   // completion path, so it must re-schedule @after_completion tasks itself
                   // — but a pending retry already owns the next run, so only reschedule
                   // when no retry was booked (otherwise the task would run twice).
-                  if (!capRetry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
+                  await schedulePostCompletionIfNeeded(taskId, dryRun);
                   emitTaskDone(taskId, false, dryRun ? "[DRY RUN] Captcha encountered" : `Task paused - captcha needs resolution${capRetry.note}`);
                   logger.warn({ taskId, dryRun, willRetry: capRetry.scheduled }, "Captcha encountered");
                   return;
@@ -816,7 +820,12 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             emitTaskDone(taskId, overallSuccess, overallSuccess ? `Task completed in ${elapsed}s` : `Task failed after ${elapsed}s`);
             // A pending retry (retry_at) already owns the next run — don't ALSO book the
             // @after_completion interval, or the task would run twice.
-            if (!_retry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
+            // ALWAYS recompute the @after_completion next run — it's the task's normal
+            // schedule and must survive a failure. The retry lives on its own retry_at
+            // channel and simply fires earlier; runTask's "already running" guard makes
+            // an overlap harmless. (Gating this on "no retry booked" stopped the interval
+            // chain from being recalculated after a failed run.)
+            await schedulePostCompletionIfNeeded(taskId, dryRun);
             logger.info({ taskId, dryRun, success: overallSuccess, willRetry: _retry.scheduled }, "Task run completed");
           })(),
           timeoutPromise,
@@ -895,7 +904,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         await db.update(tasksTable).set({ status: isCancelled ? "idle" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
         // A failed exception also needs to keep @after_completion tasks repeating — but a
         // booked retry already owns the next run, so only reschedule when none was booked.
-        if (!isCancelled && !outerRetry.scheduled) await schedulePostCompletionIfNeeded(taskId, dryRun);
+        if (!isCancelled) await schedulePostCompletionIfNeeded(taskId, dryRun);
       }
     } finally {
       runningTasks.delete(taskId);

@@ -329,10 +329,12 @@ router.get("/tasks/next-runs", async (_req, res): Promise<void> => {
     // A pending auto-retry runs before the normal schedule, so it's the true next run when
     // it's sooner — surfaced consistently for every schedule type (incl. manual tasks with
     // no cron, which is why the filter also lets a retry-only task through).
+    // Don't filter out past-due times: an overdue nextRunAt (server was down, the 30s poll
+    // hasn't come round, or the run is in flight) is still the meaningful "next run" —
+    // hiding it made the countdown read 无 instead of the real timestamp.
     const soonest = (retryAt: Date | null, normal: Date | null): string | null => {
-      const r = retryAt && new Date(retryAt) > now ? new Date(retryAt) : null;
-      const n = normal && normal > now ? normal : null;
-      const pick = r && n ? (r < n ? r : n) : (r ?? n);
+      const r = retryAt ? new Date(retryAt) : null;
+      const pick = r && normal ? (r < normal ? r : normal) : (r ?? normal);
       return pick ? pick.toISOString() : null;
     };
     const result = taskRows
