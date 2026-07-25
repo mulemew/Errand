@@ -2,6 +2,7 @@ import type { PageAdapter } from "./page-adapter";
   import crypto from "crypto";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
+  import { verifyOAuthLanding, detectLoginState } from "./login-verify";
   import { detectAndHandleCaptcha } from "./captcha";
   import type { CaptchaSolver } from "./captcha-solver";
   import type { LoginResult } from "./form-login";
@@ -253,6 +254,9 @@ import type { PageAdapter } from "./page-adapter";
       await sleep(2500);
 
       let currentUrl = safeUrl(page);
+      // Where the flow started. Landing back here is the signature of an OAuth click that
+      // opened a popup we never followed — or one that did nothing at all.
+      const clickStartUrl = currentUrl;
       logger.info({ url: currentUrl }, "Landed on initial URL");
 
       // ── Phase 1: If not on GitHub, click the OAuth button ───────────────────
@@ -302,8 +306,13 @@ import type { PageAdapter } from "./page-adapter";
               logger.warn({ url: currentUrl }, "Cloudflare WAF block detected — not authenticated");
               return { success: false, captchaBlocked: false, message: `Target site is Cloudflare WAF blocked. URL: ${currentUrl}` };
             }
-            logger.info({ url: currentUrl }, "No GitHub button found and no login affordances — already logged in?");
-            return { success: true, captchaBlocked: false, message: `Already authenticated. URL: ${currentUrl}` };
+            const { verdict, evidence } = await detectLoginState(page);
+            if (verdict === "logged_out") {
+              logger.warn({ url: currentUrl, evidence }, "No GitHub button, but the page still shows a login screen");
+              return { success: false, captchaBlocked: false, message: `Not authenticated and no "Sign in with GitHub" button found (${evidence}). URL: ${currentUrl}` };
+            }
+            logger.info({ url: currentUrl, verdict, evidence }, "No GitHub button and no login affordances — already logged in");
+            return { success: true, captchaBlocked: false, message: `Already authenticated (${evidence}). URL: ${currentUrl}` };
           }
           logger.warn({ url: currentUrl, looksLikeLogin }, "Login page detected but GitHub button not found");
           return { success: false, captchaBlocked: false, message: `Could not find "Sign in with GitHub" button on login page: ${currentUrl}` };
@@ -346,6 +355,15 @@ import type { PageAdapter } from "./page-adapter";
               );
 
             if (!isLoginPage) {
+              // The URL shape is not proof. wispbyte serves its login screen at /client —
+              // no login/signin keyword anywhere — so a click that never navigated (or that
+              // opened GitHub in a popup) landed here on tick 1 and was reported as a
+              // successful login while the page had not moved at all.
+              const landingErr = await verifyOAuthLanding(page, "GitHub", clickStartUrl);
+              if (landingErr) {
+                logger.warn({ url: currentUrl }, "OAuth 'success' rejected — page still looks logged out");
+                return { success: false, captchaBlocked: false, message: landingErr };
+              }
               // 如果配置了 successText，验证页面含该文本才算登录成功
               if (successText) {
                 await sleep(1500);

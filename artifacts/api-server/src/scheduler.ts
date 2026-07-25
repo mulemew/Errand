@@ -106,7 +106,7 @@ export async function initScheduler(): Promise<void> {
     for (const task of overdueRetries) {
       logger.info({ taskId: task.id }, "Triggering overdue auto-retry on startup");
       await db.update(tasksTable).set({ retryAt: null }).where(eq(tasksTable.id, task.id));
-      runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Overdue retry run failed"));
+      runTask(task.id, false, "retry").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Overdue retry run failed"));
     }
   } catch (err) {
     logger.warn({ err }, "Failed to check overdue retries on startup");
@@ -133,7 +133,11 @@ export async function initScheduler(): Promise<void> {
       for (const task of retries) {
         await db.update(tasksTable).set({ retryAt: null }).where(eq(tasksTable.id, task.id));
         logger.info({ taskId: task.id }, "Auto-retry fired");
-        runTask(task.id, false, "cron").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Retry run failed"));
+        // Labelled "retry", not "cron": a @random task counts its runs from the log table,
+        // so an attempt that only happened because the previous one FAILED must not eat
+        // that window's quota (two failures + retries could silently consume a whole
+        // window's worth of scheduled runs).
+        runTask(task.id, false, "retry").catch((err: unknown) => logger.error({ taskId: task.id, err }, "Retry run failed"));
       }
     } catch (err) {
       logger.error({ err }, "Scheduler poll error");
@@ -254,6 +258,10 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
           eq(logsTable.taskId, taskId),
           gte(logsTable.runAt, new Date(windowStart)),
           lt(logsTable.runAt, new Date(windowEnd)),
+          // Auto-retries are not scheduled runs — they exist because a scheduled run
+          // failed. Counting them would let a flaky task use up its window quota on
+          // retries and then skip the runs the user actually asked for.
+          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
         ));
       runsInWindow = result?.count ?? 0;
     } catch (err) {

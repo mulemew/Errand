@@ -1,6 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
+import { verifyOAuthLanding } from "./login-verify";
 import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
 import type { LoginResult } from "./form-login";
@@ -222,6 +223,8 @@ export async function googleLogin(
     await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
     const isAlreadyGoogle = page.url().includes("accounts.google.com");
+    // Where the flow started, so we can tell "OAuth completed" from "nothing happened".
+    const clickStartUrl = page.url();
 
     if (!isAlreadyGoogle) {
       logger.info("Target is not Google — looking for OAuth button on target page");
@@ -249,12 +252,28 @@ export async function googleLogin(
           message: "Could not find a 'Sign in with Google' button on the target page after 15s. Ensure the target URL contains a Google OAuth login button.",
         };
       }
-      logger.info({ url: page.url() }, "Navigated via Google OAuth button");
+      logger.info({ url: page.url() }, "Clicked the Google OAuth button — waiting for the flow to move");
+      // WAIT for the click to actually go somewhere. Without this the very next check runs
+      // while the browser is still on the login page and concludes "already authenticated
+      // with Google" — which is why dash.pingless.org reported success on every run while
+      // sitting on the auth screen the whole time.
+      const navDeadline = Date.now() + 20000;
+      while (Date.now() < navDeadline) {
+        const u = page.url();
+        if (u.includes("accounts.google.com") || u !== clickStartUrl) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
     }
 
     if (!page.url().includes("accounts.google.com")) {
       // Maybe already logged into Google and got redirected directly back to app
-      logger.info({ url: page.url() }, "Already authenticated with Google, redirected to app");
+      logger.info({ url: page.url() }, "Not on accounts.google.com — checking whether we are actually signed in");
+      // "Not on Google" is NOT evidence of a session: it is also what a page that never
+      // moved looks like. Demand something on the page that says we are in.
+      const landingErr = await verifyOAuthLanding(page, "Google", clickStartUrl);
+      if (landingErr) {
+        return { success: false, captchaBlocked: false, message: landingErr };
+      }
       // 如果配置了 successText，验证页面含该文本才算已登录
       if (successText) {
         await new Promise((r) => setTimeout(r, 1500));
@@ -303,6 +322,8 @@ export async function googleLogin(
         }
       } catch { /* 选择器无效，跳过 */ }
     }
+    const finalLandingErr = await verifyOAuthLanding(page, "Google");
+    if (finalLandingErr) return { success: false, captchaBlocked: false, message: finalLandingErr };
     return { success: true, captchaBlocked: false, message: `Successfully logged in via Google OAuth. Final URL: ${finalUrl}` };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

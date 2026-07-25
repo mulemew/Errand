@@ -373,9 +373,22 @@ const CF_PROBE_FN = () => {
   // content is the discriminator — an interstitial renders only the challenge, never
   // the app's form or nav. Getting this backwards routes every embedded/popup widget
   // into the full-page bypass, which never clicks them.
-  const siteContent = document.querySelector(
-    "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
-  );
+  // An OPEN MODAL counts as site content too. Plenty of widgets live in a dialog that an
+  // earlier step opened (a "Renew server" / "Claim" button), and those pages need not have
+  // a nav or a form. Misreading one as a full-page interstitial sends it down the reload
+  // path — and a reload destroys the dialog, which the step will not re-open, so the
+  // widget is gone for the rest of the run.
+  const openDialog = Array.from(
+    document.querySelectorAll<HTMLElement>("dialog[open], [role='dialog'], [role='alertdialog'], .modal.show, .modal.in"),
+  ).some((d) => {
+    const r = d.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  const siteContent =
+    openDialog ||
+    !!document.querySelector(
+      "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
+    );
   const marker =
     !siteContent &&
     !!document.querySelector(

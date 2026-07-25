@@ -4,6 +4,7 @@ import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
+import { detectLoginState } from "./login-verify";
 import { detectAndHandleCaptcha } from "./captcha";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
@@ -960,7 +961,16 @@ async function isSessionAuthenticated(
       }
     } catch {}
   }
-  // Nothing explicit configured → we cannot know. Say no and let the login run.
+  // Nothing explicit matched. Rather than always answering "no" — which made cookie mode
+  // on a form/GitHub/Google login silently pointless (it could never skip the login, so it
+  // logged in every single run and merely re-saved the session) — look at the page itself.
+  // Only a POSITIVE signal counts: a visible sign-out / account affordance. "unknown" still
+  // means no, so a site we cannot read keeps the old, safe behaviour of logging in.
+  const { verdict, evidence } = await detectLoginState(page);
+  if (verdict === "logged_in") {
+    logger.info({ evidence }, "Session looks authenticated (no explicit success criterion configured)");
+    return true;
+  }
   return false;
 }
 
