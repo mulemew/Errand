@@ -244,13 +244,27 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
       await page.waitForSelector(sel, opts);
     },
     waitForNavigation: async (opts) => {
+      // This was `page.waitForURL("**")`, which is a NO-OP: waitForURL resolves as soon as
+      // the CURRENT url matches the pattern, and "**" matches everything — so it returned
+      // immediately without waiting for anything. Every caller that clicked something and
+      // then "waited for navigation" was in fact judging the page before the browser had
+      // moved: that is how the Google flow concluded "already authenticated" while still
+      // sitting on the login screen, and why the GitHub state machine sometimes evaluated
+      // its first tick against the pre-click page.
+      const before = page.url();
+      const waitUntil = normalizeWaitUntil(opts?.waitUntil) ?? "load";
+      const timeout = opts?.timeout ?? 30_000;
       try {
-        await page.waitForURL("**", {
-          waitUntil: normalizeWaitUntil(opts?.waitUntil) ?? "networkidle",
-          timeout: opts?.timeout,
-        });
+        await Promise.race([
+          // The usual case: we end up somewhere else.
+          page.waitForURL((u) => u.toString() !== before, { waitUntil, timeout }),
+          // A same-URL navigation (form POST that re-renders, a reload) never changes the
+          // URL, so watch for the document load too — otherwise those would burn the full
+          // timeout waiting for a change that is not coming.
+          page.waitForEvent("load", { timeout }),
+        ]);
       } catch {
-        // navigation may have already completed
+        // Nothing navigated within the timeout — the caller decides what that means.
       }
     },
     $: async (sel) => {
