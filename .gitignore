@@ -11,6 +11,12 @@ out-tsc
 # dependencies
 node_modules
 
+# Python bytecode / virtualenvs (camoufox-proxy, cf-proxy sidecars)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
 # IDEs and editors
 /.idea
 .project
