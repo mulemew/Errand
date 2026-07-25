@@ -2,7 +2,7 @@ import type { PageAdapter } from "./page-adapter";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { detectAndHandleCaptcha } from "./captcha";
-  import { clearCloudflareInterstitial } from "./cloudflare-bypass";
+  import { clearCloudflareInterstitial, describeTurnstileState } from "./cloudflare-bypass";
   import type { CaptchaSolver } from "./captcha-solver";
   import crypto from "crypto";
 
@@ -602,12 +602,17 @@ import type { PageAdapter } from "./page-adapter";
             })
             .catch(() => false)) as boolean;
           if (stillBlocked) {
+            // Report WHAT the widget shows, not just "it failed". The three states need
+            // three different fixes: "Verify you are human" = our click never landed,
+            // "Verifying…" = it is still working and we ran out of budget, "Verification
+            // failed" = the click landed but was judged a bot (IP/fingerprint).
+            const widget = await describeTurnstileState(page);
             return {
               success: false,
               captchaBlocked: true,
               message:
                 "Cloudflare challenge is still up after the bypass budget — the login page never loaded. " +
-                "The checkbox could not be passed from this IP/fingerprint.",
+                `Widget state: "${widget}".`,
             };
           }
           logger.warn({ targetUrl }, "Cloudflare interstitial not confirmed cleared before login — continuing anyway");

@@ -160,6 +160,30 @@ async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<vo
   }
 }
 
+/**
+ * What the widget itself says right now — the single most useful line when a click did
+ * not work, and something a screenshot only hints at. The Turnstile iframe is reachable
+ * through frames() even though it lives in a closed shadow root, and its body text is the
+ * verdict in plain words: "Verify you are human" (never clicked), "Verifying…" (still
+ * spinning — we were too impatient or reset it), "Success!", or "Verification failed".
+ */
+export async function describeTurnstileState(page: PageAdapter): Promise<string> {
+  try {
+    const frame = page
+      .frames()
+      .find((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)));
+    if (!frame) return "no turnstile frame";
+    const body = await frame.$("body").catch(() => null);
+    if (!body) return "frame present, no body";
+    const text = (await body
+      .evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120))
+      .catch(() => "")) as string;
+    return text || "(empty)";
+  } catch {
+    return "(unreadable)";
+  }
+}
+
 /** Turnstile checks document.hasFocus(); on the camoufox sidecar every concurrent
  *  session shares one Xvfb, so only one window is focused. Raise ours and report. */
 async function ensureFocused(page: PageAdapter, where: string): Promise<void> {
@@ -319,189 +343,131 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
   return await isTurnstileSolved(page);
 }
 
-/** DOM selectors that indicate an active CF challenge overlay */
-const CF_CHALLENGE_SELECTORS = [
-  "#challenge-running",
-  "#cf-challenge-running",
-  ".cf-browser-verification",
-  "#challenge-overlay",
-  "#cf-wrapper #challenge-body",
-];
-
 /** Partial URL strings that identify CF Turnstile iframes */
 const CF_FRAME_PATTERNS = ["challenges.cloudflare.com", "cf-turnstile"];
 
 // ── Detection ─────────────────────────────────────────────────────────────────
 
-async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
-  let isCfPage = false;
+type CfPageProbe = {
+  blocked: boolean;
+  marker: boolean;
+  legacy: boolean;
+  title: string;
+  visibleWidget: boolean;
+  turnstileIframe: boolean;
+};
 
+async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // Pre-fetch frames for SeleniumBase adapter (frames() is sync but needs async HTTP)
   if ("fetchFrames" in page && typeof (page as any).fetchFrames === "function") {
     await (page as any).fetchFrames();
   }
 
-  // ── WAF block detection — "Sorry, you have been blocked" ──────────────
-  // CF WAF blocks show a different page from challenges. These cannot be
-  // bypassed by any browser technique — the IP/fingerprint is blocked at
-  // the WAF level. Detect early to avoid wasting time on bypass attempts.
+  // ONE evaluate for the whole page-side verdict.
+  //
+  // This used to be four to six separate evaluates (WAF text, structural markers, title,
+  // a $()+evaluate per legacy selector, the visible-widget probe, an iframe scan) and it
+  // is called on a poll while a challenge is watching the page — a burst of injected
+  // scripts every couple of seconds is itself something CF scores. Same logic, one call.
+  let probe: CfPageProbe | null = null;
   try {
-    const isBlocked = await page.evaluate(() => {
+    probe = (await page.evaluate(() => {
       const bodyText = document.body?.innerText ?? "";
       const title = document.title ?? "";
-      return (
+
+      // ── WAF block — "Sorry, you have been blocked". Not a challenge: no browser
+      // technique clears it, the IP/fingerprint is refused at the edge.
+      const blocked =
         bodyText.includes("you have been blocked") ||
         bodyText.includes("You are unable to access") ||
         title.includes("Attention Required") ||
-        (bodyText.includes("Cloudflare") && bodyText.includes("blocked"))
-      );
-    }) as boolean;
-    if (isBlocked) {
-      logger.warn("Cloudflare WAF block detected — IP/fingerprint is blocked");
-      return "waf_blocked";
-    }
-  } catch {
-    // ignore
-  }
+        (bodyText.includes("Cloudflare") && bodyText.includes("blocked"));
 
-  // ── Structural detection (language-independent) ──────────────────────────
-  // MUST come before the title/selector checks: the title test only knows the
-  // ENGLISH strings, but Cloudflare localises the interstitial ("请稍候…" for a
-  // zh client), and the modern challenge page carries none of the legacy
-  // #challenge-running / .cf-browser-verification markup — its ids are random
-  // (cf-chl-widget-kjlr4_response). So on a localised modern challenge we detected
-  // nothing, returned "none", never clicked the checkbox, and the caller then failed
-  // looking for login elements that were still behind the interstitial.
-  //
-  // These markers are stable across languages and widget ids:
-  //   input[id^="cf-chl-widget-"][id$="_response"]  — the modern challenge's field
-  //   [name="cf-turnstile-response"]                — Turnstile's response field
-  //   script[src*="challenges.cloudflare.com"]      — the challenge script
-  //
-  // It must also be FALSE for a real page that merely EMBEDS a Turnstile. A login form
-  // with a Turnstile loads challenges.cloudflare.com and has a cf-chl-widget-*_response
-  // input too, so those markers alone cannot tell "the gate is up" from "we're through
-  // and the form has its own widget" — and treating the login page as an interstitial
-  // makes the bypass loop retry/reload it until the budget runs out, then report that
-  // Cloudflare was never cleared. The site's own content is the discriminator: an
-  // interstitial renders only the challenge, never the app's form/nav.
-  try {
-    isCfPage = (await page.evaluate(() => {
-      // Discriminate the THREE cases by checking the site's OWN content FIRST. A login
-      // form (embedded widget) or a dashboard nav/header (popup/modal widget) means we
-      // are already PAST the gate, so a Turnstile here is an EMBEDDED / POPUP widget that
-      // detectAndHandleCaptcha's token path handles with a SINGLE click — it is NOT a
-      // full-page interstitial. This check MUST come first: an embedded/popup page has
-      // BOTH site content AND a widget box, so testing the widget first (as f98528b did)
-      // mis-routed every embedded/popup widget into the full-page bypass, which never
-      // clicked them. Only a page with NO site content can be a full-page challenge —
-      // that renders ONLY the challenge, never the app's own form/nav. This keeps the
-      // full-page path (handled below) completely separate from the widget path, so
-      // working on one can never again break the other.
+      // ── Structural markers (language-independent). Cloudflare localises the
+      // interstitial ("请稍候…"), and the modern challenge carries none of the legacy
+      // #challenge-running markup — its ids are random (cf-chl-widget-kjlr4_response).
+      //
+      // They must be FALSE for a page that merely EMBEDS a Turnstile: a login form with a
+      // widget loads the same script and has the same response input. The site's OWN
+      // content is the discriminator — an interstitial renders only the challenge, never
+      // the app's form or nav. Getting this backwards routes every embedded/popup widget
+      // into the full-page bypass, which never clicks them.
       const siteContent = document.querySelector(
         "input[type='password'], form[action*='login'], input[name='email'], input[name='username'], nav, header",
       );
-      if (siteContent) return false;
-      return !!document.querySelector(
-        'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
-          'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
-      );
-    })) as boolean;
-  } catch {
-    // page may have been closed
-  }
+      const marker =
+        !siteContent &&
+        !!document.querySelector(
+          'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
+            'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
+        );
 
-  // Title-based detection (English interstitials)
-  if (!isCfPage) {
-    try {
-      const title = await page.title();
-      isCfPage =
-        title === "Just a moment..." ||
-        title === "Attention Required! | Cloudflare" ||
-        title.includes("DDoS protection by Cloudflare");
-    } catch {
-      // page may have been closed
-    }
-  }
+      // ── Legacy overlay markup, still used by older challenge pages.
+      const legacy = [
+        "#challenge-running",
+        "#cf-challenge-running",
+        ".cf-browser-verification",
+        "#challenge-overlay",
+        "#cf-wrapper #challenge-body",
+      ].some((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
 
-  // DOM selector-based detection
-  if (!isCfPage) {
-    for (const sel of CF_CHALLENGE_SELECTORS) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          const visible = await el
-            .evaluate((e: Element) => {
-              const r = e.getBoundingClientRect();
-              return r.width > 0 && r.height > 0;
-            })
-            .catch(() => false);
-          if (visible) {
-            isCfPage = true;
-            break;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  if (!isCfPage) return "none";
-
-  // We only reach here for a FULL-PAGE challenge (embedded/popup widgets returned "none"
-  // above via the site-content guard and are handled by the token path). If the full-page
-  // challenge renders a VISIBLE widget box it has a checkbox to CLICK, so route it to the
-  // click handler directly — NOT the iframe-gated resolution below. The modern Turnstile
-  // widget carries NO challenges.cloudflare.com <iframe> (its response input is in the
-  // light DOM), so the frame check would miss it and fall through to "js_challenge", whose
-  // branch only WAITS and never clicks — leaving an interactive full-page checkbox
-  // untouched. (A managed/self-verifying full-page challenge has no clickable box, so the
-  // native clicker's image search simply no-ops and we still fall through to waiting.)
-  try {
-    const hasVisibleWidget = (await page.evaluate(() => {
+      // ── Is there a CLICKABLE box on screen? The modern widget has no
+      // challenges.cloudflare.com <iframe> in the light DOM (its response input is there
+      // instead), so an iframe-only test misses it and the challenge falls through to the
+      // wait-only branch — a full-page checkbox that never gets clicked.
       const resp = document.querySelector(
         'input[id^="cf-chl-widget-"][id$="_response"], input[name="cf-turnstile-response"]',
       );
       const box = (resp && resp.parentElement) || document.querySelector(".cf-turnstile");
-      if (!box) return false;
-      const r = box.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
-    })) as boolean;
-    if (hasVisibleWidget) return "turnstile_click";
-  } catch {
-    // fall through to the frame-based resolution below
-  }
+      let visibleWidget = false;
+      if (box) {
+        const r = box.getBoundingClientRect();
+        visibleWidget = r.width > 0 && r.height > 0;
+      }
 
-  // Distinguish JS-only challenge vs interactive Turnstile checkbox.
-  //
-  // NOTE: Turnstile renders its iframe inside a **closed shadow DOM**, which
-  // means `document.querySelectorAll("iframe")` cannot find it. We check both
-  // the DOM and Playwright's frames() API (which sees through shadow DOM).
-  try {
-    // Method 1: Playwright frames API (works with closed shadow DOM)
-    let hasTurnstileFrame = false;
-    try {
-      hasTurnstileFrame = page.frames().some(
-        (f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)),
+      const turnstileIframe = Array.from(document.querySelectorAll("iframe")).some((f) =>
+        ["challenges.cloudflare.com", "cf-turnstile"].some((pat) => (f.src ?? "").includes(pat)),
       );
-    } catch {
-      // frames() may not be available in all adapters
-    }
 
-    // Method 2: DOM query fallback
-    if (!hasTurnstileFrame) {
-      hasTurnstileFrame = await page.evaluate((patterns: unknown) => {
-        return Array.from(document.querySelectorAll("iframe")).some((f) =>
-          (patterns as string[]).some((p) => (f.src ?? "").includes(p)),
-        );
-      }, CF_FRAME_PATTERNS as never) as boolean;
-    }
-
-    return hasTurnstileFrame ? "turnstile_click" : "js_challenge";
+      return { blocked, marker, legacy, title, visibleWidget, turnstileIframe };
+    })) as CfPageProbe;
   } catch {
-    return "js_challenge";
+    // page may have been closed / navigating
   }
+
+  if (!probe) return "none";
+  if (probe.blocked) {
+    logger.warn("Cloudflare WAF block detected — IP/fingerprint is blocked");
+    return "waf_blocked";
+  }
+
+  const titleMatch =
+    probe.title === "Just a moment..." ||
+    probe.title === "Attention Required! | Cloudflare" ||
+    probe.title.includes("DDoS protection by Cloudflare");
+
+  if (!(probe.marker || titleMatch || probe.legacy)) return "none";
+
+  // From here on it is a FULL-PAGE challenge (embedded/popup widgets returned "none" via
+  // the site-content guard and are handled by the token path). A visible box means there
+  // is something to click; otherwise it is a self-verifying challenge we can only wait on.
+  if (probe.visibleWidget) return "turnstile_click";
+
+  // Turnstile renders its iframe inside a CLOSED shadow root, so the DOM scan above can
+  // miss it — Playwright's frames() sees through shadow boundaries.
+  try {
+    if (page.frames().some((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)))) {
+      return "turnstile_click";
+    }
+  } catch {
+    // frames() may not be available on every adapter
+  }
+  return probe.turnstileIframe ? "turnstile_click" : "js_challenge";
 }
 
 // ── Turnstile solved state check ────────────────────────────────────────────
@@ -786,7 +752,7 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     }
     if (!target) target = await locateTurnstileCheckbox(page);
     if (!target) {
-      logger.warn("Turnstile widget is on the page but its checkbox could not be located");
+      logger.warn({ widget: await describeTurnstileState(page) }, "Turnstile widget is on the page but its checkbox could not be located");
       return false;
     }
 
@@ -799,7 +765,13 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
     // Patience, and NO second click: re-clicking a widget that is still verifying is what
     // produces "Verification failed" (and it used to happen ~1 s after a good click).
     const settled = await waitForTurnstileSettled(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000));
-    logger.info({ settled }, "Turnstile click settled");
+    // On failure, say WHAT the box shows. "Verify you are human" means the click missed;
+    // "Verifying…" means it is still working and we gave up too early; "Verification
+    // failed" means the click landed but was judged a bot. Three different fixes.
+    logger.info(
+      { settled, ...(settled ? {} : { widget: await describeTurnstileState(page) }) },
+      "Turnstile click settled",
+    );
     return settled;
   } catch (err) {
     logger.debug({ err }, "Turnstile click failed");
