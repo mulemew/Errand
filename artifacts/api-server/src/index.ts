@@ -6,7 +6,7 @@
   import { logger } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
-  import { startProviderHealthPolling, seedProvidersFromSettings, autoBindTasksToProviders } from "./automation/providers";
+  import { startProviderHealthPolling, seedProvidersFromSettings, autoBindTasksToProviders, ensureDefaultProvider, releaseOrphanCamoufoxSessions } from "./automation/providers";
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
@@ -76,6 +76,12 @@
     // One-time: bind existing tasks to the matching-type provider so you don't have to
     // open each task and pick one. Runs after the seed so seeded providers count too.
     await autoBindTasksToProviders();
+    // The browser backend is configured only on the Providers page now, so tasks that
+    // picked "默认" need a provider flagged as such. Promote one if nothing is flagged.
+    await ensureDefaultProvider();
+    // Tasks running at shutdown were reset to idle — kill the browser sessions they left
+    // behind in the camoufox sidecars instead of letting them idle until the TTL reaper.
+    void releaseOrphanCamoufoxSessions();
     startProviderHealthPolling();
   });
   

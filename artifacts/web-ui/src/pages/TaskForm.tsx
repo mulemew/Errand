@@ -169,9 +169,6 @@ type ProxyType =
   | "ss";
 
 interface BrowserConfigState {
-  enabled: boolean;
-  provider: BrowserProvider;
-  wsEndpoint: string;
   proxyUrl: string;
   proxyType: ProxyType;
   /** WARP only — how many fresh WARP identities (exit IPs) to try when reCAPTCHA blocks the audio challenge. */
@@ -186,8 +183,8 @@ interface BrowserConfigState {
   fpTimezone: string;
   fpLocale: string;
   fpAutoGeo: boolean;
-  // Named provider (Providers page). When set, its type + URL + concurrency drive the
-  // backend, overriding the inline provider/wsEndpoint below. null = Settings default.
+  // Named provider (Providers page) — the ONLY way to pick a backend. null means "use the
+  // provider flagged as default on that page"; the backend is never configured inline.
   providerId: number | null;
   // Saved profiles (override the inline fingerprint/proxy above when set)
   fingerprintProfileId: number | null;
@@ -208,9 +205,6 @@ function genWebhookToken(): string {
 }
 
 const defaultBrowserConfig: BrowserConfigState = {
-  enabled: false,
-  provider: "playwright",
-  wsEndpoint: "",
   proxyUrl: "",
   proxyType: "http",
   warpRotations: "",
@@ -317,19 +311,62 @@ export default function TaskForm() {
   const [browserConfig, setBrowserConfig] =
     useState<BrowserConfigState>(defaultBrowserConfig);
   const [browserConfigExpanded, setBrowserConfigExpanded] = useState(false);
-  const [fingerprintProfiles, setFingerprintProfiles] = useState<Array<{ id: number; name: string; os: string }>>([]);
+  const [fingerprintProfiles, setFingerprintProfiles] = useState<
+    Array<{ id: number; name: string; os: string; config?: { fp?: string; preset?: unknown } | null }>
+  >([]);
   const [proxyProfiles, setProxyProfiles] = useState<Array<{ id: number; name: string }>>([]);
-  const [providers, setProviders] = useState<Array<{ id: number; name: string; type: string; concurrency: number; enabled: boolean; healthy: boolean | null }>>([]);
+  const [providers, setProviders] = useState<
+    Array<{ id: number; name: string; type: string; concurrency: number; enabled: boolean; isDefault?: boolean; healthy: boolean | null }>
+  >([]);
+
+  // Providers + fingerprint profiles gate the dropdowns below, so track when they have
+  // actually arrived: before that "this backend can't use fingerprints" is just ignorance,
+  // and acting on it would wipe a saved selection while the page is still loading.
+  const [refsLoaded, setRefsLoaded] = useState(false);
 
   useEffect(() => {
     fetch("/api/saved-credentials")
       .then((r) => r.json())
       .then(setSavedCredentials)
       .catch(() => {});
-    fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFingerprintProfiles).catch(() => {});
     fetch("/api/proxy-profiles").then((r) => r.json()).then(setProxyProfiles).catch(() => {});
-    fetch("/api/providers").then((r) => r.json()).then(setProviders).catch(() => {});
+    Promise.all([
+      fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFingerprintProfiles),
+      fetch("/api/providers").then((r) => r.json()).then(setProviders),
+    ])
+      .catch(() => {})
+      .finally(() => setRefsLoaded(true));
   }, []);
+
+  // ── Which backend this task actually runs on ─────────────────────────────────
+  // The engine is ONLY ever a provider now (the Settings browser-backend section is gone):
+  // either the one picked here, or the provider flagged as default on the Providers page.
+  // Its TYPE decides which options below even apply.
+  const defaultProvider = providers.find((p) => p.isDefault && p.enabled) ?? null;
+  const activeProvider =
+    browserConfig.providerId != null
+      ? (providers.find((p) => p.id === browserConfig.providerId) ?? null)
+      : defaultProvider;
+  const activeProviderType = activeProvider?.type ?? null;
+  /** A profile carrying a browserforge pickle / real-device preset — camoufox reproduces
+   *  those at engine level; cf-proxy (sb) has no way to apply them. */
+  const isGeneratedFp = (p: { config?: { fp?: string; preset?: unknown } | null }) =>
+    !!(p.config?.fp || (p.config?.preset !== undefined && p.config?.preset !== null));
+  // camoufox = every profile; seleniumbase = only the plain os/timezone/locale ones;
+  // playwright/puppeteer = no fingerprint support at all (section hidden).
+  const supportsFingerprint = activeProviderType === "camoufox" || activeProviderType === "seleniumbase";
+  const selectableFingerprints =
+    activeProviderType === "camoufox" ? fingerprintProfiles : fingerprintProfiles.filter((p) => !isGeneratedFp(p));
+
+  // Switching to a backend that can't use the currently selected fingerprint must not
+  // silently save an unusable combination — drop back to "不使用".
+  useEffect(() => {
+    const sel = browserConfig.fpSel;
+    if (!refsLoaded || sel === "none") return;
+    if (!supportsFingerprint || (sel !== "custom" && !selectableFingerprints.some((p) => String(p.id) === sel))) {
+      setBrowserConfig((s) => ({ ...s, fpSel: "none", fingerprintProfileId: null }));
+    }
+  }, [refsLoaded, activeProviderType, supportsFingerprint, selectableFingerprints, browserConfig.fpSel]);
 
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
@@ -428,9 +465,6 @@ export default function TaskForm() {
         | undefined;
       if (bc && typeof bc === "object") {
         setBrowserConfig({
-          enabled: true,
-          provider: (bc.provider as BrowserProvider) || "playwright",
-          wsEndpoint: (bc.wsEndpoint as string) || "",
           proxyUrl: (bc.proxyUrl as string) || "",
           proxyType: (bc.proxyType as ProxyType) || "http",
           warpRotations:
@@ -479,8 +513,6 @@ export default function TaskForm() {
   }, [isEditMode, task, form]);
 
   const buildBrowserConfigPayload = () => {
-    if (!browserConfig.enabled) return null;
-
     // ── Proxy: derive everything from the single dropdown selection ──────────────
     const psel = browserConfig.proxySel;
     let proxyProfileId: number | null = null;
@@ -517,8 +549,10 @@ export default function TaskForm() {
     }
 
     return {
-      provider: browserConfig.provider,
-      wsEndpoint: browserConfig.wsEndpoint || null,
+      // The backend engine comes from the chosen provider (or the default one). When
+      // neither is known the key is omitted entirely so the server-side default applies
+      // instead of pinning a stale engine on the task.
+      ...(activeProviderType ? { provider: activeProviderType } : {}),
       providerId: browserConfig.providerId ?? null,
       fingerprintProfileId,
       proxyProfileId,
@@ -532,6 +566,24 @@ export default function TaskForm() {
   };
 
   const onSubmit = (values: FormValues) => {
+    // 仅 Cookie 登录没有可回退的登录流程：会话检查就是整个步骤，而检查只认「登录成功文字 /
+    // 选择器」。两个都空时运行期只会得到「cookie 无效」，所以在保存时就挡住。
+    const badCookieStep = (values.steps as Array<Record<string, unknown>>).findIndex(
+      (s) =>
+        s.type === "login" &&
+        s.loginMethod === "cookie" &&
+        !String(s.successText ?? "").trim() &&
+        !String(s.successSelector ?? "").trim(),
+    );
+    if (badCookieStep !== -1) {
+      toast({
+        title: "仅 Cookie 登录缺少判据",
+        description: `步骤 ${badCookieStep + 1}：请填写「登录成功文字」或「登录成功选择器」，否则无法判断 cookie 是否有效。`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     const toMinutes = (d: string, h: string, m: string) =>
       (parseInt(d || "0", 10) || 0) * 1440 +
       (parseInt(h || "0", 10) || 0) * 60 +
@@ -967,13 +1019,14 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                   <CardTitle className="text-base font-semibold">
                     浏览器后端
                   </CardTitle>
-                  {browserConfig.enabled ? (
+                  {browserConfig.providerId != null ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                      自定义 · {PROVIDER_LABELS[browserConfig.provider]}
+                      {activeProvider?.name ?? `Provider #${browserConfig.providerId}`}
+                      {activeProviderType ? ` · ${PROVIDER_LABELS[activeProviderType as BrowserProvider]}` : ""}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                      使用全局设置
+                      默认{defaultProvider ? ` · ${defaultProvider.name}` : ""}
                     </span>
                   )}
                 </div>
@@ -984,49 +1037,37 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                 )}
               </div>
               <CardDescription className="text-xs mt-1">
-                为此任务单独指定浏览器引擎、CDP 地址或代理，不影响其他任务
+                选一个「Providers」页里配好的后端，并为此任务单独指定代理 / 指纹，不影响其他任务
               </CardDescription>
             </CardHeader>
 
             {browserConfigExpanded && (
               <CardContent className="space-y-5 pt-5">
-                {/* Enable toggle */}
-                <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium">启用自定义后端</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      关闭则使用系统设置中的全局浏览器配置
-                    </p>
-                  </div>
-                  <Switch
-                    checked={browserConfig.enabled}
-                    onCheckedChange={(v) =>
-                      setBrowserConfig((s) => ({ ...s, enabled: v }))
-                    }
-                  />
-                </div>
-
-                {browserConfig.enabled && (
                   <div className="space-y-4">
-                    {/* Named provider (Providers page) — overrides the inline engine + WS
-                        endpoint below. "默认" keeps the inline / Settings backend. */}
+                    {/* Backend = a provider, always. Engine/URL/stealth/… all live on the
+                        Providers page; "默认" follows whichever provider is flagged there. */}
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Provider</label>
                       <Select
                         value={browserConfig.providerId != null ? String(browserConfig.providerId) : "default"}
                         onValueChange={(v) =>
                           setBrowserConfig((s) => {
-                            if (v === "default") return { ...s, providerId: null };
-                            const p = providers.find((x) => x.id === Number(v));
-                            // Sync the engine to the provider's type so the fields below
-                            // (fingerprint / WS endpoint) match the actual backend.
-                            return { ...s, providerId: Number(v), provider: (p?.type as BrowserProvider) ?? s.provider };
+                            if (v === "default") {
+                              return { ...s, providerId: null };
+                            }
+                            // The engine follows the provider's own type — nothing about
+                            // the backend is stored on the task any more.
+                            return { ...s, providerId: Number(v) };
                           })
                         }
                       >
                         <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="default">默认（Settings 后端）</SelectItem>
+                          <SelectItem value="default">
+                            {defaultProvider
+                              ? `默认（${defaultProvider.name} · ${defaultProvider.type}）`
+                              : "默认（未设置默认 provider）"}
+                          </SelectItem>
                           {providers.filter((p) => p.enabled || p.id === browserConfig.providerId).map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>
                               {p.name}（{p.type}，并发 {p.concurrency}）{!p.enabled ? " (disabled)" : p.healthy === false ? " ⚠" : ""}
@@ -1034,50 +1075,12 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           ))}
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">选一个「Providers」页里配好的后端;选了会覆盖下方的引擎和 WS 端点,并用它自己的并发上限。</p>
-                    </div>
-
-                    {/* Provider (inline engine) — only when no named provider is selected */}
-                    {browserConfig.providerId == null && (
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-medium">浏览器引擎</label>
-                      <Select
-                        value={browserConfig.provider}
-                        onValueChange={(v) =>
-                          setBrowserConfig((s) => ({
-                            ...s,
-                            provider: v as BrowserProvider,
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="font-mono text-sm">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="playwright">
-                            Playwright（默认）
-                          </SelectItem>
-                          <SelectItem value="puppeteer">Puppeteer</SelectItem>
-                          <SelectItem value="seleniumbase">
-                            SeleniumBase（CF 绕过）
-                          </SelectItem>
-                          <SelectItem value="camoufox">
-                            Camoufox（反检测 Firefox）
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
                       <p className="text-[11px] text-muted-foreground">
-                        {browserConfig.provider === "seleniumbase" &&
-                          "使用 SeleniumBase + undetected-chromedriver，擅长绕过 Cloudflare 5秒盾"}
-                        {browserConfig.provider === "camoufox" &&
-                          "Camoufox 反检测 Firefox，引擎级指纹伪装（canvas/WebGL/屏幕/UA），独立 camoufox-proxy"}
-                        {browserConfig.provider === "playwright" &&
-                          "Playwright CDP 模式，可配置远程 WebSocket 端点连接外部浏览器"}
-                        {browserConfig.provider === "puppeteer" &&
-                          "Puppeteer，兼容性好，支持 CDP 端点"}
+                        引擎、地址、Stealth、分辨率等都在「Providers」页配置，并用该 provider 自己的并发上限。
+                        「默认」跟随 Providers 页里设为默认的那个
+                        {defaultProvider ? "" : "——目前还没有默认 provider，去 Providers 页设一个"}。
                       </p>
                     </div>
-                    )}
 
                     {/* Proxy — one dropdown: none / saved profiles / WARP / custom URL.
                         Manual fields appear only after choosing 自定义 or WARP自动轮换. */}
@@ -1141,7 +1144,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
 
                     {/* Fingerprint — one dropdown: none / saved profiles / custom.
                         Manual fields appear only after choosing 自定义. */}
-                    {(browserConfig.provider === "seleniumbase" || browserConfig.provider === "camoufox") && (
+                    {supportsFingerprint && (
                       <div className="space-y-1.5">
                         <label className="text-sm font-medium">浏览器指纹</label>
                         <Select
@@ -1151,13 +1154,17 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                           <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="none">不使用（真实 Linux 指纹）</SelectItem>
-                            {fingerprintProfiles.map((p) => (
+                            {selectableFingerprints.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
                             ))}
                             <SelectItem value="custom">自定义</SelectItem>
                           </SelectContent>
                         </Select>
-                        <p className="text-[11px] text-muted-foreground">选「浏览器指纹」页里保存的，或自定义手填。</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {activeProviderType === "camoufox"
+                            ? "选「浏览器指纹」页里保存的（含生成的固定指纹，引擎级伪装），或自定义手填。"
+                            : "SeleniumBase 只能伪装 系统/时区/语言，用不了生成的固定指纹（browserforge / 真机预设），这类档案已从列表中隐藏。"}
+                        </p>
 
                         {browserConfig.fpSel === "custom" && (
                           <div className="pt-1 space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
@@ -1218,39 +1225,9 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       </div>
                     )}
 
-                    {/* WS Endpoint — hidden when a named provider supplies the URL */}
-                    {browserConfig.providerId == null &&
-                     (browserConfig.provider === "playwright" ||
-                      browserConfig.provider === "puppeteer") && (
-                      <div className="space-y-1.5">
-                        <label className="text-sm font-medium">
-                          CDP WebSocket 端点{" "}
-                          <span className="text-muted-foreground font-normal">
-                            (可选)
-                          </span>
-                        </label>
-                        <Input
-                          placeholder="ws://browserless:3000/chromium?token=..."
-                          value={browserConfig.wsEndpoint}
-                          onChange={(e) =>
-                            setBrowserConfig((s) => ({
-                              ...s,
-                              wsEndpoint: e.target.value,
-                            }))
-                          }
-                          className="font-mono text-sm"
-                        />
-                        <p className="text-[11px] text-muted-foreground">
-                          留空则自动启动本地浏览器进程；填写后连接远程
-                          Browserless / cf-proxy
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Stealth / 屏蔽广告 / 忽略HTTPS / 会话超时 / 分辨率 moved to the
-                        Provider (Providers page) — configured per backend there. */}
+                    {/* Engine / CDP 端点 / Stealth / 屏蔽广告 / 忽略HTTPS / 会话超时 /
+                        分辨率 all live on the Provider (Providers page) now. */}
                   </div>
-                )}
               </CardContent>
             )}
           </Card>

@@ -408,33 +408,60 @@ function StepCard({
                 </div>
               )}
             </div>
-            {/* Success selector */}
-            <div className="space-y-1 pt-1 border-t border-border">
-              <Label className="text-xs font-medium">{t.successSelector} <span className="font-normal text-muted-foreground">(optional)</span></Label>
-              <Input
-                className="font-mono text-xs h-8"
-                placeholder=".user-avatar, #logout-btn, [data-user]"
-                value={step.successSelector ?? ""}
-                onChange={(e) => set({ successSelector: e.target.value || undefined })}
-              />
-              <p className="text-[10px] text-muted-foreground leading-snug">
-                CSS selector for an element visible only after login (e.g. avatar, logout button).
-                If found after submit, login is confirmed successful regardless of URL changes.
-              </p>
-            </div>
-            {/* Success text */}
-            <div className="space-y-1 pt-1 border-t border-border">
-              <Label className="text-xs font-medium">{t.successText} <span className="font-normal text-muted-foreground">(optional)</span></Label>
-              <Input
-                className="font-mono text-xs h-8"
-                placeholder="Welcome, Dashboard, 登录成功"
-                value={step.successText ?? ""}
-                onChange={(e) => set({ successText: e.target.value || undefined })}
-              />
-              <p className="text-[10px] text-muted-foreground leading-snug">
-                登录完成后检测页面是否包含该文字，找到则登录成功，找不到则失败。
-              </p>
-            </div>
+            {/* Success criteria. For 仅 Cookie there is no login flow to fall back on:
+                the session check IS the whole step, and with neither field filled it can
+                only answer "not logged in" — so one of them is required, not optional. */}
+            {(() => {
+              const cookieOnly = step.loginMethod === "cookie";
+              const missingCriteria =
+                cookieOnly && !step.successSelector?.trim() && !step.successText?.trim();
+              return (
+                <>
+                  {/* Success selector */}
+                  <div className="space-y-1 pt-1 border-t border-border">
+                    <Label className="text-xs font-medium">
+                      {t.successSelector}{" "}
+                      <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
+                        {cookieOnly ? "(二选一必填)" : "(optional)"}
+                      </span>
+                    </Label>
+                    <Input
+                      className={"font-mono text-xs h-8" + (missingCriteria ? " border-amber-500" : "")}
+                      placeholder=".user-avatar, #logout-btn, [data-user]"
+                      value={step.successSelector ?? ""}
+                      onChange={(e) => set({ successSelector: e.target.value || undefined })}
+                    />
+                    <p className="text-[10px] text-muted-foreground leading-snug">
+                      CSS selector for an element visible only after login (e.g. avatar, logout button).
+                      If found after submit, login is confirmed successful regardless of URL changes.
+                    </p>
+                  </div>
+                  {/* Success text */}
+                  <div className="space-y-1 pt-1 border-t border-border">
+                    <Label className="text-xs font-medium">
+                      {t.successText}{" "}
+                      <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
+                        {cookieOnly ? "(二选一必填)" : "(optional)"}
+                      </span>
+                    </Label>
+                    <Input
+                      className={"font-mono text-xs h-8" + (missingCriteria ? " border-amber-500" : "")}
+                      placeholder="Welcome, Dashboard, 登录成功"
+                      value={step.successText ?? ""}
+                      onChange={(e) => set({ successText: e.target.value || undefined })}
+                    />
+                    <p className="text-[10px] text-muted-foreground leading-snug">
+                      登录完成后检测页面是否包含该文字，找到则登录成功，找不到则失败。
+                    </p>
+                  </div>
+                  {missingCriteria && (
+                    <p className="text-[10px] text-amber-500 leading-snug">
+                      仅 Cookie 模式必须填上面两项之一：没有判据就无法确认 cookie 是否有效，运行时会一律报「cookie 无效」。
+                    </p>
+                  )}
+                </>
+              );
+            })()}
             {/* Cookie mode / session persistence */}
             <div className="space-y-2 pt-1 border-t border-border">
               {/* Cookie-only login implies cookie mode — no toggle to tick. */}

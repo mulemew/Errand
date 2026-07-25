@@ -803,21 +803,38 @@ class CamoufoxProvider implements BrowserProvider {
     this._ids.set(browser, id);
     if (resolvedProxy) this._proxies.set(browser, resolvedProxy);
 
-    const context = await browser.newContext({
-      viewport: vp,
-      ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
-      ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
-    });
-    if (this.config.onContextReady) this.config.onContextReady(async () => context.storageState());
-    context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-    context.setDefaultTimeout(NAV_TIMEOUT_MS);
-    if (this.config.blockAds) {
-      await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
-    }
+    // Everything from here on can throw (a bad storageState, a proxy the context can't
+    // use, a browser that died during startup). Without this guard the sidecar session —
+    // a launcher process plus a full Firefox — was never released and just sat there until
+    // the reaper's TTL, which is how instances piled up.
+    let context: import("playwright-core").BrowserContext;
+    let page: import("playwright-core").Page;
+    try {
+      context = await browser.newContext({
+        viewport: vp,
+        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
+        ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
+      });
+      if (this.config.onContextReady) this.config.onContextReady(async () => context.storageState());
+      context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      context.setDefaultTimeout(NAV_TIMEOUT_MS);
+      if (this.config.blockAds) {
+        await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+      }
 
-    const page = await context.newPage();
-    page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-    page.setDefaultTimeout(NAV_TIMEOUT_MS);
+      page = await context.newPage();
+      page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+      page.setDefaultTimeout(NAV_TIMEOUT_MS);
+    } catch (err) {
+      logger.error({ err, sessionId: id }, "Camoufox session setup failed — releasing the sidecar session");
+      this._browsers.delete(browser);
+      this._ids.delete(browser);
+      this._proxies.delete(browser);
+      await browser.close().catch(() => {});
+      await this.release(id);
+      if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
+      throw err;
+    }
 
     const makeAdapter = (p: import("playwright-core").Page): PageAdapter => {
       p.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
@@ -832,8 +849,23 @@ class CamoufoxProvider implements BrowserProvider {
       return a;
     };
 
+    // If the ws drops (browser crash, sidecar restart, network blip) the launcher process
+    // can outlive it — release the session so the sidecar kills it now instead of leaving
+    // a stray Firefox around until the reaper's TTL expires. release() is idempotent, so
+    // the event firing as part of a normal close() is harmless.
+    browser.on("disconnected", () => {
+      if (!this._ids.has(browser)) return; // already torn down through adapter.close()
+      this._browsers.delete(browser);
+      this._ids.delete(browser);
+      logger.warn({ sessionId: id }, "Camoufox browser disconnected unexpectedly — releasing the session");
+      void this.release(id);
+    });
+
     const adapter = makeAdapter(page);
+    let closed = false;
     adapter.close = async () => {
+      if (closed) return; // the runner closes finalPage AND page; only tear down once
+      closed = true;
       this._browsers.delete(browser);
       this._ids.delete(browser);
       // Release the sidecar session FIRST — it's a plain HTTP call that kills the launcher
@@ -860,9 +892,11 @@ class CamoufoxProvider implements BrowserProvider {
       const id = this._ids.get(b);
       await b.close().catch(() => {});
       if (id) await this.release(id);
-      const rp = this._proxies.get(b);
-      if (rp) await rp.stop().catch(() => {});
     }));
+    // Proxies are stopped from their OWN map, not per live browser: a browser that
+    // disconnected on its own is already out of _browsers, and dropping the map without
+    // stopping its sing-box helper would leak that process.
+    await Promise.allSettled([...this._proxies.values()].map((rp) => rp.stop().catch(() => {})));
     this._browsers.clear();
     this._ids.clear();
     this._proxies.clear();

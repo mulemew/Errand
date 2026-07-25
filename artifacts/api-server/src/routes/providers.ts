@@ -77,10 +77,34 @@ router.put("/providers/:id", async (req, res): Promise<void> => {
   if (body.data.url !== undefined) update.url = body.data.url.trim();
   if (body.data.concurrency !== undefined) update.concurrency = body.data.concurrency;
   if (body.data.enabled !== undefined) update.enabled = body.data.enabled;
+  // A disabled provider can't stay the default — the runner would skip it anyway.
+  if (body.data.enabled === false) update.isDefault = false;
   const [updated] = await db.update(providersTable).set(update).where(eq(providersTable.id, id)).returning();
   if (!updated) { res.status(404).json({ error: "Not found" }); return; }
   const refreshed = await refreshProviderHealth(id);
   res.json(refreshed ?? updated);
+});
+
+// Make this provider THE default backend (tasks that pick "默认" in the dropdown).
+// Exactly one row may hold it, so clear the flag everywhere else in the same request.
+router.post("/providers/:id/default", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+  const [target] = await db.select().from(providersTable).where(eq(providersTable.id, id));
+  if (!target) { res.status(404).json({ error: "Not found" }); return; }
+  if (!target.enabled) { res.status(400).json({ error: "A disabled provider cannot be the default" }); return; }
+  await db.update(providersTable).set({ isDefault: false }).where(eq(providersTable.isDefault, true));
+  await db.update(providersTable).set({ isDefault: true }).where(eq(providersTable.id, id));
+  logger.info({ id, name: target.name }, "Default provider changed");
+  const rows = await db.select().from(providersTable).orderBy(providersTable.type, providersTable.name);
+  res.json(rows);
+});
+
+// Clear the default entirely (tasks fall back to BROWSER_PROVIDER / BROWSERLESS_URL).
+router.delete("/providers/default", async (_req, res): Promise<void> => {
+  await db.update(providersTable).set({ isDefault: false }).where(eq(providersTable.isDefault, true));
+  const rows = await db.select().from(providersTable).orderBy(providersTable.type, providersTable.name);
+  res.json(rows);
 });
 
 router.post("/providers/:id/health", async (req, res): Promise<void> => {

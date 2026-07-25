@@ -242,3 +242,9 @@ docker run -d -p 8080:8080 \
   -e DASHBOARD_PASSWORD=... \
   autoops
 ```
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 mulemew

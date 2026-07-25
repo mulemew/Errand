@@ -41,6 +41,9 @@ export const providersTable = pgTable("providers", {
   humanize: boolean("humanize"),
   blockWebrtc: boolean("block_webrtc"),
   enabled: boolean("enabled").notNull().default(true),
+  // The backend used by tasks that pick "默认" in the provider dropdown. At most one row
+  // is the default (enforced by a partial unique index); none = fall back to env/Settings.
+  isDefault: boolean("is_default").notNull().default(false),
   healthy: boolean("healthy"),
   lastError: text("last_error"),
   lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
@@ -50,6 +53,7 @@ export const providersTable = pgTable("providers", {
 
 export const insertProviderSchema = createInsertSchema(providersTable).omit({
   id: true,
+  isDefault: true,
   healthy: true,
   lastError: true,
   lastCheckedAt: true,

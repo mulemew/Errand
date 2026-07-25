@@ -140,7 +140,7 @@ export default function TaskDetail() {
   type FpPreset = { navigator?: { userAgent?: string; platform?: string; hardwareConcurrency?: number }; screen?: { width?: number; height?: number }; webgl?: { unmaskedVendor?: string; unmaskedRenderer?: string } };
   type FpProfile = { id: number; name: string; os: string; config?: { timezone?: string; locale?: string; screen?: string; summary?: FpSummary; preset?: FpPreset } | null };
   const [fpProfiles, setFpProfiles] = useState<FpProfile[]>([]);
-  const [providersList, setProvidersList] = useState<Array<{ id: number; name: string; type: string }>>([]);
+  const [providersList, setProvidersList] = useState<Array<{ id: number; name: string; type: string; isDefault?: boolean; enabled?: boolean }>>([]);
   useEffect(() => {
     fetch("/api/fingerprint-profiles").then((r) => r.json()).then(setFpProfiles).catch(() => {});
     fetch("/api/providers").then((r) => r.json()).then(setProvidersList).catch(() => {});
@@ -722,7 +722,14 @@ export default function TaskDetail() {
                     <Settings2 className="h-3 w-3 text-muted-foreground" />
                     {boundProvider
                       ? <span>{boundProvider.name} <span className="text-xs text-muted-foreground">({boundProvider.type})</span></span>
-                      : <span className="text-muted-foreground">默认（Settings）</span>}
+                      : (() => {
+                          // "默认" now resolves to whichever provider is flagged as default
+                          // on the Providers page — name it so the task page isn't vague.
+                          const def = providersList.find((p) => p.isDefault && p.enabled !== false);
+                          return def
+                            ? <span className="text-muted-foreground">默认（{def.name} · {def.type}）</span>
+                            : <span className="text-muted-foreground">默认（未设置默认 provider）</span>;
+                        })()}
                   </dd>
                 </div>
 

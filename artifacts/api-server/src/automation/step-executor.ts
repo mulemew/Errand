@@ -665,6 +665,16 @@ async function executeStep(
       // invalid session is a hard failure telling them to re-paste — silently
       // continuing would let every later step run logged-out.
       if (step.loginMethod === "cookie") {
+        // Without a success criterion isSessionAuthenticated() can only ever answer "no",
+        // so the run would fail as "invalid cookie" even with a perfectly good session.
+        // Say that outright instead of blaming the cookie. (The task form also refuses to
+        // save a cookie-login step without one — this covers older tasks and the API.)
+        if (!step.successSelector?.trim() && !step.successText?.trim()) {
+          throw new Error(
+            "Cookie 登录缺少「登录成功判据」：请在该登录步骤填写「登录成功文字」或「登录成功选择器」。" +
+              "没有判据就无法判断 cookie 是否有效，只能一律当作无效。",
+          );
+        }
         await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await dismissPopups(page);
         const ok = await isSessionAuthenticated(page, step.successSelector, step.successText);

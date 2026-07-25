@@ -15,18 +15,53 @@ export type ResolvedProvider = {
   humanize: boolean | null; blockWebrtc: boolean | null;
 };
 
-/** Load a provider by id (only if enabled). Null when missing/disabled → caller falls
- *  back to the Settings default backend. */
-export async function resolveProvider(providerId: number | null | undefined): Promise<ResolvedProvider | null> {
-  if (!providerId) return null;
-  const [p] = await db.select().from(providersTable).where(eq(providersTable.id, providerId));
-  if (!p || !p.enabled) return null;
+function toResolved(p: typeof providersTable.$inferSelect): ResolvedProvider {
   return {
     id: p.id, name: p.name, type: p.type, url: p.url, concurrency: Math.max(1, p.concurrency),
     stealth: p.stealth, blockAds: p.blockAds, ignoreHttps: p.ignoreHttps,
     sessionTimeoutMs: p.sessionTimeoutMs, viewportWidth: p.viewportWidth, viewportHeight: p.viewportHeight,
     humanize: p.humanize, blockWebrtc: p.blockWebrtc,
   };
+}
+
+/** The provider flagged as default on the Providers page — what a task that picked
+ *  "默认" in the dropdown actually runs on. Null when none is flagged (or it was
+ *  disabled), in which case the caller falls back to the env/legacy backend. */
+export async function resolveDefaultProvider(): Promise<ResolvedProvider | null> {
+  const [p] = await db.select().from(providersTable).where(eq(providersTable.isDefault, true));
+  if (!p || !p.enabled) return null;
+  return toResolved(p);
+}
+
+/** Load a provider by id (only if enabled). A task with no provider selected — or one
+ *  pointing at a deleted/disabled provider — falls back to the DEFAULT provider, which
+ *  is where the old "Settings 后端" moved to. */
+export async function resolveProvider(providerId: number | null | undefined): Promise<ResolvedProvider | null> {
+  if (!providerId) return resolveDefaultProvider();
+  const [p] = await db.select().from(providersTable).where(eq(providersTable.id, providerId));
+  if (!p || !p.enabled) return resolveDefaultProvider();
+  return toResolved(p);
+}
+
+/** One-time-ish: if nothing is flagged as default, promote the provider that matches the
+ *  legacy Settings backend type (else the first enabled one). Keeps upgrades running
+ *  exactly as before now that the Settings browser-backend section is gone. Cheap and
+ *  idempotent — it no-ops as soon as a default exists. */
+export async function ensureDefaultProvider(): Promise<void> {
+  try {
+    const [existing] = await db.select().from(providersTable).where(eq(providersTable.isDefault, true));
+    if (existing?.enabled) return;
+    const enabled = (await db.select().from(providersTable).where(eq(providersTable.enabled, true)))
+      .sort((a, b) => a.id - b.id);
+    if (enabled.length === 0) return;
+    const cfg = await loadBrowserConfig();
+    const pick = enabled.find((p) => p.type === (cfg.provider ?? "playwright")) ?? enabled[0];
+    if (existing) await db.update(providersTable).set({ isDefault: false }).where(eq(providersTable.id, existing.id));
+    await db.update(providersTable).set({ isDefault: true }).where(eq(providersTable.id, pick.id));
+    logger.info({ id: pick.id, name: pick.name, type: pick.type }, "Default provider set automatically");
+  } catch (err) {
+    logger.warn({ err }, "ensureDefaultProvider failed (non-fatal)");
+  }
 }
 
 /** Probe one provider. playwright/puppeteer are CDP ws endpoints (reachable = healthy,
@@ -52,6 +87,37 @@ export async function checkProviderHealth(p: { type: string; url: string }): Pro
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Boot-time cleanup: tell every camoufox sidecar to drop whatever it still has running.
+ *
+ * A restart abandons the tasks that owned those sessions (they're reset to idle in
+ * app.ts), but the sidecar keeps each launcher + Firefox alive until its TTL — that's how
+ * "used but never closed" instances accumulate across restarts. Best-effort and
+ * non-fatal: an unreachable or older sidecar (no /release-all) is just skipped.
+ */
+export async function releaseOrphanCamoufoxSessions(): Promise<void> {
+  const urls = new Set<string>();
+  const envUrl = (process.env.CAMOUFOX_URL ?? "").trim();
+  if (envUrl) urls.add(envUrl.replace(/\/$/, ""));
+  try {
+    const rows = await db.select().from(providersTable).where(eq(providersTable.type, "camoufox"));
+    for (const r of rows) if (r.url?.trim()) urls.add(r.url.trim().replace(/\/$/, ""));
+  } catch (err) {
+    logger.warn({ err }, "releaseOrphanCamoufoxSessions: could not list camoufox providers");
+  }
+  await Promise.all([...urls].map(async (url) => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const res = await fetch(`${url}/release-all`, { method: "POST", signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) return;
+      const body = (await res.json().catch(() => ({}))) as { released?: number };
+      if (body.released) logger.warn({ url, released: body.released }, "Released orphaned camoufox sessions left by a previous run");
+    } catch { /* sidecar down or too old — the TTL reaper still covers it */ }
+  }));
 }
 
 /** Recompute + persist one provider's health. */

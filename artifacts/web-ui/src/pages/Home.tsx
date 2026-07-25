@@ -734,8 +734,11 @@ export default function Home() {
                         // Resolved server-side: from the saved fingerprint profile when the
                         // task uses one (inline fingerprint is null then), else inline os.
                         const { Icon, label } = osMeta((task as unknown as { fingerprintOs?: string | null }).fingerprintOs);
+                        // Name the saved profile when there is one — the icon already shows
+                        // the OS, so repeating it in the tooltip said nothing.
+                        const fpName = (task as unknown as { fingerprintLabel?: string | null }).fingerprintLabel;
                         return (
-                          <span className="flex items-center border-l border-border pl-3" title={`Fingerprint: ${label}`}>
+                          <span className="flex items-center border-l border-border pl-3" title={fpName ? `指纹：${fpName}` : `指纹：未绑定档案（${label}）`}>
                             <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         );

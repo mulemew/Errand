@@ -286,7 +286,10 @@ def _kill(proc):
 # leave its launcher+firefox subprocess running forever, and a crashed launcher would sit
 # as a zombie (nobody wait()s it). Every 20s we (a) reap dead procs — Popen.poll() collects
 # the zombie and sets returncode — and (b) SIGTERM/kill sessions older than the TTL.
-_SESSION_TTL = int(os.getenv("CAMOUFOX_SESSION_TTL", "1800"))
+# Must stay comfortably ABOVE the app's task timeout (default 30 min): the reaper cannot
+# tell "hung" from "still working", so a TTL equal to the task timeout would kill the
+# browser out from under a task that is merely slow. This is the orphan net, not a limit.
+_SESSION_TTL = int(os.getenv("CAMOUFOX_SESSION_TTL", "5400"))
 
 
 def _reaper():
@@ -325,6 +328,21 @@ def release():
         _kill(entry["proc"])
         print(f"[camoufox] released {sid}", flush=True)
     return jsonify({"ok": True})
+
+
+@app.post("/release-all")
+def release_all():
+    """Kill every live session. The api-server calls this on boot: a restart abandons the
+    tasks that owned the running sessions (they're reset to idle), so whatever is still
+    launched here is an orphan that would otherwise burn RAM until the TTL reaper wakes up.
+    """
+    with _lock:
+        entries = list(_servers.items())
+        _servers.clear()
+    for sid, e in entries:
+        _kill(e["proc"])
+        print(f"[camoufox] released {sid} (release-all)", flush=True)
+    return jsonify({"ok": True, "released": len(entries)})
 
 
 if __name__ == "__main__":

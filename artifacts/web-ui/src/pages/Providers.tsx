@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
+import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +20,8 @@ interface Provider {
   url: string;
   concurrency: number;
   enabled: boolean;
+  /** The backend used by tasks left on "默认" — exactly one provider carries it. */
+  isDefault: boolean;
   stealth: boolean | null;
   blockAds: boolean | null;
   ignoreHttps: boolean | null;
@@ -54,6 +56,7 @@ export default function Providers() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [checkingId, setCheckingId] = useState<number | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
+  const [defaultingId, setDefaultingId] = useState<number | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -146,6 +149,18 @@ export default function Providers() {
     finally { setCheckingAll(false); }
   };
 
+  const setDefault = async (id: number) => {
+    setDefaultingId(id);
+    try {
+      const res = await fetch(`${BASE}/api/providers/${id}/default`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "");
+      setRows(await res.json());
+      toast({ title: "已设为默认后端", description: "任务里选「默认」的都会走这个 provider", variant: "success" });
+    } catch (err) {
+      toast({ title: "设置默认失败", description: err instanceof Error ? err.message : "", variant: "destructive" });
+    } finally { setDefaultingId(null); }
+  };
+
   const maskUrl = (u: string) => u.replace(/(:\/\/[^:@/]+:)[^@/]+@/, "$1••••@");
 
   const HealthDot = ({ h }: { h: boolean | null }) =>
@@ -168,8 +183,15 @@ export default function Providers() {
         </div>
       </div>
       <p className="text-sm text-muted-foreground">
-        具名浏览器后端。建好后在任务里下拉选择用哪个跑。每个 provider 有自己的并发上限(例:sb=2、playwright=3),各管各的。没选的任务用 Settings 默认后端。
+        浏览器后端全部在这里配置（引擎、地址、Stealth、分辨率…）。建好后在任务里下拉选择用哪个跑，
+        每个 provider 有自己的并发上限(例:sb=2、playwright=3),各管各的。点 ★ 把某个设为
+        <b>默认后端</b>：任务里选「默认」的都走它。
       </p>
+      {!loading && rows.length > 0 && !rows.some((r) => r.isDefault && r.enabled) && (
+        <p className="text-sm text-amber-500">
+          还没有默认 provider —— 选「默认」的任务会回落到环境变量里的后端。点某一行的 ★ 设一个。
+        </p>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
@@ -177,7 +199,7 @@ export default function Providers() {
         <Card className="border-dashed border-border">
           <CardContent className="flex flex-col items-center justify-center py-12 gap-3 text-center">
             <Server className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No providers yet — tasks use the Settings default backend.</p>
+            <p className="text-sm text-muted-foreground">还没有 provider —— 任务会回落到环境变量里的后端。加一个吧。</p>
             <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />Add provider</Button>
           </CardContent>
         </Card>
@@ -192,12 +214,27 @@ export default function Providers() {
                     {p.name}
                     <span className="text-[10px] font-mono uppercase text-muted-foreground border border-border rounded px-1 py-0.5">{p.type}</span>
                     <span className="text-[10px] text-primary">并发 {p.concurrency}</span>
+                    {p.isDefault && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 border border-amber-500/40 rounded px-1 py-0.5">
+                        <Star className="h-3 w-3 fill-current" />默认
+                      </span>
+                    )}
                     {!p.enabled && <span className="text-[10px] text-muted-foreground">(disabled)</span>}
                   </CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
                   {p.healthy === false && p.lastError && <p className="text-[11px] text-destructive truncate">检测失败:{p.lastError}</p>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={"h-7 w-7 " + (p.isDefault ? "text-amber-500" : "text-muted-foreground")}
+                    title={p.isDefault ? "已是默认后端" : p.enabled ? "设为默认后端" : "停用的 provider 不能当默认"}
+                    onClick={() => setDefault(p.id)}
+                    disabled={p.isDefault || !p.enabled || defaultingId === p.id}
+                  >
+                    {defaultingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Star className={"h-4 w-4 " + (p.isDefault ? "fill-current" : "")} />}
+                  </Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" title="检测" onClick={() => checkOne(p.id)} disabled={checkingId === p.id || checkingAll}>
                     <RefreshCw className={`h-4 w-4 ${checkingId === p.id ? "animate-spin" : ""}`} />
                   </Button>
@@ -322,7 +359,7 @@ export default function Providers() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete provider?</AlertDialogTitle>
-            <AlertDialogDescription>Tasks using it fall back to the Settings default backend.</AlertDialogDescription>
+            <AlertDialogDescription>用到它的任务会回落到默认 provider（没有默认时用环境变量里的后端）。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>

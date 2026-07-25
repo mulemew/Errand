@@ -226,6 +226,23 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       if (next) next.resolve();
     }
 
+  /**
+   * Collapse Playwright's nested-call prefixes.
+   *
+   * Every retried Playwright call prepends its own name to the error, so a login that
+   * retried a few hundred times surfaces as
+   * "page.evaluate: page.evaluate: … mouse.move: mouse.move: … Target page has been closed"
+   * — thousands of characters of noise hiding the one line that matters. Consecutive
+   * identical prefixes become "mouse.move ×97:" so the actual reason stays readable.
+   */
+  export function condenseErrorMessage(message: string): string {
+    if (!message) return message;
+    return message.replace(/([A-Za-z_$][\w$]*(?:\.[\w$]+)*): (?:\1: )+/g, (match, token: string) => {
+      const times = match.split(`${token}: `).length - 1;
+      return `${token} ×${times}: `;
+    });
+  }
+
   const runningTasks = new Set<number>();
   const cancelRequested = new Set<number>();
 
@@ -272,7 +289,29 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     emitTaskProgress(taskId, "Task started - fetching configuration-¦");
     let semaphoreAcquired = false;
     let concKey = "default";
+    let browserProvider: import("./browser-provider").BrowserProvider | undefined;
     const collectedStepLogs: Array<{ stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string; durationMs?: number }> = [];
+
+    // A run writes EXACTLY ONE log. The timeout/cancel race used to leave the workflow
+    // running in the background: it kept driving the (now closed) page, failed with
+    // "Target page … has been closed", and wrote a SECOND log next to the timeout one.
+    // Whoever finishes first owns the outcome; later writers are dropped.
+    let logWritten = false;
+    const writeRunLogOnce = async (
+      success: boolean,
+      message: string,
+      screenshotPath?: string,
+      durationMs?: number,
+      triggeredByLabel?: string,
+      stepLogs?: Array<{ stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string }>,
+    ): Promise<void> => {
+      if (logWritten) {
+        logger.warn({ taskId, message: message.slice(0, 200) }, "Run already logged — dropping a late duplicate log");
+        return;
+      }
+      logWritten = true;
+      await writeLog(taskId, success, condenseErrorMessage(message), screenshotPath, durationMs, triggeredByLabel, stepLogs);
+    };
 
     try {
       // Load the task first so we can resolve its provider (and therefore which pool +
@@ -430,7 +469,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         logger.info({ taskId, provider: _selProvider.name, type: _selProvider.type }, "Task using selected provider");
       }
 
-      const browserProvider = createBrowserProvider(browserConfig);
+      browserProvider = createBrowserProvider(browserConfig);
 
       if (!dryRun) {
         await db.update(tasksTable).set({ status: "running" }).where(eq(tasksTable.id, taskId));
@@ -510,8 +549,17 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       emitTaskProgress(taskId, stepCount > 0 ? `Running ${stepCount} workflow step${stepCount !== 1 ? "s" : ""}-¦` : "No steps configured-¦");
 
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      // The workflow loop polls this (together with the cancel flag) and stops at the next
+      // step boundary. Without it the timeout only stopped WAITING for the workflow — the
+      // steps carried on against a page the finally block had already closed.
+      let timedOut = false;
       const timeoutPromise: Promise<never> = timeoutMs
-        ? new Promise<never>((_, reject) => { timeoutHandle = setTimeout(() => reject(new Error(`Task timed out after ${timeoutConfig.timeoutMinutes} min`)), timeoutMs); })
+        ? new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              timedOut = true;
+              reject(new Error(`Task timed out after ${timeoutConfig.timeoutMinutes} min`));
+            }, timeoutMs);
+          })
         : new Promise<never>(() => {});
 
       let cancelCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -615,15 +663,19 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                         getTaskEmitter(taskId).emit("event", { type: "screenshot", message: r.message, screenshotPath: r.screenshotPath });
                       }
                   },
-                  // Actually stop the loop on cancel — the race alone only stopped
+                  // Actually stop the loop on cancel/timeout — the race alone only stopped
                   // waiting for it, leaving the steps driving the browser in the
-                  // background after the user cancelled.
-                  () => cancelRequested.has(taskId),
+                  // background after the user cancelled (or the task timed out).
+                  () => cancelRequested.has(taskId) || timedOut,
                 );
                 finalPage = stepsPage;
                 fullMessage = stepResults.map((r) => r.message).join("\n");
                 if (stepResults.some((r) => !r.success)) overallSuccess = false;
               } catch (err) {
+                // The race is already over (timeout / cancel) — that path owns the run's
+                // log and status. Anything thrown now is just fallout from the page being
+                // torn down underneath us, so report nothing and let it unwind.
+                if (timedOut || cancelRequested.has(taskId)) throw err;
                 // ── Captcha refused the exit IP → rotate and REPLAY the workflow ──
                 //
                 // Only a different IP can change an "automated queries" refusal. We
@@ -714,7 +766,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                   if (screenshotPath) {
                     getTaskEmitter(taskId).emit("event", { type: "screenshot", message: err.message, screenshotPath });
                   }
-                  await writeLog(taskId, false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+                  await writeRunLogOnce(false, msg, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
                   // Status reflects the ACTUAL outcome — a genuinely unsolved captcha needs
                   // human attention — INDEPENDENT of whether a retry is queued. Retry is a
                   // separate concern (retry_at) and must not mask this as a plain "failed".
@@ -741,6 +793,11 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             } else {
               fullMessage = "No steps configured";
             }
+
+            // Same guard for a workflow that RETURNED after losing the race: without it the
+            // background run wrote its own "Step 1 [login] FAILED: … Target page has been
+            // closed" log right next to the "Task timed out after 30 min" one.
+            if (timedOut || cancelRequested.has(taskId)) return;
 
             // Skip the final screenshot when a step already captured a failure screenshot —
               // taking another one on top is redundant and confusing.
@@ -778,7 +835,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             // until its next schedule.
             const _retry = !dryRun && !overallSuccess ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
             if (dryRun) fullMessage = `[DRY RUN] ${fullMessage}`;
-            await writeLog(taskId, overallSuccess, fullMessage + _retry.note, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+            await writeRunLogOnce(overallSuccess, fullMessage + _retry.note, screenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
             if (!dryRun) {
               await db.update(tasksTable).set({ status: overallSuccess ? "success" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
               // Success clears the failure streak (and any pending retry) so a future
@@ -899,7 +956,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       // Book a retry BEFORE writing the log so the message can say when it'll run.
       // Cancellations are deliberate — never retry those.
       const outerRetry = !dryRun && !isCancelled ? await scheduleRetryIfConfigured(taskId) : { note: "", scheduled: false };
-      await writeLog(taskId, false, errMsg + outerRetry.note, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
+      await writeRunLogOnce(false, errMsg + outerRetry.note, outerScreenshotPath, Date.now() - startTime, dryRun ? "dry_run" : triggeredBy, collectedStepLogs);
       if (!dryRun) {
         await db.update(tasksTable).set({ status: isCancelled ? "idle" : "failed", lastRunAt: new Date() }).where(eq(tasksTable.id, taskId));
         // A failed exception also needs to keep @after_completion tasks repeating — but a
@@ -907,6 +964,16 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         if (!isCancelled) await schedulePostCompletionIfNeeded(taskId, dryRun);
       }
     } finally {
+      // Last line of defence against a leaked backend session: the page adapter's close()
+      // normally releases the camoufox/cf-proxy session, but a run that blew up between
+      // "session launched" and "adapter returned" never got there. close() is a no-op once
+      // the adapter already released, and is bounded so a dead sidecar can't hang the slot.
+      if (browserProvider) {
+        await Promise.race([
+          browserProvider.close().catch((err) => logger.warn({ taskId, err }, "Browser provider close failed")),
+          new Promise<void>((r) => setTimeout(r, 15_000)),
+        ]);
+      }
       runningTasks.delete(taskId);
       cancelRequested.delete(taskId);
       if (semaphoreAcquired) releaseSemaphore(concKey);

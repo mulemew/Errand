@@ -363,6 +363,9 @@ router.get("/tasks", async (req, res): Promise<void> => {
     exitGeo: displayExitGeo(tasks[i], maps),
     proxyLabel: proxyLabel(tasks[i], maps),
     fingerprintOs: fingerprintOs(tasks[i], maps),
+    // The list's platform badge tooltip names the PROFILE ("Win10 主力机"), not its OS —
+    // the icon already says which OS it is. Null when the task uses an inline fingerprint.
+    fingerprintLabel: fingerprintLabel(tasks[i], maps),
   })));
 });
 

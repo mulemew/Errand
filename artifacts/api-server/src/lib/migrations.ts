@@ -115,6 +115,10 @@ import { pool } from "@workspace/db";
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "viewport_height" integer;
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "humanize" boolean;
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "block_webrtc" boolean;
+  -- The default backend now lives on a provider (the Settings browser-backend section is
+  -- gone). At most one row may carry it; a partial unique index enforces that in the DB.
+  ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "is_default" boolean NOT NULL DEFAULT false;
+  CREATE UNIQUE INDEX IF NOT EXISTS "providers_single_default" ON "providers" ("is_default") WHERE "is_default";
   `;
 
   export async function runMigrations(): Promise<void> {
