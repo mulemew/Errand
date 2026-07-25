@@ -966,20 +966,37 @@ export async function clearCloudflareInterstitial(
       return false;
     }
 
-    // result === "failed" — reload and retry (analogue of uc_open_with_reconnect).
-    // But NOT if a non-interactive challenge is still verifying: reloading restarts
-    // its spinner from scratch and it never gets to finish. bypassCloudflareChallenge
-    // already waited to the deadline for that case, so if we're still on a js_challenge
-    // the reload wouldn't help — only an interactive/stuck one benefits from a fresh
-    // navigation.
+    // result === "failed" — should we reload?
+    //
+    // Be honest about what a reload IS here: page.goto() on the same URL, in the SAME
+    // browser context — same cookies (including the ones the failed challenge just set),
+    // same exit IP, same TLS/JA3, same fingerprint. All it buys is a fresh challenge
+    // instance. That is worth something in exactly ONE case: the widget never reached a
+    // verdict (it did not render, it had zero size, our click never landed), i.e. the page
+    // was broken rather than the challenge lost.
+    //
+    // When Cloudflare has actually JUDGED us — the box says "Verification failed" — a
+    // reload changes none of the inputs to that judgement. It just burns another minute of
+    // the budget and hands CF one more failed attempt from this IP. Starting over for real
+    // means a new browser session and/or a different exit IP, which lives above this
+    // function: the task-level retry (retryCount / retryIntervalMinutes) builds a brand-new
+    // browser session, and a rotating proxy changes the IP with it.
     const stillType = await detectCfChallenge(page).catch(() => "js_challenge" as const);
     if (stillType === "js_challenge") {
       logger.warn("CF non-interactive challenge still verifying at deadline — a reload would only restart it");
       return false;
     }
+    const widget = await describeTurnstileState(page);
+    if (/fail|失败|错误|エラー|fehlgeschlagen|échec|erro/i.test(widget)) {
+      logger.warn({ widget }, "Turnstile judged this attempt a failure — a reload keeps the same IP/fingerprint and cannot change that verdict. Giving up so the task's retry can start from a fresh session");
+      return false;
+    }
     if (round < maxReloads) {
       const reloadUrl = opts?.url || page.url();
-      logger.info({ round, reloadUrl }, "CF interstitial not cleared — reloading page and retrying");
+      logger.info(
+        { round, reloadUrl, widget },
+        "Turnstile reached no verdict (not rendered / never clicked) — reloading for a fresh page",
+      );
       try {
         await page.goto(reloadUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
       } catch {
@@ -990,9 +1007,12 @@ export async function clearCloudflareInterstitial(
     }
   }
 
-  // Final status check — the challenge may have cleared during the last wait.
-  const finalType = await bypassCloudflareChallenge(page, { deadline });
-  return finalType === "not_detected" || finalType === "passed";
+  // Final status CHECK — deliberately not another bypass round. Calling
+  // bypassCloudflareChallenge here clicked the widget one more time after the loop had
+  // already spent its budget, which is both pointless and the exact move that turns a
+  // challenge into "Verification failed". Just look at where we ended up.
+  const finalType = await detectCfChallenge(page).catch(() => "js_challenge" as const);
+  return finalType === "none" || (await isTurnstileSolved(page));
 }
 
 // ── CF environment patches ───────────────────────────────────────────────────
