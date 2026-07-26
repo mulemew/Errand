@@ -120,7 +120,15 @@ export async function clickFirstMatching(page: PageAdapter, selectors: string[])
       })
       .catch(() => false)) as boolean;
     if (!visible) continue;
-    await el.click();
+    // A click can still fail (covered by an overlay, detached mid-action). Fall through to
+    // the next candidate instead of aborting the whole login — the old single-selector
+    // call had no alternative to fall through TO, so this is strictly more forgiving.
+    try {
+      await el.click();
+    } catch (err) {
+      logger.debug({ sel, err }, "Candidate matched but the click failed — trying the next one");
+      continue;
+    }
     return sel;
   }
   return null;

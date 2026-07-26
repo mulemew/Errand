@@ -202,8 +202,12 @@ import type { PageAdapter } from "./page-adapter";
     await page.keyboard.type(code, { delay: 80 });
     await sleep(500);
 
-    const verifyBtn = await page.$("button[data-target*='verify'], button:has-text('Verify')")
-      ?? await page.$("form button[type='submit']");
+    // Narrow first, but keep the original broad fallback last so this cannot match FEWER
+    // pages than before.
+    const verifyBtn =
+      (await page.$("button[data-target*='verify'], button:has-text('Verify')")) ??
+      (await page.$("form button[type='submit']")) ??
+      (await page.$("button[type='submit']"));
     if (verifyBtn) {
       await Promise.all([nav(page, 30000), verifyBtn.click()]);
     } else {

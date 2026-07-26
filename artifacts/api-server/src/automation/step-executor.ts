@@ -754,7 +754,11 @@ async function executeStep(
         // attempts) could consume the entire task timeout and report it as "task timed out"
         // rather than "login failed". Checked between attempts, so the worst case is the
         // budget plus one attempt. Tunable via LOGIN_STEP_BUDGET_MS.
-        const loginBudgetMs = Math.max(60_000, Number(process.env.LOGIN_STEP_BUDGET_MS ?? 300_000));
+        // 10 minutes, deliberately generous: the check only ever runs BEFORE a retry, so a
+        // login that succeeds on its first or second attempt can never be cut off by it —
+        // it exists purely to stop the third attempt from riding into the task timeout. A
+        // legitimate slow login (captcha solving plus a Cloudflare clear) fits well inside.
+        const loginBudgetMs = Math.max(60_000, Number(process.env.LOGIN_STEP_BUDGET_MS ?? 600_000));
         const loginDeadline = Date.now() + loginBudgetMs;
         const loginStart = Date.now();
 
