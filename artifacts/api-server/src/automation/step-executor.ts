@@ -152,7 +152,11 @@ const MAX_WAIT_MS = 60_000;
       }
 
       const _stepStart = Date.now();
-      const MAX_STEP_RETRIES = 1;
+      // A login step must NOT be retried here: it runs its own 3-attempt loop, so the two
+      // layers MULTIPLY into six full login attempts. With each attempt able to spend
+      // minutes on navigations, CF clearing and selector waits, that alone is what let a
+      // failing login run all the way into the task's 30-minute timeout.
+      const MAX_STEP_RETRIES = step.type === "login" ? 0 : 1;
       let _stepErr: unknown = null;
       let _stepResult: { message: string; newPage?: PageAdapter; screenshotPath?: string } | null = null;
       let _taskExit: TaskExitError | null = null;
@@ -744,10 +748,27 @@ async function executeStep(
         let lastLoginErr: Error | null = null;
         let loginResult!: { success: boolean; captchaBlocked: boolean; message: string };
 
+        // WALL-CLOCK BUDGET for the whole step. Every individual wait had its own timeout,
+        // but nothing bounded their SUM — so a login that failed slowly (60 s navigation +
+        // ~90 s of Cloudflare clearing + a string of 15-30 s selector waits, times three
+        // attempts) could consume the entire task timeout and report it as "task timed out"
+        // rather than "login failed". Checked between attempts, so the worst case is the
+        // budget plus one attempt. Tunable via LOGIN_STEP_BUDGET_MS.
+        const loginBudgetMs = Math.max(60_000, Number(process.env.LOGIN_STEP_BUDGET_MS ?? 300_000));
+        const loginDeadline = Date.now() + loginBudgetMs;
+        const loginStart = Date.now();
+
         for (let attempt = 0; attempt <= MAX_LOGIN_RETRIES; attempt++) {
           try {
             if (attempt > 0) {
-              logger.info({ taskId, stepIndex, attempt }, "Retrying login step");
+              const spent = Date.now() - loginStart;
+              if (Date.now() >= loginDeadline) {
+                throw new Error(
+                  `Login gave up after ${Math.round(spent / 1000)}s (budget ${Math.round(loginBudgetMs / 1000)}s, ` +
+                    `${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used). Last error: ${lastLoginErr?.message ?? "unknown"}`,
+                );
+              }
+              logger.info({ taskId, stepIndex, attempt, spentMs: spent }, "Retrying login step");
               await new Promise((r) => setTimeout(r, 2000 * attempt));
             }
             if (step.loginMethod === "github") {
@@ -781,7 +802,10 @@ async function executeStep(
             if (retryErr instanceof CaptchaBlockedError) throw retryErr;
             if (attempt >= MAX_LOGIN_RETRIES) throw retryErr;
             lastLoginErr = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
-            logger.warn({ taskId, stepIndex, attempt, err: lastLoginErr.message }, "Login threw, retrying");
+            logger.warn(
+              { taskId, stepIndex, attempt, attemptMs: Date.now() - loginStart, err: lastLoginErr.message },
+              "Login threw, retrying",
+            );
           }
         }
         throw lastLoginErr ?? new Error("Login failed");

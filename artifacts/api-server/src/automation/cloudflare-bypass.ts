@@ -762,7 +762,7 @@ async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean
   }
 }
 
-export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean> {
+export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: number): Promise<boolean> {
   try {
     // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
     // cf-proxy has access to uc_gui_click_captcha (PyAutoGUI) and xdotool,
@@ -835,7 +835,10 @@ export async function clickTurnstileCheckbox(page: PageAdapter): Promise<boolean
 
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
-      const settled = await waitForTurnstileSettled(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000));
+      const settled = await waitForTurnstileSettled(
+      page,
+      Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000)),
+    );
       // On failure, say WHAT the box shows. "Verify you are human" means the click missed;
       // "Verifying…" means it is still working and we gave up too early; "Verification
       // failed" means the click landed but was judged a bot. Three different fixes.
@@ -941,10 +944,19 @@ export async function bypassCloudflareChallenge(
     //
     // If a clean click does not pass, the answer is a FRESH page (the caller reloads) or a
     // different exit IP — not more clicks on the same widget.
+    // Respect the caller's wall-clock deadline. This branch used to ignore it entirely —
+    // the budget was only checked BETWEEN rounds, so a single round could overrun a 60 s
+    // clear budget by another ~50 s, and that overrun then multiplied by every login retry.
+    const remaining = () => (opts?.deadline ? opts.deadline - Date.now() : Number.POSITIVE_INFINITY);
+    if (remaining() <= 0) {
+      logger.warn("Out of Cloudflare budget before the Turnstile click");
+      return "failed";
+    }
+
     await simulateHumanPresence(page, { widgetPresent: true });
     await sleep(600 + Math.random() * 900);
 
-    const clicked = await clickTurnstileCheckbox(page);
+    const clicked = await clickTurnstileCheckbox(page, Math.min(12_000, Math.max(3_000, remaining())));
     if (clicked) {
       logger.info("Cloudflare Turnstile click challenge bypassed");
       return "passed";
@@ -958,8 +970,12 @@ export async function bypassCloudflareChallenge(
     }
 
     // It may still be finishing a slow verification: give it one quiet grace period
-    // (no clicking, no DOM changes) before giving up.
-    await sleep(3_000 + Math.random() * 2_000);
+    // (no clicking, no DOM changes) before giving up — but only if the budget allows.
+    if (remaining() <= 1_000) {
+      logger.warn("Cloudflare budget spent — skipping the grace period");
+      return "failed";
+    }
+    await sleep(Math.min(remaining(), 3_000 + Math.random() * 2_000));
     if ((await detectCfChallenge(page)) === "none" || (await isTurnstileSolved(page))) {
       logger.info("Cloudflare Turnstile cleared during the grace period");
       return "passed";

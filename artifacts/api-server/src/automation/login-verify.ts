@@ -59,6 +59,40 @@ export async function gotoTolerant(
  * text rather than the whole document, so a dashboard that merely mentions "login" in a
  * changelog is not mistaken for a login page.
  */
+/**
+ * Records how long each phase of a login took, and puts it in the failure message.
+ *
+ * Individual timeouts were all visible in the code, but a run that ended in "task timed out
+ * after 30 min" said nothing about WHERE the time went — and with several 15-60 s waits per
+ * attempt, the answer is never obvious from the outside. Now a failed login reports e.g.
+ * `[goto 60.1s, cloudflare 92.4s, findButton 15.0s]`.
+ */
+export class PhaseTimer {
+  private readonly marks: Array<[string, number]> = [];
+  private last = Date.now();
+  private readonly start = Date.now();
+
+  mark(name: string): void {
+    const now = Date.now();
+    this.marks.push([name, now - this.last]);
+    this.last = now;
+  }
+
+  /** "goto 60.1s, cloudflare 92.4s" — only phases that took over 100 ms. */
+  summary(): string {
+    const parts = this.marks
+      .filter(([, ms]) => ms >= 100)
+      .map(([n, ms]) => `${n} ${(ms / 1000).toFixed(1)}s`);
+    const total = ((Date.now() - this.start) / 1000).toFixed(1);
+    return parts.length ? `${parts.join(", ")}; total ${total}s` : `total ${total}s`;
+  }
+
+  /** Append the breakdown to a failure message. */
+  annotate(message: string): string {
+    return `${message} [${this.summary()}]`;
+  }
+}
+
 export type LoginVerdict = "logged_in" | "logged_out" | "unknown";
 
 /**

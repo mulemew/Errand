@@ -1,7 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
-import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant } from "./login-verify";
+import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
 import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
@@ -229,13 +229,16 @@ export async function googleLogin(
 
   try {
     logger.info({ targetUrl }, "Starting Google login flow");
+    const timer = new PhaseTimer();
     await gotoTolerant(page, targetUrl, 60000);
+    timer.mark("goto");
 
     // Clear a full-page Cloudflare interstitial BEFORE hunting for the OAuth button.
     // Without this the flow just searched a challenge page for 15 s and reported "could
     // not find a Sign in with Google button" — the button was behind the gate, not absent.
     // (form-login has always done this; the OAuth flows never did.)
     const cfCleared = await clearCloudflareInterstitial(page, { url: targetUrl });
+    timer.mark("cloudflare");
     if (!cfCleared) {
       const stillBlocked = (await page
         .evaluate(() => !document.querySelector("input[type='password'], a[href*='oauth'], a[href*='login'], form"))
@@ -244,7 +247,7 @@ export async function googleLogin(
         return {
           success: false,
           captchaBlocked: true,
-          message: `Cloudflare challenge is still up — the login page never loaded. URL: ${page.url()}`,
+          message: timer.annotate(`Cloudflare challenge is still up — the login page never loaded. URL: ${page.url()}`),
         };
       }
     }
@@ -272,11 +275,12 @@ export async function googleLogin(
         if (!clicked) await new Promise((r) => setTimeout(r, 1000));
       }
 
+      timer.mark("findButton");
       if (!clicked) {
         return {
           success: false,
           captchaBlocked: false,
-          message: "Could not find a 'Sign in with Google' button on the target page after 15s. Ensure the target URL contains a Google OAuth login button.",
+          message: timer.annotate("Could not find a 'Sign in with Google' button on the target page after 15s. Ensure the target URL contains a Google OAuth login button."),
         };
       }
       logger.info({ url: page.url() }, "Clicked the Google OAuth button — waiting for the flow to move");
@@ -290,6 +294,7 @@ export async function googleLogin(
         if (u.includes("accounts.google.com") || u !== clickStartUrl) break;
         await new Promise((r) => setTimeout(r, 500));
       }
+      timer.mark("oauthRedirect");
     }
 
     if (!page.url().includes("accounts.google.com")) {
@@ -299,7 +304,7 @@ export async function googleLogin(
       // moved looks like. Demand something on the page that says we are in.
       const landingErr = await verifyOAuthLanding(page, "Google", clickStartUrl);
       if (landingErr) {
-        return { success: false, captchaBlocked: false, message: landingErr };
+        return { success: false, captchaBlocked: false, message: timer.annotate(landingErr) };
       }
       // 如果配置了 successText，验证页面含该文本才算已登录
       if (successText) {
@@ -325,7 +330,8 @@ export async function googleLogin(
     }
 
     const result = await completeGoogleAuth(page, credentials, solver);
-    if (!result.success) return result;
+    timer.mark("googleAuth");
+    if (!result.success) return { ...result, message: timer.annotate(result.message) };
 
     const finalUrl = page.url();
     logger.info({ finalUrl }, "Google login succeeded");
@@ -356,5 +362,6 @@ export async function googleLogin(
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err }, "Google login error");
     return { success: false, captchaBlocked: false, message: `Google login error: ${message}` };
+  // (the timer is scoped inside the try; a throw here is already annotated by its own phase)
   }
 }
