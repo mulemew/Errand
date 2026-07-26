@@ -1,7 +1,8 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
-import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog } from "./login-verify";
+import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant } from "./login-verify";
+import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
 import type { LoginResult } from "./form-login";
@@ -228,7 +229,25 @@ export async function googleLogin(
 
   try {
     logger.info({ targetUrl }, "Starting Google login flow");
-    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await gotoTolerant(page, targetUrl, 60000);
+
+    // Clear a full-page Cloudflare interstitial BEFORE hunting for the OAuth button.
+    // Without this the flow just searched a challenge page for 15 s and reported "could
+    // not find a Sign in with Google button" — the button was behind the gate, not absent.
+    // (form-login has always done this; the OAuth flows never did.)
+    const cfCleared = await clearCloudflareInterstitial(page, { url: targetUrl });
+    if (!cfCleared) {
+      const stillBlocked = (await page
+        .evaluate(() => !document.querySelector("input[type='password'], a[href*='oauth'], a[href*='login'], form"))
+        .catch(() => false)) as boolean;
+      if (stillBlocked) {
+        return {
+          success: false,
+          captchaBlocked: true,
+          message: `Cloudflare challenge is still up — the login page never loaded. URL: ${page.url()}`,
+        };
+      }
+    }
 
     const isAlreadyGoogle = page.url().includes("accounts.google.com");
     // Where the flow started, so we can tell "OAuth completed" from "nothing happened".

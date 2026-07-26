@@ -1,4 +1,44 @@
 import type { PageAdapter } from "./page-adapter";
+import { logger } from "../lib/logger";
+
+/**
+ * Navigate, and do not throw away a page that actually arrived.
+ *
+ * A Cloudflare interstitial re-navigates itself while it verifies, so the load state can
+ * keep resetting and never settle inside the budget — page.goto then rejects with
+ * "Timeout 60000ms exceeded" even though the challenge is right there on screen, rendered
+ * and clickable. Every login flow treated that as fatal, so a site behind a full-page
+ * challenge failed before anything was allowed to look at the page (and then burned two
+ * more attempts doing it again).
+ *
+ * A timeout is therefore only fatal when the page is genuinely empty.
+ */
+export async function gotoTolerant(
+  page: PageAdapter,
+  url: string,
+  timeout = 60_000,
+): Promise<{ timedOut: boolean }> {
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+    return { timedOut: false };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/timeout/i.test(msg)) throw err;
+    const alive = (await page
+      .evaluate(() => ({
+        ready: document.readyState,
+        len: (document.body?.innerText ?? "").length,
+        href: location.href,
+      }))
+      .catch(() => null)) as { ready: string; len: number; href: string } | null;
+    if (!alive || (alive.len === 0 && alive.ready === "loading")) throw err;
+    logger.warn(
+      { url, landedOn: alive.href, readyState: alive.ready, textLength: alive.len },
+      "Navigation timed out but the page has content (typical of a Cloudflare interstitial) — continuing",
+    );
+    return { timedOut: true };
+  }
+}
 
 /**
  * Is this page showing us a LOGIN screen, or an authenticated one?

@@ -3,6 +3,7 @@ import type { PageAdapter } from "./page-adapter";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { detectAndHandleCaptcha } from "./captcha";
   import { clearCloudflareInterstitial, describeTurnstileState } from "./cloudflare-bypass";
+  import { gotoTolerant } from "./login-verify";
   import type { CaptchaSolver } from "./captcha-solver";
   import crypto from "crypto";
 
@@ -564,7 +565,9 @@ import type { PageAdapter } from "./page-adapter";
 
     try {
       logger.info({ targetUrl }, "Starting form login flow");
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+      // Tolerant: a self-refreshing CF interstitial can blow the load budget while being
+      // perfectly present and clickable. clearCloudflareInterstitial runs right below.
+      await gotoTolerant(page, targetUrl, 20000);
 
       // ── 0a. Clear a full-page Cloudflare interstitial FIRST ───────────────
       // Sites like wispbyte.com, betadash.lunes.host and dash.domain.digitalplat.org

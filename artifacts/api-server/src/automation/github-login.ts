@@ -2,7 +2,8 @@ import type { PageAdapter } from "./page-adapter";
   import crypto from "crypto";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
-  import { verifyOAuthLanding, detectLoginState, clickFirstMatching } from "./login-verify";
+  import { verifyOAuthLanding, detectLoginState, clickFirstMatching, gotoTolerant } from "./login-verify";
+  import { clearCloudflareInterstitial } from "./cloudflare-bypass";
   import { detectAndHandleCaptcha } from "./captcha";
   import type { CaptchaSolver } from "./captcha-solver";
   import type { LoginResult } from "./form-login";
@@ -258,7 +259,22 @@ import type { PageAdapter } from "./page-adapter";
 
     try {
       logger.info({ targetUrl }, "GitHub OAuth login — navigating to target");
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await gotoTolerant(page, targetUrl, 60000);
+      // Same as the Google flow: a full-page challenge has to be cleared before we can
+      // look for the OAuth button, or we spend 15 s searching the gate for it.
+      const cfCleared = await clearCloudflareInterstitial(page, { url: targetUrl });
+      if (!cfCleared) {
+        const stillBlocked = (await page
+          .evaluate(() => !document.querySelector("input[type='password'], a[href*='oauth'], a[href*='login'], form"))
+          .catch(() => false)) as boolean;
+        if (stillBlocked) {
+          return {
+            success: false,
+            captchaBlocked: true,
+            message: `Cloudflare challenge is still up — the login page never loaded. URL: ${safeUrl(page)}`,
+          };
+        }
+      }
       await sleep(2500);
 
       let currentUrl = safeUrl(page);
