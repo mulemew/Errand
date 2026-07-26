@@ -2,7 +2,7 @@ import type { PageAdapter } from "./page-adapter";
   import crypto from "crypto";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
-  import { verifyOAuthLanding, detectLoginState } from "./login-verify";
+  import { verifyOAuthLanding, detectLoginState, clickFirstMatching } from "./login-verify";
   import { detectAndHandleCaptcha } from "./captcha";
   import type { CaptchaSolver } from "./captcha-solver";
   import type { LoginResult } from "./form-login";
@@ -201,7 +201,8 @@ import type { PageAdapter } from "./page-adapter";
     await page.keyboard.type(code, { delay: 80 });
     await sleep(500);
 
-    const verifyBtn = await page.$("button:has-text('Verify'), button[type='submit']");
+    const verifyBtn = await page.$("button[data-target*='verify'], button:has-text('Verify')")
+      ?? await page.$("form button[type='submit']");
     if (verifyBtn) {
       await Promise.all([nav(page, 30000), verifyBtn.click()]);
     } else {
@@ -215,10 +216,17 @@ import type { PageAdapter } from "./page-adapter";
   async function clickAuthorize(page: PageAdapter): Promise<void> {
     logger.info("Handling GitHub OAuth authorize screen");
     // Try text-based selector first, then fallback
-    const authSel = "button[name='authorize'], button:has-text('Authorize'), input[value='Authorize']";
-    const btn = await page.$(authSel).catch(() => null);
-    if (btn) {
-      await Promise.all([nav(page, 30000), btn.click()]);
+    // Ordered, one selector at a time: page.$("a, b, c") returns the first match in
+    // DOCUMENT order, so a broad member of the list can beat the precise one (this is what
+    // made the Google flow click the app-name button instead of Next).
+    const navPromise = nav(page, 30000);
+    const clicked = await clickFirstMatching(page, [
+      "button[name='authorize']",
+      "input[value='Authorize']",
+      "button:has-text('Authorize')",
+    ]);
+    if (clicked) {
+      await navPromise;
     } else {
       // Try evaluate-click as fallback
       const clicked = await page.evaluate(() => {

@@ -21,6 +21,97 @@ import type { PageAdapter } from "./page-adapter";
  */
 export type LoginVerdict = "logged_in" | "logged_out" | "unknown";
 
+/**
+ * Click the first selector in the list that matches — trying them ONE AT A TIME, in the
+ * order given.
+ *
+ * `page.$("a, b, c")` does NOT do this: it resolves to `locator(...).first()`, i.e. the
+ * first match in DOCUMENT order, so a broad fallback selector at the end of the list can
+ * win over the precise one at the front. That is how the Google flow clicked the app-name
+ * button ("Continue to Pingless") instead of Next: `button[type='button']:not([disabled])`
+ * matched it, and it sits earlier in the DOM than #identifierNext. The developer-info
+ * dialog opened, nothing navigated, and the login died waiting for a password field.
+ *
+ * Returns the selector that was clicked, or null when none matched a visible element.
+ */
+export async function clickFirstMatching(page: PageAdapter, selectors: string[]): Promise<string | null> {
+  for (const sel of selectors) {
+    const el = await page.$(sel).catch(() => null);
+    if (!el) continue;
+    const visible = (await el
+      .evaluate((e: Element) => {
+        const r = e.getBoundingClientRect();
+        const s = window.getComputedStyle(e);
+        return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+      })
+      .catch(() => false)) as boolean;
+    if (!visible) continue;
+    await el.click();
+    return sel;
+  }
+  return null;
+}
+
+/**
+ * Click a button by its VISIBLE TEXT, matched against a list of localised labels.
+ *
+ * Provider sign-in pages are localised (the same Google page renders "Next" or "下一步"
+ * depending on the exit IP's locale), so an English-only text match is not enough — and
+ * matching on element structure instead is what caused the wrong-button click above.
+ */
+export async function clickButtonByText(page: PageAdapter, labels: string[]): Promise<string | null> {
+  try {
+    return (await page.evaluate((needles: unknown) => {
+      const wanted = (needles as string[]).map((s) => s.toLowerCase());
+      const els = Array.from(
+        document.querySelectorAll<HTMLElement>("button, [role='button'], input[type='submit']"),
+      );
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        if (r.width <= 0 || r.height <= 0 || s.visibility === "hidden" || s.display === "none") continue;
+        const label = (
+          el.textContent ||
+          (el as HTMLInputElement).value ||
+          el.getAttribute("aria-label") ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
+        if (!label) continue;
+        // Exact-ish match only: "next" must not match "next time" or a nav item.
+        if (wanted.some((w) => label === w || label.startsWith(w))) {
+          el.click();
+          return label;
+        }
+      }
+      return null;
+    }, labels as never)) as string | null;
+  } catch {
+    return null;
+  }
+}
+
+/** Google sometimes opens an info dialog (app developer details) over the sign-in form.
+ *  Anything we do underneath it is a no-op, so close it before continuing. */
+export async function closeBlockingDialog(page: PageAdapter): Promise<boolean> {
+  try {
+    const open = (await page.evaluate(() => {
+      const d = Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'], [role='alertdialog'], dialog[open]"));
+      return d.some((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+    })) as boolean;
+    if (!open) return false;
+    await clickButtonByText(page, ["got it", "ok", "close", "我知道了", "知道了", "确定", "確定", "关闭", "關閉"]);
+    await page.keyboard.press("Escape").catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function detectLoginState(page: PageAdapter): Promise<{ verdict: LoginVerdict; evidence: string }> {
   try {
     return (await page.evaluate(() => {

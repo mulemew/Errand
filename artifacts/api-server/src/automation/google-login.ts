@@ -1,7 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
-import { verifyOAuthLanding } from "./login-verify";
+import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog } from "./login-verify";
 import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
 import type { LoginResult } from "./form-login";
@@ -78,6 +78,28 @@ async function clickGoogleButton(page: PageAdapter): Promise<boolean> {
   return false;
 }
 
+/** Google's "Next", resolved safely: the step's own id (scoped so we cannot stray to
+ *  another button), then the localised label, then Enter. */
+async function pressNext(page: PageAdapter, idSel: string, timeout: number): Promise<void> {
+  // An open info dialog swallows every click underneath it.
+  await closeBlockingDialog(page);
+  const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout }).catch(() => {});
+  const clicked =
+    // The real <button> inside the wrapper first — #identifierNext itself is a DIV, and
+    // clicking a wrapper is a coin flip on which child gets the event.
+    (await clickFirstMatching(page, [`${idSel} button`, `${idSel} [role='button']`, idSel])) ??
+    (await clickButtonByText(page, [
+      "next", "continue", "下一步", "继续", "繼續", "次へ", "다음", "weiter", "suivant", "siguiente", "avanti", "далее",
+    ]));
+  if (!clicked) {
+    logger.info({ idSel }, "No Next button matched — submitting with Enter");
+    await page.keyboard.press("Enter");
+  } else {
+    logger.info({ clicked }, "Clicked Google Next");
+  }
+  await navPromise;
+}
+
 async function completeGoogleAuth(
   page: PageAdapter,
   credentials: GoogleCredentials,
@@ -106,18 +128,14 @@ async function completeGoogleAuth(
   }, emailSel as never);
   await page.keyboard.type(credentials.username, { delay: 60 });
 
-  // Click "Next" after email
-  const emailNextSel = "#identifierNext, button[jsname='LgbsSe'], button[type='button']:not([disabled])";
-  const emailNextBtn = await page.$(emailNextSel);
-  if (emailNextBtn) {
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {}),
-      emailNextBtn.click(),
-    ]);
-  } else {
-    await page.keyboard.press("Enter");
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 }).catch(() => {});
-  }
+  // Click "Next" after email.
+  //
+  // The old selector list ended in `button[type='button']:not([disabled])`, and because
+  // page.$() takes the first match in DOCUMENT order that fallback won: it matched the
+  // app-name button ("Continue to <app>") which sits above the form, opening Google's
+  // developer-info dialog instead of submitting. Try the precise ids one at a time, then
+  // the localised label, and only then fall back to Enter (which Google honours anyway).
+  await pressNext(page, "#identifierNext", 20000);
 
   await new Promise((r) => setTimeout(r, 1500));
 
@@ -143,18 +161,8 @@ async function completeGoogleAuth(
   }, passwordSel as never);
   await page.keyboard.type(credentials.password, { delay: 60 });
 
-  // Click "Next" after password
-  const passwordNextSel = "#passwordNext, button[jsname='LgbsSe'], button[type='button']:not([disabled])";
-  const passwordNextBtn = await page.$(passwordNextSel);
-  if (passwordNextBtn) {
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
-      passwordNextBtn.click(),
-    ]);
-  } else {
-    await page.keyboard.press("Enter");
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {});
-  }
+  // Click "Next" after password — same ordered resolution as the email step.
+  await pressNext(page, "#passwordNext", 30000);
 
   await new Promise((r) => setTimeout(r, 1500));
 
