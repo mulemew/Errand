@@ -51,6 +51,36 @@ function withGuiLock<T>(fn: () => Promise<T> | T): Promise<T> {
   return run;
 }
 
+/**
+ * Same serialisation, but it can never strand a task.
+ *
+ * The plain chain above has no timeout in either direction, and a Playwright call against
+ * an unresponsive page blocks for the DEFAULT timeout — 60 s here. Put a ~15 s critical
+ * section on that chain and one stuck holder stalls every other task, across every
+ * provider, until the task timeout kills them. Which is exactly what happened.
+ *
+ * So: wait a bounded time for a turn, and otherwise just go, unserialised. Losing
+ * serialisation degrades one click; losing the queue hangs the fleet.
+ */
+async function withGuiLockBounded<T>(fn: () => Promise<T>, waitMs: number, label: string): Promise<T> {
+  let released!: () => void;
+  const mine = new Promise<void>((r) => { released = r; });
+  const previous = _guiLockChain;
+  _guiLockChain = previous.then(() => mine, () => mine);
+
+  const gotTurn = await Promise.race([
+    previous.then(() => true, () => true),
+    new Promise<boolean>((r) => setTimeout(() => r(false), waitMs)),
+  ]);
+  if (!gotTurn) logger.warn({ label, waitMs }, "GUI lock busy — proceeding without it rather than queueing");
+
+  try {
+    return await fn();
+  } finally {
+    released();
+  }
+}
+
 // ── Turnstile iframe expansion script ───────────────────────────────────────
 // Ported from the JustRunMy.App reference project.
 // Forcefully expands hidden/overflow:hidden containers around the Turnstile
@@ -122,6 +152,26 @@ async function expandTurnstileIfClipped(page: PageAdapter): Promise<void> {
   } catch { /* non-critical */ }
 }
 
+/**
+ * page.evaluate with a ceiling.
+ *
+ * Every probe in this file is a few milliseconds of DOM reading — but on a page that is
+ * navigating, wedged, or whose browser is gone, the underlying call waits the context's
+ * DEFAULT timeout, which the providers set to 60 s. These probes run in polling loops, so
+ * one unresponsive page turns into minutes of a task's budget spent learning nothing.
+ * A probe that cannot answer in a couple of seconds is not going to answer.
+ */
+async function evalBounded<T>(page: PageAdapter, fn: unknown, fallback: T, ms = 4000): Promise<T> {
+  try {
+    return (await Promise.race([
+      page.evaluate(fn as never),
+      new Promise<T>((r) => setTimeout(() => r(fallback), ms)),
+    ])) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 // ── Backend flavour ───────────────────────────────────────────────────────────
 
 /** Camoufox is a patched FIREFOX. Chromium-only tricks (window.chrome, the Network
@@ -171,6 +221,15 @@ async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<vo
  * spinning — we were too impatient or reset it), "Success!", or "Verification failed".
  */
 export async function describeTurnstileState(page: PageAdapter): Promise<string> {
+  // Bounded: this reads a cross-origin frame, and on a page that is navigating or wedged
+  // the underlying calls otherwise wait the full default timeout. It is only diagnostics.
+  return Promise.race([
+    _describeTurnstileState(page),
+    new Promise<string>((r) => setTimeout(() => r("(state read timed out)"), 5000)),
+  ]);
+}
+
+async function _describeTurnstileState(page: PageAdapter): Promise<string> {
   try {
     const frame = page
       .frames()
@@ -187,13 +246,34 @@ export async function describeTurnstileState(page: PageAdapter): Promise<string>
   }
 }
 
-/** Turnstile checks document.hasFocus(); on the camoufox sidecar every concurrent
- *  session shares one Xvfb, so only one window is focused. Raise ours and report. */
+/**
+ * Turnstile checks document.hasFocus(), and the camoufox sidecar runs every concurrent
+ * session's headful Firefox on one Xvfb — so in theory only one window has focus.
+ *
+ * RAISING the window is opt-in (CF_FOCUS_LOCK=1) because it cuts both ways: task B raising
+ * its window pulls focus off task A mid-verification, which is why it then has to be
+ * serialised — and serialising a ~15 s section across every task is how a fleet ends up
+ * queueing behind one slow click. The theory was never confirmed by a log, so the default
+ * is to REPORT focus only. If "Page does NOT have focus" turns up on real failures, set
+ * the flag.
+ */
+const CF_FOCUS_LOCK = /^(1|true|yes|on)$/i.test(process.env.CF_FOCUS_LOCK ?? "");
+
 async function ensureFocused(page: PageAdapter, where: string): Promise<void> {
-  try { await page.bringToFront?.(); } catch { /* not supported */ }
+  if (CF_FOCUS_LOCK) {
+    // Bounded: bringToFront on an unresponsive page otherwise waits the full default
+    // timeout (60 s) while holding the lock.
+    await Promise.race([
+      (async () => { try { await page.bringToFront?.(); } catch { /* not supported */ } })(),
+      new Promise<void>((r) => setTimeout(r, 3000)),
+    ]);
+  }
   try {
-    const focused = (await page.evaluate(() => document.hasFocus())) as boolean;
-    if (!focused) logger.warn({ where }, "Page does NOT have focus — Turnstile may refuse to complete");
+    const focused = (await Promise.race([
+      page.evaluate(() => document.hasFocus()),
+      new Promise<boolean>((r) => setTimeout(() => r(true), 2000)),
+    ])) as boolean;
+    if (!focused) logger.warn({ where, focusLock: CF_FOCUS_LOCK }, "Page does NOT have focus — Turnstile may refuse to complete");
   } catch { /* ignore */ }
 }
 
@@ -454,7 +534,8 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // scripts every couple of seconds is itself something CF scores. Same logic, one call.
   let probe: CfPageProbe | null = null;
   try {
-    probe = (await page.evaluate(CF_PROBE_FN)) as CfPageProbe;
+    probe = await evalBounded<CfPageProbe | null>(page, CF_PROBE_FN, null, 6000);
+    if (!probe) throw new Error("probe timed out");
   } catch {
     // Usually "execution context destroyed" — the page navigated under us, which is
     // COMMON during a challenge (that is what passing one looks like). The old code ran
@@ -462,11 +543,7 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
     // would otherwise report "no challenge" on a transient failure and let the caller walk
     // into a page that is still gated. Settle, then try once more.
     await sleep(800);
-    try {
-      probe = (await page.evaluate(CF_PROBE_FN)) as CfPageProbe;
-    } catch {
-      probe = null;
-    }
+    probe = await evalBounded<CfPageProbe | null>(page, CF_PROBE_FN, null, 6000);
   }
 
   if (!probe) return "none";
@@ -504,8 +581,9 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
 // Checks if the Turnstile hidden input already has a valid token.
 
 async function isTurnstileSolved(page: PageAdapter): Promise<boolean> {
-  try {
-    return await page.evaluate(() => {
+  return evalBounded<boolean>(
+    page,
+    () => {
       // Embedded widgets use name="cf-turnstile-response"; the modern full-page
       // interstitial instead fills input#cf-chl-widget-<random>_response. Checking
       // only the former meant a passed full-page challenge never looked solved.
@@ -517,10 +595,9 @@ async function isTurnstileSolved(page: PageAdapter): Promise<boolean> {
         if (el.value && el.value.length > 20) return true;
       }
       return false;
-    }) as boolean;
-  } catch {
-    return false;
-  }
+    },
+    false,
+  );
 }
 
 // ── Human behaviour simulation ───────────────────────────────────────────────
@@ -669,8 +746,9 @@ async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?:
  *     on screen unclicked.
  */
 async function locateTurnstileCheckbox(page: PageAdapter): Promise<{ x: number; y: number } | null> {
-  try {
-    return (await page.evaluate(() => {
+  return evalBounded<{ x: number; y: number } | null>(
+    page,
+    () => {
       // The checkbox is a FIXED ~24px control after ~13px of padding, so its centre is
       // ~30px from the widget's left edge whatever the widget's width is. A proportional
       // offset lands in the padding and reads as "verification failed".
@@ -697,10 +775,9 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<{ x: number; 
         if (usable(r)) return point(r);
       }
       return null;
-    })) as { x: number; y: number } | null;
-  } catch {
-    return null;
-  }
+    },
+    null,
+  );
 }
 
 /**
@@ -732,8 +809,9 @@ async function waitForTurnstileSettled(page: PageAdapter, budgetMs: number): Pro
 /** Token present / widget still on screen, in ONE evaluate. Used by the settle poll, so
  *  it must stay cheap: injecting scripts on a tight loop while CF watches is a signal. */
 async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean; widgetPresent: boolean }> {
-  try {
-    return (await page.evaluate(() => {
+  return evalBounded<{ solved: boolean; widgetPresent: boolean }>(
+    page,
+    () => {
       const tokens = document.querySelectorAll<HTMLInputElement>(
         'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"], ' +
           'input[id^="cf-chl-widget-"][id$="_response"]',
@@ -754,12 +832,11 @@ async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean
         );
       }
       return { solved, widgetPresent };
-    })) as { solved: boolean; widgetPresent: boolean };
-  } catch {
-    // Context destroyed mid-navigation usually means the challenge passed and the page is
-    // moving on — but say "unknown" rather than guessing: the caller polls again.
-    return { solved: false, widgetPresent: true };
-  }
+    },
+    // Unknown (context destroyed mid-navigation, or too slow to answer): say "still there"
+    // rather than guessing success. The caller polls again.
+    { solved: false, widgetPresent: true },
+  );
 }
 
 export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: number): Promise<boolean> {
@@ -803,7 +880,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
     // window mid-verification pulls focus away from task A and fails A's challenge —
     // trading one instability for another. Same reasoning as cf-proxy's _gui_lock, one
     // level up. Everything inside is deadline-bounded, so the queue always drains.
-    return await withGuiLock(async () => {
+    // Serialise ONLY when we are actually stealing focus. Without CF_FOCUS_LOCK nothing is
+    // shared between tasks here, so each one clicks its own widget independently.
+    const runClick = async (): Promise<boolean> => {
       await ensureFocused(page, "turnstile-click");
 
       // Prefer the checkbox element inside the CF frame (frames() sees through the closed
@@ -847,7 +926,8 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
         "Turnstile click settled",
       );
       return settled;
-  });
+    };
+    return CF_FOCUS_LOCK ? await withGuiLockBounded(runClick, 20_000, "turnstile-click") : await runClick();
   } catch (err) {
     logger.debug({ err }, "Turnstile click failed");
     return false;

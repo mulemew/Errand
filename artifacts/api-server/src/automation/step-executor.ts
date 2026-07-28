@@ -775,13 +775,38 @@ async function executeStep(
               logger.info({ taskId, stepIndex, attempt, spentMs: spent }, "Retrying login step");
               await new Promise((r) => setTimeout(r, 2000 * attempt));
             }
-            if (step.loginMethod === "github") {
-              loginResult = await githubLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
-            } else if (step.loginMethod === "google") {
-              loginResult = await googleLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
-            } else {
-              loginResult = await formLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successSelector, totpSecret, step.successText);
-            }
+            // HARD cap on a single attempt.
+            //
+            // The budget below is only consulted BETWEEN attempts, which does nothing for
+            // the case that actually hurts: one attempt that never returns. Every wait in
+            // the login flows has its own timeout, but a wedged page makes each Playwright
+            // call sit at the context default (60 s) and there are many of them — so a
+            // single attempt could quietly consume the entire task timeout and be reported
+            // as "task timed out" rather than as a login failure.
+            //
+            // On expiry the flow is abandoned rather than cancelled: it may still be
+            // driving the page for a moment afterwards, which is acceptable because the
+            // step has failed and the page is about to be closed or reused for a fresh
+            // attempt. Hanging for half an hour is not.
+            const attemptCap = Math.max(60_000, loginDeadline - Date.now());
+            const runLogin = async () => {
+              if (step.loginMethod === "github") {
+                return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+              }
+              if (step.loginMethod === "google") {
+                return googleLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+              }
+              return formLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successSelector, totpSecret, step.successText);
+            };
+            loginResult = await Promise.race([
+              runLogin(),
+              new Promise<never>((_, reject) =>
+                setTimeout(
+                  () => reject(new Error(`Login attempt ${attempt + 1} exceeded ${Math.round(attemptCap / 1000)}s and was abandoned`)),
+                  attemptCap,
+                ),
+              ),
+            ]);
             if (loginResult.captchaBlocked) throw new CaptchaBlockedError(loginResult.message);
             if (!loginResult.success) {
               // GitHub OAuth: a CONCLUDED failure (redirected back to login /
