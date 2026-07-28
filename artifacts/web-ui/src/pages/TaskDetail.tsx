@@ -771,15 +771,22 @@ export default function TaskDetail() {
                         s.type === "wait"       ? `${s.ms}ms` :
                         s.type === "waitFor"    ? `${s.selector}${s.timeout ? ` (${s.timeout}ms)` : ""}` :
                         s.type === "screenshot" ? "capture page" :
-                        stepTypeLabel(s.type, t);
+                        null;
                       return (
                         <div key={i} className="flex items-center gap-2 bg-muted/10 border border-border rounded px-3 py-2 text-xs font-mono">
                           <span className="text-muted-foreground w-5 text-right shrink-0">{i + 1}</span>
                           {icon}
-                          {/* The localized step NAME — stepTypeLabel is what the editor and
-                              the run timeline already use; this list printed the raw type. */}
-                          <span className="text-muted-foreground shrink-0">{stepTypeLabel(s.type, t)}</span>
-                          <span className="text-foreground truncate">{detail}</span>
+                          {/* Localized NAME, then the step's parameters. A step that takes no
+                              parameters (dismissPopups, cfVerify) shows its raw type instead —
+                              that is the name it has in the logs and in an exported task, and
+                              it beats repeating the label twice, which is what happened when
+                              the fallback was the label too. */}
+                          <span className="shrink-0">{stepTypeLabel(s.type, t)}</span>
+                          {detail ? (
+                            <span className="text-muted-foreground truncate">{detail}</span>
+                          ) : (
+                            <span className="text-muted-foreground/50 truncate">{s.type}</span>
+                          )}
                         </div>
                       );
                     })}
