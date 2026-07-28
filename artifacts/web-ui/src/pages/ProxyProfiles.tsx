@@ -65,9 +65,15 @@ export default function ProxyProfiles() {
         body: JSON.stringify({ name: form.name.trim(), url: form.url.trim() }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || (await res.text()));
-      toast({ title: editingId ? "Proxy updated" : "Proxy saved", variant: "success" });
+      const saved: ProxyProfile = await res.json();
+      // Patch the single row instead of re-fetching (and blanking) the whole list.
+      setRows((prev) => (editingId ? prev.map((r) => (r.id === saved.id ? saved : r)) : [...prev, saved]));
+      toast({
+        title: editingId ? "Proxy updated" : "Proxy saved",
+        description: "出口 IP 在后台检测中，稍后刷新或点单条的检测按钮查看",
+        variant: "success",
+      });
       setDialogOpen(false);
-      load();
     } catch (err) {
       toast({ title: "Failed to save", description: err instanceof Error ? err.message : "", variant: "destructive" });
     } finally {
@@ -81,8 +87,8 @@ export default function ProxyProfiles() {
       const res = await fetch(`${BASE}/api/proxy-profiles/${deleteId}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
       toast({ title: "Proxy deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到无代理` : undefined, variant: "success" });
+      setRows((prev) => prev.filter((r) => r.id !== deleteId));
       setDeleteId(null);
-      load();
     } catch {
       toast({ title: "Failed to delete", variant: "destructive" });
     }

@@ -51,13 +51,14 @@ router.post("/proxy-profiles", async (req, res): Promise<void> => {
   const body = CreateBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.issues[0]?.message ?? "Invalid input" }); return; }
   const url = body.data.url.trim();
-  // Auto-test the exit IP/geo through the proxy and store it, so task pages read it
-  // directly (list flag, edit card, detail) without re-querying live.
-  const geo = await resolveProfileGeo(url);
   const [row] = await db.insert(proxyProfilesTable)
-    .values({ name: body.data.name, url, exitGeo: geo, geoUpdatedAt: new Date() })
+    .values({ name: body.data.name, url })
     .returning();
   logger.info({ id: row.id, name: row.name }, "Proxy profile created");
+  // Probe the exit IP/geo in the BACKGROUND. It has to start sing-box and curl through the
+  // proxy, which takes tens of seconds — doing it inline made every save appear to hang.
+  // The row is saved either way; the flag fills in on the next load or the refresh button.
+  void refreshProfileGeo(row.id).catch(() => {});
   res.status(201).json(row);
 });
 
@@ -66,16 +67,23 @@ router.put("/proxy-profiles/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
   const body = UpdateBody.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: body.error.issues[0]?.message ?? "Invalid input" }); return; }
-  const update: Partial<{ name: string; url: string; exitGeo: unknown; geoUpdatedAt: Date }> = {};
+  const update: Partial<{ name: string; url: string; exitGeo: unknown; geoUpdatedAt: Date | null }> = {};
   if (body.data.name !== undefined) update.name = body.data.name;
+  const [before] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, id));
+  const urlChanged = body.data.url !== undefined && body.data.url.trim() !== before?.url;
   if (body.data.url !== undefined) {
     update.url = body.data.url.trim();
-    // URL changed → the old exit geo no longer applies; re-test through the new proxy.
-    update.exitGeo = await resolveProfileGeo(update.url);
-    update.geoUpdatedAt = new Date();
+    if (urlChanged) {
+      // The old exit geo belongs to the old proxy — drop it now, re-probe below.
+      update.exitGeo = null;
+      update.geoUpdatedAt = null;
+    }
   }
   const [updated] = await db.update(proxyProfilesTable).set(update).where(eq(proxyProfilesTable.id, id)).returning();
   if (!updated) { res.status(404).json({ error: "Not found" }); return; }
+  // Background again: renaming a profile should be instant, and even a URL change should
+  // not block the save on a ~20 s proxy probe.
+  if (urlChanged) void refreshProfileGeo(id).catch(() => {});
   res.json(updated);
 });
 

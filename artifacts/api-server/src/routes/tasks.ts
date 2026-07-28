@@ -724,6 +724,24 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
   if (cronExpression !== undefined) updateData.cronExpression = cronExpression;
   if (browserConfig !== undefined) updateData.browserConfig = browserConfig ?? null;
 
+  // A CHANGED schedule must invalidate the pending next run.
+  //
+  // @after_completion / @random keep their next run in next_run_at, and scheduleTask()
+  // only SEEDS that column when it is empty (so a restart does not lose a pending run).
+  // The consequence was that editing the interval — 1 day to 4 days, say — left the old
+  // timestamp in place: the list kept showing the previous next run, a page refresh
+  // changed nothing, and the only way out was disabling and re-enabling the task (which
+  // clears the column). Clearing it here lets rescheduleTask() below recompute properly.
+  const scheduleChanged =
+    cronExpression !== undefined && (cronExpression ?? null) !== (existing.cronExpression ?? null);
+  if (scheduleChanged) {
+    updateData.nextRunAt = null;
+    req.log.info(
+      { taskId: params.data.id, from: existing.cronExpression, to: cronExpression },
+      "Schedule changed — clearing the pending next run so it is recomputed",
+    );
+  }
+
   const [updated] = await db
     .update(tasksTable)
     .set(updateData)

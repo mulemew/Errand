@@ -224,6 +224,11 @@ def launch():
     opts = _build_options(body)
     env = dict(os.environ)
     env["CAMOUFOX_CFG"] = json.dumps(opts)
+    # start_new_session puts the launcher in its OWN process group, so we can later kill
+    # the WHOLE tree. This is the leak: SIGTERM to the launcher does not necessarily take
+    # down the Firefox it spawned (Playwright's browser process is a grandchild), so the
+    # browser was reparented to init and kept running — several hundred MB each, piling up
+    # across runs until the box ran out of RAM.
     proc = subprocess.Popen(
         [sys.executable, _LAUNCHER_PATH],
         env=env,
@@ -231,6 +236,7 @@ def launch():
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     # Read stdout until the ws endpoint appears (or the child dies / times out).
     ws = None
@@ -249,14 +255,16 @@ def launch():
             ws = m.group(1)
             break
     if not ws:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        # Failed startup can still have spawned a browser — kill the group, not just python.
+        _kill(proc)
         return jsonify({"error": "Camoufox server did not report a ws endpoint\n" + "\n".join(tail)}), 500
     sid = str(uuid.uuid4())
+    try:
+        _pgid = os.getpgid(proc.pid)
+    except Exception:
+        _pgid = None
     with _lock:
-        _servers[sid] = {"proc": proc, "ws": ws, "started": time.time()}
+        _servers[sid] = {"proc": proc, "ws": ws, "started": time.time(), "pgid": _pgid}
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
     print(f"[camoufox] launched {sid} ws={ws} os={opts.get('os')}", flush=True)
@@ -272,14 +280,65 @@ def _drain(proc):
 
 
 def _kill(proc):
+    """Kill the launcher AND everything it started.
+
+    Signalling just the launcher leaves camoufox-bin (and its content processes) running:
+    they are grandchildren via Playwright's driver, and nothing reaps them. Because /launch
+    starts each session in its own process group, one killpg takes down the whole tree.
+    """
     try:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=8)
-        except Exception:
-            proc.kill()
+        pgid = os.getpgid(proc.pid)
+    except Exception:
+        pgid = None
+
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.send_signal(signal.SIGTERM)
+    except ProcessLookupError:
+        pgid = None
     except Exception:
         pass
+
+    try:
+        proc.wait(timeout=8)
+    except Exception:
+        pass
+
+    # Anything still alive in the group gets SIGKILL — a Firefox that ignored SIGTERM (or
+    # was mid-startup when we asked) must not survive the session.
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=3)
+    except Exception:
+        pass
+
+
+def _kill_group_of(entry):
+    """Best-effort sweep of a session's process group, recorded at launch time so it works
+    even after the launcher itself has exited (os.getpgid would fail then)."""
+    pgid = entry.get("pgid")
+    if not pgid:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        except Exception:
+            return
+        time.sleep(0.5)
 
 
 # Background reaper: without it a session whose task hung (never called /release) would
@@ -302,6 +361,10 @@ def _reaper():
             for sid, e in items:
                 proc = e["proc"]
                 if proc.poll() is not None:  # already exited — poll() reaps the zombie
+                    # The LAUNCHER is gone, but its browser may not be: a launcher that
+                    # crashed (or was killed by the OOM killer) leaves camoufox-bin running
+                    # with nobody to reap it. Sweep the whole group before forgetting it.
+                    _kill_group_of(e)
                     with _lock:
                         _servers.pop(sid, None)
                     print(f"[camoufox] reaped dead session {sid} (exit={proc.returncode})", flush=True)

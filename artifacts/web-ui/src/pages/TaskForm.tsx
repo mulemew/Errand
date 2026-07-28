@@ -363,7 +363,9 @@ export default function TaskForm() {
   useEffect(() => {
     const sel = browserConfig.fpSel;
     if (!refsLoaded || sel === "none") return;
-    if (!supportsFingerprint || (sel !== "custom" && !selectableFingerprints.some((p) => String(p.id) === sel))) {
+    // "custom" is no longer offered: an existing task that was saved with a hand-typed
+    // OS/timezone spoof falls back to "不使用" here rather than showing a blank dropdown.
+    if (!supportsFingerprint || !selectableFingerprints.some((p) => String(p.id) === sel)) {
       setBrowserConfig((s) => ({ ...s, fpSel: "none", fingerprintProfileId: null }));
     }
   }, [refsLoaded, activeProviderType, supportsFingerprint, selectableFingerprints, browserConfig.fpSel]);
@@ -535,16 +537,7 @@ export default function TaskForm() {
     const fsel = browserConfig.fpSel;
     let fingerprintProfileId: number | null = null;
     let fingerprint: Record<string, unknown> | null = null;
-    if (fsel === "custom") {
-      fingerprint = browserConfig.fpOs
-        ? {
-            os: browserConfig.fpOs,
-            timezone: browserConfig.fpTimezone.trim(),
-            locale: browserConfig.fpLocale.trim(),
-            autoGeo: browserConfig.fpAutoGeo,
-          }
-        : null;
-    } else if (fsel !== "none") {
+    if (fsel !== "none" && fsel !== "custom") {
       fingerprintProfileId = Number(fsel); // a saved fingerprint profile
     }
 
@@ -1142,8 +1135,13 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       )}
                     </div>
 
-                    {/* Fingerprint — one dropdown: none / saved profiles / custom.
-                        Manual fields appear only after choosing 自定义. */}
+                    {/* Fingerprint — saved profiles only. The old 自定义 option let you
+                        hand-type an OS/timezone/locale spoof, which is the legacy cf-proxy
+                        trick: it paints a Linux browser as Windows at the JS layer only, so
+                        the halves disagree under any real check. Camoufox fingerprints are
+                        engine-level and come from a saved profile; anything hand-typed here
+                        would be strictly worse than either using a profile or using nothing.
+                        Timezone/locale live on the profile too. */}
                     {supportsFingerprint && (
                       <div className="space-y-1.5">
                         <label className="text-sm font-medium">浏览器指纹</label>
@@ -1153,75 +1151,17 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         >
                           <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none">不使用（真实 Linux 指纹）</SelectItem>
+                            <SelectItem value="none">不使用（真实指纹）</SelectItem>
                             {selectableFingerprints.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
                             ))}
-                            <SelectItem value="custom">自定义</SelectItem>
                           </SelectContent>
                         </Select>
                         <p className="text-[11px] text-muted-foreground">
                           {activeProviderType === "camoufox"
-                            ? "选「浏览器指纹」页里保存的（含生成的固定指纹，引擎级伪装），或自定义手填。"
+                            ? "只能选「浏览器指纹」页里保存的档案（引擎级伪装，含时区/语言）。要新的就去那一页生成一个。"
                             : "SeleniumBase 只能伪装 系统/时区/语言，用不了生成的固定指纹（browserforge / 真机预设），这类档案已从列表中隐藏。"}
                         </p>
-
-                        {browserConfig.fpSel === "custom" && (
-                          <div className="pt-1 space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-                            <p className="text-xs text-muted-foreground">
-                              把 Linux 指纹伪装成 Windows/Mac（UA、平台、WebGL、时区、语言）。Windows 伪装度更高；
-                              半吊子伪装可能反而更难过 CF，开启后请实测对比。
-                            </p>
-                            <div className="space-y-1.5">
-                              <label className="text-sm font-medium">操作系统画像</label>
-                              <Select
-                                value={browserConfig.fpOs || "off"}
-                                onValueChange={(v) =>
-                                  setBrowserConfig((s) => ({ ...s, fpOs: v === "off" ? "" : (v as "windows" | "mac") }))
-                                }
-                              >
-                                <SelectTrigger><SelectValue /></SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="off">关闭（真实 Linux 指纹）</SelectItem>
-                                  <SelectItem value="windows">Windows（推荐）</SelectItem>
-                                  <SelectItem value="mac">Mac</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            {browserConfig.fpOs && (
-                              <>
-                                <div className="flex items-center justify-between rounded-md border border-border px-3 py-2.5">
-                                  <div>
-                                    <p className="text-xs font-medium">按出口 IP 自动设时区/语言</p>
-                                    <p className="text-[10px] text-muted-foreground">开启后忽略下面手填的值，按代理出口 IP 自动对齐</p>
-                                  </div>
-                                  <Switch
-                                    checked={browserConfig.fpAutoGeo}
-                                    onCheckedChange={(v) => setBrowserConfig((s) => ({ ...s, fpAutoGeo: v }))}
-                                  />
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                  <div className="space-y-1.5">
-                                    <label className="text-sm font-medium">时区</label>
-                                    <Input
-                                      placeholder="America/New_York（留空=自动）"
-                                      value={browserConfig.fpTimezone}
-                                      onChange={(e) => setBrowserConfig((s) => ({ ...s, fpTimezone: e.target.value }))}
-                                    />
-                                  </div>
-                                  <div className="space-y-1.5">
-                                    <label className="text-sm font-medium">语言</label>
-                                    <Input
-                                      placeholder="en-US（留空=自动）"
-                                      value={browserConfig.fpLocale}
-                                      onChange={(e) => setBrowserConfig((s) => ({ ...s, fpLocale: e.target.value }))}
-                                    />
-                                  </div>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
                       </div>
                     )}
 
