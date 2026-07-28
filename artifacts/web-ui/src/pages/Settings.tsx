@@ -642,24 +642,20 @@ function ConcurrencySection() {
           <span className={`font-mono font-bold text-base ${config.queued > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>{config.queued}</span>
           {config.maxQueueDepth > 0 && <span className='text-muted-foreground text-xs'>/ {config.maxQueueDepth}</span>}
         </div>
-        <p className='text-xs text-muted-foreground'>Updates every 3s</p>
+        <p className='text-xs text-muted-foreground'>{t.liveUpdatesEvery3s}</p>
       </div>
 
       {/* Max concurrent */}
       <div className='space-y-2'>
-        <Label htmlFor='maxConcurrent'>{t.maxConcurrentSessions}</Label>
+        <Label htmlFor='maxConcurrent'>{t.fallbackConcurrency}</Label>
         <div className='flex items-center gap-3'>
           <Input id='maxConcurrent' type='number' min={1} max={50}
             value={config.maxConcurrent}
             onChange={(e) => { isDirty.current = true; const n = Math.max(1, parseInt(e.target.value, 10) || 1); setConfig((c) => ({ ...c, maxConcurrent: n })); }}
             className='h-9 w-24 font-mono text-sm' />
-          <span className='text-xs text-muted-foreground'>sessions</span>
+          <span className='text-xs text-muted-foreground'>{t.unitSessions}</span>
         </div>
-        <p className='text-xs text-muted-foreground'>
-          How many tasks may run simultaneously. Set this to match your browserless{' '}
-          <code className='font-mono'>MAX_CONCURRENT_SESSIONS</code> env var
-          (check your Docker Compose or container config). Default: 3.
-        </p>
+        <p className='text-xs text-muted-foreground'>{t.fallbackConcurrencyHint}</p>
       </div>
 
       {/* Max queue depth */}
@@ -670,12 +666,9 @@ function ConcurrencySection() {
             value={config.maxQueueDepth}
             onChange={(e) => { isDirty.current = true; const n = Math.max(0, parseInt(e.target.value, 10) || 0); setConfig((c) => ({ ...c, maxQueueDepth: n })); }}
             className='h-9 w-24 font-mono text-sm' />
-          <span className='text-xs text-muted-foreground'>tasks (0 = unlimited)</span>
+          <span className='text-xs text-muted-foreground'>{t.unitTasksZeroUnlimited}</span>
         </div>
-        <p className='text-xs text-muted-foreground'>
-          When all slots are busy, new triggers wait in queue. If the queue reaches this limit,
-          further triggers are rejected immediately with an error. Default: 10.
-        </p>
+        <p className='text-xs text-muted-foreground'>{t.maxQueueDepthHint}</p>
       </div>
 
       {/* Queue timeout */}
@@ -686,12 +679,9 @@ function ConcurrencySection() {
             value={config.queueTimeoutSecs}
             onChange={(e) => { isDirty.current = true; const n = Math.max(0, parseInt(e.target.value, 10) || 0); setConfig((c) => ({ ...c, queueTimeoutSecs: n })); }}
             className='h-9 w-24 font-mono text-sm' />
-          <span className='text-xs text-muted-foreground'>seconds (0 = wait forever)</span>
+          <span className='text-xs text-muted-foreground'>{t.unitSecondsZeroForever}</span>
         </div>
-        <p className='text-xs text-muted-foreground'>
-          If a queued task waits longer than this, it is dropped automatically.
-          Prevents stale triggers from running long after they were queued. Default: 300 (5 min).
-        </p>
+        <p className='text-xs text-muted-foreground'>{t.queueTimeoutHint}</p>
       </div>
 
       <Button onClick={handleSave} disabled={saving}>
@@ -805,13 +795,7 @@ export default function Settings() {
               <CardTitle className="text-base flex items-center gap-2">
                 <Cpu className="h-4 w-4 text-primary" /> {t.concurrencyControl}
               </CardTitle>
-              <CardDescription className="text-xs mt-1">
-                Control how many browser automation tasks run simultaneously. Set{" "}
-                <code className="font-mono">{t.maxConcurrentSessions}</code> to match the{" "}
-                <code className="font-mono">MAX_CONCURRENT_SESSIONS</code> value in your
-                local browserless Docker image so the platform queue and the browser backend
-                stay in sync.
-              </CardDescription>
+              <CardDescription className="text-xs mt-1">{t.concurrencyCardHint}</CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
               <ConcurrencySection />
@@ -847,11 +831,7 @@ export default function Settings() {
             <CardTitle className="text-base flex items-center gap-2">
               <Timer className="h-4 w-4 text-primary" /> {t.taskTimeout}
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              Maximum time a task may run before it is automatically killed and marked as failed.
-              Applies to every task run, including scheduled ones. If a task legitimately takes
-              longer, increase the limit or disable it entirely.
-            </CardDescription>
+            <CardDescription className="text-xs mt-1">{t.taskTimeoutCardHint}</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             <TaskTimeoutSection />

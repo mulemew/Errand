@@ -553,6 +553,16 @@ export interface Translations {
       fingerprintNoneReal: string;
       fingerprintHintCamoufox: string;
       fingerprintHintSb: string;
+      concurrencyCardHint: string;
+      fallbackConcurrency: string;
+      fallbackConcurrencyHint: string;
+      maxQueueDepthHint: string;
+      queueTimeoutHint: string;
+      unitSessions: string;
+      unitTasksZeroUnlimited: string;
+      unitSecondsZeroForever: string;
+      liveUpdatesEvery3s: string;
+      taskTimeoutCardHint: string;
   }
 
   export const zh: Translations = {
@@ -1081,6 +1091,16 @@ export interface Translations {
       fingerprintNoneReal: "不使用（真实指纹）",
       fingerprintHintCamoufox: "只能选「浏览器指纹」页里保存的档案（引擎级伪装，含时区/语言）。要新的就去那一页生成一个。",
       fingerprintHintSb: "SeleniumBase 只能伪装 系统/时区/语言，用不了生成的固定指纹（browserforge / 真机预设），这类档案已从列表中隐藏。",
+      concurrencyCardHint: "每个后端的并发上限在 Providers 页单独设置，各管各的。这里剩下的是全局项：队列深度和等待超时对所有后端的队列都生效；下面的「回退并发」只在任务没选后端、且没有默认后端时才会用到。",
+      fallbackConcurrency: "回退并发（没有后端时）",
+      fallbackConcurrencyHint: "只在任务没选后端、且 Providers 页也没有标记默认后端时才生效。正常情况下用的是该后端自己的并发上限。",
+      maxQueueDepthHint: "某个后端的槽位占满时，新触发的任务进入它的队列。队列达到这个上限后，再触发会立刻被拒绝。0 = 不限。默认 10。",
+      queueTimeoutHint: "排队超过这个时间的任务会被丢弃，避免陈旧的触发在很久之后才跑。0 = 一直等。默认 300 秒。",
+      unitSessions: "个",
+      unitTasksZeroUnlimited: "个任务（0 = 不限）",
+      unitSecondsZeroForever: "秒（0 = 一直等）",
+      liveUpdatesEvery3s: "每 3 秒刷新",
+      taskTimeoutCardHint: "单次任务运行的时间上限，超过就中止并记为失败，对所有运行（含定时触发）生效。注意这和 Providers 页里的「会话超时」不是一回事——那个是浏览器会话本身能活多久。",
   };
 
   export const en: Translations = {
@@ -1610,5 +1630,15 @@ export interface Translations {
       fingerprintNoneReal: "None (the browser's own fingerprint)",
       fingerprintHintCamoufox: "Only profiles saved on the Browser fingerprints page (applied at engine level, timezone and locale included). Generate a new one there.",
       fingerprintHintSb: "SeleniumBase can only spoof OS / timezone / locale — it cannot apply a generated fingerprint (browserforge or a real-device preset), so those profiles are hidden from this list.",
+      concurrencyCardHint: "Each backend's concurrency limit is set on the Providers page and applies only to itself. What remains here is global: queue depth and wait timeout apply to every backend's queue, and the fallback below is used only when a task has no backend selected and no default backend is set.",
+      fallbackConcurrency: "Fallback concurrency (no backend)",
+      fallbackConcurrencyHint: "Only used when a task has no backend selected and no default backend is starred on the Providers page. Normally the chosen backend's own limit applies.",
+      maxQueueDepthHint: "When a backend's slots are all busy, new triggers wait in its queue. Once the queue reaches this limit, further triggers are rejected immediately. 0 = unlimited. Default 10.",
+      queueTimeoutHint: "A task queued for longer than this is dropped, so a stale trigger cannot run long after it was queued. 0 = wait forever. Default 300s.",
+      unitSessions: "sessions",
+      unitTasksZeroUnlimited: "tasks (0 = unlimited)",
+      unitSecondsZeroForever: "seconds (0 = wait forever)",
+      liveUpdatesEvery3s: "Updates every 3s",
+      taskTimeoutCardHint: "How long a single task run may take before it is aborted and recorded as failed. Applies to every run, scheduled ones included. Not the same as a provider's \"session timeout\", which is how long the browser session itself may live.",
   };
   
