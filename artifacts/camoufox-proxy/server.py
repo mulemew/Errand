@@ -369,6 +369,31 @@ def _kill_group_of(entry):
 _SESSION_TTL = int(os.getenv("CAMOUFOX_SESSION_TTL", "5400"))
 
 
+def _reap_orphans():
+    """Collect any dead child, not just the ones we track.
+
+    This container's PID 1 IS this process (the entrypoint execs it), so every browser we
+    orphan gets reparented HERE — and a killed process stays in the table as a zombie until
+    someone wait()s for it. Popen.poll() only reaps the specific launcher it owns, so the
+    camoufox-bin grandchildren killed by killpg lingered as 0-byte entries: harmless for
+    memory, but they hold PID slots and make "is anything leaking?" impossible to answer
+    from ps. waitpid(-1) with WNOHANG drains whatever is finished.
+    """
+    reaped = 0
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break  # nothing left to reap
+        except Exception:
+            break
+        if pid == 0:
+            break  # children exist but none have exited
+        reaped += 1
+    if reaped:
+        print(f"[camoufox] reaped {reaped} orphaned child process(es)", flush=True)
+
+
 def _reaper():
     while True:
         time.sleep(20)
@@ -394,6 +419,9 @@ def _reaper():
                     print(f"[camoufox] killed over-age session {sid} (>{_SESSION_TTL}s)", flush=True)
         except Exception as ex:  # never let the reaper die
             print(f"[camoufox] reaper error: {ex}", flush=True)
+        # AFTER the tracked sweep, so Popen still owns the bookkeeping for its own
+        # launchers and only genuine orphans are collected generically.
+        _reap_orphans()
 
 
 threading.Thread(target=_reaper, daemon=True).start()
