@@ -193,7 +193,7 @@ import { useLang } from "@/contexts/lang-context";
                   {resolvedTheme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                 </button>
                 <button onClick={() => setLang(lang === "zh" ? "en" : "zh")} title="Switch language" className="px-2 py-1 rounded text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-                  {lang === "zh" ? "EN" : "中"}
+                  {lang === "zh" ? "EN" : "ZH"}
                 </button>
                 <span className="text-xs text-muted-foreground font-mono border-l border-border pl-2 ml-1">{new Date().toISOString().split('T')[0]}</span>
               </div>

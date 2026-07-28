@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useRoute, useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -60,6 +60,7 @@ import {
   getGetTasksSummaryQueryKey,
 } from "@workspace/api-client-react";
 import { useLang } from "@/contexts/lang-context";
+import type { Translations } from "@/i18n/translations";
 import type { WorkflowStep as ApiWorkflowStep } from "@workspace/api-client-react";
 
 const thenActionSchema = z
@@ -143,9 +144,14 @@ const stepSchema = z.object({
   elseAction: thenActionSchema,
 });
 
-const formSchema = z.object({
-  name: z.string().min(1, "任务名称不能为空"),
-  targetUrl: z.string().url("请输入有效的 URL").min(1, "目标 URL 不能为空"),
+/**
+ * Built with `t` rather than at module level: zod bakes its messages in at schema
+ * construction, so a module-level schema would freeze one language's validation text for
+ * the life of the tab and show Chinese errors in English mode.
+ */
+const makeFormSchema = (t: Translations) => z.object({
+  name: z.string().min(1, t.taskNameRequired),
+  targetUrl: z.string().url(t.enterValidUrl).min(1, t.targetUrlRequired),
   cronExpression: z.string().optional(),
   // Kept as strings so the inputs can be cleared while editing; parsed on submit.
   retryCount: z.string().optional(),
@@ -153,7 +159,7 @@ const formSchema = z.object({
   steps: z.array(stepSchema).default([]),
 });
 
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
 
 type BrowserProvider = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
 
@@ -235,7 +241,7 @@ function inferProxyType(url: string): ProxyType {
 }
 
 const PROVIDER_LABELS: Record<BrowserProvider, string> = {
-  playwright: "Playwright (默认)",
+  playwright: "Playwright",
   puppeteer: "Puppeteer",
   seleniumbase: "SeleniumBase (CF Bypass)",
   camoufox: "Camoufox (anti-detect Firefox)",
@@ -373,6 +379,7 @@ export default function TaskForm() {
   const createTask = useCreateTask();
   const updateTask = useUpdateTask();
 
+  const formSchema = useMemo(() => makeFormSchema(t), [t]);
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -570,8 +577,8 @@ export default function TaskForm() {
     );
     if (badCookieStep !== -1) {
       toast({
-        title: "仅 Cookie 登录缺少判据",
-        description: `步骤 ${badCookieStep + 1}：请填写「登录成功文字」或「登录成功选择器」，否则无法判断 cookie 是否有效。`,
+        title: t.cookieOnlyNoCriterionTitle,
+        description: t.cookieOnlyNoCriterionDesc.replace("{n}", String(badCookieStep + 1)),
         variant: "destructive",
       });
       return;
@@ -807,13 +814,13 @@ export default function TaskForm() {
                           Delay after run finishes
                         </p>
                         <div className="flex items-center gap-2">
-                          <DurationField label="天" value={acDays} onChange={setAcDays} />
-                          <DurationField label="小时" value={acHours} onChange={setAcHours} />
-                          <DurationField label="分钟" value={acMinutes} onChange={setAcMinutes} />
+                          <DurationField label={t.unitDays} value={acDays} onChange={setAcDays} />
+                          <DurationField label={t.unitHours} value={acHours} onChange={setAcHours} />
+                          <DurationField label={t.unitMinutes} value={acMinutes} onChange={setAcMinutes} />
                         </div>
                         <p className="text-[11px] text-muted-foreground leading-snug">
                           Next run triggers automatically this long after the
-                          previous run <strong>ends</strong> (天 / 小时 / 分钟 can be
+                          previous run <strong>ends</strong> ({t.unitDays} / {t.unitHours} / {t.unitMinutes} can be
                           combined freely). Perfect when the target site has a
                           cooldown timer that starts after each operation.
                         </p>
@@ -848,18 +855,18 @@ export default function TaskForm() {
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5 col-span-2">
                         <p className="text-xs font-medium text-muted-foreground">
-                          时间窗口 (在此周期内随机执行)
+                          {t.randomWindowLabel}
                         </p>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-muted-foreground">每</span>
-                          <DurationField label="天" value={rwDays} onChange={setRwDays} />
-                          <DurationField label="小时" value={rwHours} onChange={setRwHours} />
-                          <DurationField label="分钟" value={rwMinutes} onChange={setRwMinutes} />
+                          <span className="text-sm text-muted-foreground">{t.unitEvery}</span>
+                          <DurationField label={t.unitDays} value={rwDays} onChange={setRwDays} />
+                          <DurationField label={t.unitHours} value={rwHours} onChange={setRwHours} />
+                          <DurationField label={t.unitMinutes} value={rwMinutes} onChange={setRwMinutes} />
                         </div>
                       </div>
                       <div className="space-y-1.5 col-span-2">
                         <p className="text-xs font-medium text-muted-foreground">
-                          每个周期内执行次数
+                          {t.runsPerWindowLabel}
                         </p>
                         <div className="flex items-center gap-2">
                           <input
@@ -880,13 +887,11 @@ export default function TaskForm() {
                             }
                             className="w-20 h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono"
                           />
-                          <span className="text-sm text-muted-foreground">次</span>
+                          <span className="text-sm text-muted-foreground">{t.unitTimes}</span>
                         </div>
                       </div>
                       <p className="col-span-2 text-xs text-muted-foreground leading-relaxed">
-                        每次运行后开始计算下一个窗口，在窗口内随机安排{" "}
-                        <strong>{randomCount}</strong> 次运行。 例如：设为 3 天 1
-                        次，上次运行完成后，下次运行将在 3 天内的某个随机时刻执行。
+                        {t.randomScheduleHint.replace("{n}", String(randomCount))}
                       </p>
                     </div>
                   )}
@@ -895,9 +900,9 @@ export default function TaskForm() {
 
               {/* Failure auto-retry — independent of the schedule above. */}
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
-                <p className="text-sm font-medium">失败自动重试</p>
+                <p className="text-sm font-medium">{t.retryOnFailure}</p>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-muted-foreground">失败后重试</span>
+                  <span className="text-sm text-muted-foreground">{t.retryAfterFailure}</span>
                   <FormField
                     control={form.control}
                     name="retryCount"
@@ -915,7 +920,7 @@ export default function TaskForm() {
                       </FormItem>
                     )}
                   />
-                  <span className="text-sm text-muted-foreground">次，每次间隔</span>
+                  <span className="text-sm text-muted-foreground">{t.retryTimesEvery}</span>
                   <FormField
                     control={form.control}
                     name="retryIntervalMinutes"
@@ -933,11 +938,10 @@ export default function TaskForm() {
                       </FormItem>
                     )}
                   />
-                  <span className="text-sm text-muted-foreground">分钟</span>
+                  <span className="text-sm text-muted-foreground">{t.unitMinutes}</span>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  留空或 0 = 不重试（失败后等下一次定时触发）。重试次数按<strong>连续失败</strong>计算，
-                  成功一次就清零；用完仍失败则回到正常调度。手动取消的运行不会重试。
+                  {t.retryHint}
                 </p>
               </div>
 
@@ -945,9 +949,9 @@ export default function TaskForm() {
               <div className="space-y-2 pt-4 mt-4 border-t border-border">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium">Webhook 触发</p>
+                    <p className="text-sm font-medium">{t.webhookTrigger}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      开启后，第三方监控（Uptime Kuma 等）检测到服务挂掉时可以直接调用这个地址触发本任务。
+                      {t.webhookIntro}
                     </p>
                   </div>
                   <Switch
@@ -969,7 +973,7 @@ export default function TaskForm() {
                           className="font-mono text-xs h-9"
                           value={webhookToken}
                           onChange={(e) => setWebhookToken(e.target.value)}
-                          placeholder="（自动生成）"
+                          placeholder={t.autoGeneratedPlaceholder}
                         />
                         <Button
                           type="button"
@@ -978,21 +982,20 @@ export default function TaskForm() {
                           className="h-9 shrink-0"
                           onClick={() => setWebhookToken(genWebhookToken())}
                         >
-                          重新生成
+                          {t.regenerate}
                         </Button>
                       </div>
                     </div>
                     <div className="rounded-md bg-muted/40 border border-border p-2.5 space-y-1">
                       <p className="text-[10px] text-muted-foreground">
-                        {isEditMode ? "在监控里这样配（保存后生效）：" : "保存任务后，用下面的方式调用："}
+                        {isEditMode ? t.webhookUseThisEdit : t.webhookUseThisNew}
                       </p>
                       <pre className="text-[10px] font-mono whitespace-pre-wrap break-all leading-relaxed">
-{`POST ${typeof window !== "undefined" ? window.location.origin : ""}/api/tasks/${taskId ?? "<任务ID>"}/webhook
+{`POST ${typeof window !== "undefined" ? window.location.origin : ""}/api/tasks/${taskId ?? t.taskIdPlaceholder}/webhook
 Authorization: Bearer ${webhookToken || "<token>"}`}
                       </pre>
                       <p className="text-[10px] text-muted-foreground leading-snug">
-                        token 不对、webhook 未开启、或任务不存在，都统一返回 <code>401</code>（避免被拿去探测任务是否存在）。
-                        任务被停用返回 <code>409</code>。这个接口<strong>不需要登录</strong>，只认这个 token —— 请当密码保管。
+                        {t.webhookAuthHint}
                       </p>
                     </div>
                   </div>
@@ -1010,7 +1013,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-base font-semibold">
-                    浏览器后端
+                    {t.browserBackendSection}
                   </CardTitle>
                   {browserConfig.providerId != null ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
@@ -1019,7 +1022,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                      默认{defaultProvider ? ` · ${defaultProvider.name}` : ""}
+                      {t.defaultShort}{defaultProvider ? ` · ${defaultProvider.name}` : ""}
                     </span>
                   )}
                 </div>
@@ -1030,7 +1033,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                 )}
               </div>
               <CardDescription className="text-xs mt-1">
-                选一个「Providers」页里配好的后端，并为此任务单独指定代理 / 指纹，不影响其他任务
+                {t.backendSectionHint}
               </CardDescription>
             </CardHeader>
 
@@ -1038,7 +1041,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
               <CardContent className="space-y-5 pt-5">
                   <div className="space-y-4">
                     {/* Backend = a provider, always. Engine/URL/stealth/… all live on the
-                        Providers page; "默认" follows whichever provider is flagged there. */}
+                        Providers page; "Default" follows whichever provider is flagged there. */}
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">Provider</label>
                       <Select
@@ -1058,54 +1061,53 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         <SelectContent>
                           <SelectItem value="default">
                             {defaultProvider
-                              ? `默认（${defaultProvider.name} · ${defaultProvider.type}）`
-                              : "默认（未设置默认 provider）"}
+                              ? t.defaultProviderIs.replace("{name}", defaultProvider.name).replace("{type}", defaultProvider.type)
+                              : t.defaultProviderUnset}
                           </SelectItem>
                           {providers.filter((p) => p.enabled || p.id === browserConfig.providerId).map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>
-                              {p.name}（{p.type}，并发 {p.concurrency}）{!p.enabled ? " (disabled)" : p.healthy === false ? " ⚠" : ""}
+                              {t.providerOptionLine.replace("{name}", p.name).replace("{type}", p.type).replace("{n}", String(p.concurrency))}{!p.enabled ? ` (${t.disabledSuffix})` : p.healthy === false ? " ⚠" : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                       <p className="text-[11px] text-muted-foreground">
-                        引擎、地址、Stealth、分辨率等都在「Providers」页配置，并用该 provider 自己的并发上限。
-                        「默认」跟随 Providers 页里设为默认的那个
-                        {defaultProvider ? "" : "——目前还没有默认 provider，去 Providers 页设一个"}。
+                        {t.providerFieldHint}
+                        {defaultProvider ? "" : ` ${t.noDefaultProviderYet}`}
                       </p>
                     </div>
 
                     {/* Proxy — one dropdown: none / saved profiles / WARP / custom URL.
-                        Manual fields appear only after choosing 自定义 or WARP自动轮换. */}
+                        Manual fields appear only after choosing Custom or rotating WARP. */}
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium">代理</label>
+                      <label className="text-sm font-medium">{t.proxyLabel}</label>
                       <Select
                         value={browserConfig.proxySel}
                         onValueChange={(v) => setBrowserConfig((s) => ({ ...s, proxySel: v }))}
                       >
                         <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">不使用</SelectItem>
+                          <SelectItem value="none">{t.proxyNone}</SelectItem>
                           {proxyProfiles.map((p) => (
                             <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
                           ))}
-                          <SelectItem value="warp">WARP自动轮换</SelectItem>
-                          <SelectItem value="custom">自定义</SelectItem>
+                          <SelectItem value="warp">{t.proxyWarpRotate}</SelectItem>
+                          <SelectItem value="custom">{t.proxyCustom}</SelectItem>
                         </SelectContent>
                       </Select>
-                      <p className="text-[11px] text-muted-foreground">选「代理」页里保存的出口，或 WARP自动轮换，或自定义手填地址。</p>
+                      <p className="text-[11px] text-muted-foreground">{t.proxySelectHint}</p>
 
                       {/* Custom proxy address — scheme in the URL determines the node type */}
                       {browserConfig.proxySel === "custom" && (
                         <div className="pt-1 space-y-1.5">
                           <Input
-                            placeholder="socks5://user:pass@host:1080 或 http/vless/vmess/trojan/hy2/tuic/ss://…"
+                            placeholder={t.proxyUrlPlaceholder}
                             value={browserConfig.proxyUrl}
                             onChange={(e) => setBrowserConfig((s) => ({ ...s, proxyUrl: e.target.value }))}
                             className="font-mono text-sm"
                           />
                           <p className="text-[11px] text-muted-foreground">
-                            直接填代理 URL，协议由前缀识别（http/socks5 原生支持；vless/vmess/trojan/hy2/tuic/ss 会本地起 sing-box 转 SOCKS5）。
+                            {t.proxyCustomHint}
                           </p>
                         </div>
                       )}
@@ -1114,28 +1116,26 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                       {browserConfig.proxySel === "warp" && (
                         <div className="mt-1 rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1.5">
                           <label htmlFor="warpRotations" className="block text-sm font-medium">
-                            换 IP 重试次数
+                            {t.warpRotationsLabel}
                           </label>
                           <Input
                             id="warpRotations"
                             type="number"
                             min={0}
                             max={50}
-                            placeholder="留空 = 用默认值（RECAPTCHA_MAX_IP_ROTATIONS，默认 5）"
+                            placeholder={t.warpRotationsPlaceholder}
                             value={browserConfig.warpRotations}
                             onChange={(e) => setBrowserConfig((s) => ({ ...s, warpRotations: e.target.value }))}
                             className="font-mono text-sm"
                           />
                           <p className="text-[11px] text-muted-foreground">
-                            reCAPTCHA 语音验证被拒（"automated queries"）时，注册新的 WARP 身份换一个出口 IP 再试，最多这么多次。
-                            换 IP 时 sing-box 在同一本地端口重启，浏览器和页面状态不受影响；每次重试也会从新 IP 重新点一次
-                            checkbox（有机会直接通过）。填 0 关闭。
+                            {t.warpRotationsHint}
                           </p>
                         </div>
                       )}
                     </div>
 
-                    {/* Fingerprint — saved profiles only. The old 自定义 option let you
+                    {/* Fingerprint — saved profiles only. The old Custom option let you
                         hand-type an OS/timezone/locale spoof, which is the legacy cf-proxy
                         trick: it paints a Linux browser as Windows at the JS layer only, so
                         the halves disagree under any real check. Camoufox fingerprints are
@@ -1144,14 +1144,14 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         Timezone/locale live on the profile too. */}
                     {supportsFingerprint && (
                       <div className="space-y-1.5">
-                        <label className="text-sm font-medium">浏览器指纹</label>
+                        <label className="text-sm font-medium">{t.fingerprintFieldLabel}</label>
                         <Select
                           value={browserConfig.fpSel}
                           onValueChange={(v) => setBrowserConfig((s) => ({ ...s, fpSel: v }))}
                         >
                           <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none">不使用（真实指纹）</SelectItem>
+                            <SelectItem value="none">{t.fingerprintNoneReal}</SelectItem>
                             {selectableFingerprints.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
                             ))}
@@ -1159,14 +1159,14 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         </Select>
                         <p className="text-[11px] text-muted-foreground">
                           {activeProviderType === "camoufox"
-                            ? "只能选「浏览器指纹」页里保存的档案（引擎级伪装，含时区/语言）。要新的就去那一页生成一个。"
-                            : "SeleniumBase 只能伪装 系统/时区/语言，用不了生成的固定指纹（browserforge / 真机预设），这类档案已从列表中隐藏。"}
+                            ? t.fingerprintHintCamoufox
+                            : t.fingerprintHintSb}
                         </p>
                       </div>
                     )}
 
-                    {/* Engine / CDP 端点 / Stealth / 屏蔽广告 / 忽略HTTPS / 会话超时 /
-                        分辨率 all live on the Provider (Providers page) now. */}
+                    {/* Engine / CDP endpoint / stealth / ad blocking / HTTPS errors / session timeout /
+                        resolution all live on the Provider (Providers page) now. */}
                   </div>
               </CardContent>
             )}

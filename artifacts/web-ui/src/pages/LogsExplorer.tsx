@@ -158,7 +158,7 @@ import { useState } from "react";
         <Card className="border-border">
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-sm">
-              {isLoading ? t.loading : `${total.toLocaleString()} 条结果`}
+              {isLoading ? t.loading : t.resultsCount.replace("{n}", total.toLocaleString())}
             </CardTitle>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="icon" className="h-7 w-7" disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>

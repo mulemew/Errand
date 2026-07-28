@@ -308,7 +308,7 @@ function TaskTimeoutSection() {
         return;
       }
       setTimeoutMinutes(Math.floor(value));
-      toast({ title: t.taskTimeout + " " + t.retentionSaved.split("已")[1], variant: "success" });
+      toast({ title: t.timeoutSaved, variant: "success" });
     } catch {
       toast({ title: "Network error", variant: "destructive" });
     } finally {
@@ -514,7 +514,7 @@ function CaptchaSection() {
             }`} />
             <div>
               <p className="font-mono font-semibold text-sm">{t.noCaptcha}</p>
-              <p className="text-xs mt-0.5 opacity-70">无验证码破解服务。遇到验证码时任务将暂停，需人工处理。</p>
+              <p className="text-xs mt-0.5 opacity-70">{t.captchaNoneHint}</p>
             </div>
           </button>
 
@@ -647,7 +647,7 @@ function ConcurrencySection() {
 
       {/* Max concurrent */}
       <div className='space-y-2'>
-        <Label htmlFor='maxConcurrent'>最大并发会话数</Label>
+        <Label htmlFor='maxConcurrent'>{t.maxConcurrentSessions}</Label>
         <div className='flex items-center gap-3'>
           <Input id='maxConcurrent' type='number' min={1} max={50}
             value={config.maxConcurrent}
@@ -664,7 +664,7 @@ function ConcurrencySection() {
 
       {/* Max queue depth */}
       <div className='space-y-2'>
-        <Label htmlFor='maxQueueDepth'>最大队列深度</Label>
+        <Label htmlFor='maxQueueDepth'>{t.maxQueueDepthLabel}</Label>
         <div className='flex items-center gap-3'>
           <Input id='maxQueueDepth' type='number' min={0} max={200}
             value={config.maxQueueDepth}
@@ -680,7 +680,7 @@ function ConcurrencySection() {
 
       {/* Queue timeout */}
       <div className='space-y-2'>
-        <Label htmlFor='queueTimeout'>队列等待超时</Label>
+        <Label htmlFor='queueTimeout'>{t.queueWaitTimeout}</Label>
         <div className='flex items-center gap-3'>
           <Input id='queueTimeout' type='number' min={0}
             value={config.queueTimeoutSecs}
@@ -803,7 +803,7 @@ export default function Settings() {
           <Card className="border-border shadow-sm">
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-base flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-primary" /> 并发控制
+                <Cpu className="h-4 w-4 text-primary" /> {t.concurrencyControl}
               </CardTitle>
               <CardDescription className="text-xs mt-1">
                 Control how many browser automation tasks run simultaneously. Set{" "}
@@ -829,15 +829,13 @@ export default function Settings() {
               <Globe className="h-4 w-4 text-primary" /> {t.browserSettings}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
-              浏览器后端已统一到 <b>Providers</b> 页管理：在那里新增/编辑后端（引擎、地址、Stealth、
-              屏蔽广告、忽略 HTTPS、会话超时、分辨率、并发上限），并用 ★ 指定<b>默认后端</b>。
-              任务里选「默认」就跟随它。
+              {t.backendMovedToProviders}
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             <Link href="/providers">
               <Button variant="outline" size="sm" className="gap-2">
-                <Server className="h-4 w-4" />去 Providers 页配置
+                <Server className="h-4 w-4" />{t.goToProvidersPage}
               </Button>
             </Link>
           </CardContent>

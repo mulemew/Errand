@@ -217,7 +217,7 @@ export default function LogDetail() {
                 </DialogTrigger>
                 <DialogContent className="max-w-5xl w-full p-1 bg-zinc-950 border-zinc-800">
                   <DialogTitle className="sr-only">{t.executionScreenshot}</DialogTitle>
-                  <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt={t.executionLog} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
+                  <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt={t.executionLog} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-muted-foreground font-mono text-center py-8">${t.screenshotExpired}</p>`); }} />
                 </DialogContent>
               </Dialog>
               );
@@ -320,12 +320,12 @@ export default function LogDetail() {
                             <Dialog>
                               <DialogTrigger asChild>
                                 <button type="button" className="mt-2 rounded overflow-hidden border border-border hover:border-primary/50 transition-colors cursor-zoom-in block">
-                                  <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">截图已过期</span>'; }} />
+                                  <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = `<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">${t.screenshotExpired}</span>`; }} />
                                 </button>
                               </DialogTrigger>
                               <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
                                 <DialogTitle className="sr-only">{t.stepScreenshot}</DialogTitle>
-                                <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-muted-foreground font-mono text-center py-8">截图已过期</p>'); }} />
+                                <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-muted-foreground font-mono text-center py-8">${t.screenshotExpired}</p>`); }} />
                               </DialogContent>
                             </Dialog>
                           )}
@@ -343,7 +343,7 @@ export default function LogDetail() {
                         <Dialog>
                           <DialogTrigger asChild>
                             <button type="button" className="rounded overflow-hidden border border-amber-500/30 hover:border-amber-500/60 transition-colors cursor-zoom-in block">
-                              <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Final screenshot" className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">截图已过期</span>'; }} />
+                              <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Final screenshot" className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = `<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">${t.screenshotExpired}</span>`; }} />
                             </button>
                           </DialogTrigger>
                           <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">

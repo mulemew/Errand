@@ -171,9 +171,9 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
       <Select value={a.type} onValueChange={(v) => setType(v as ThenActionType)}>
         <SelectTrigger className="h-8 text-xs font-mono"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="continue" className="text-xs">Continue (继续下一步)</SelectItem>
-          <SelectItem value="exitSuccess" className="text-xs">Exit task — success (结束·成功)</SelectItem>
-          <SelectItem value="exitFailure" className="text-xs">Exit task — failure (结束·失败)</SelectItem>
+          <SelectItem value="continue" className="text-xs">Continue ({t.continueNextStep})</SelectItem>
+          <SelectItem value="exitSuccess" className="text-xs">{t.exitTaskSuccess}</SelectItem>
+          <SelectItem value="exitFailure" className="text-xs">{t.exitTaskFailure}</SelectItem>
           <SelectItem value="click" className="text-xs">{t.stepClick}</SelectItem>
           <SelectItem value="fill" className="text-xs">{t.stepFill}</SelectItem>
           <SelectItem value="navigate" className="text-xs">{t.stepNavigate}</SelectItem>
@@ -334,7 +334,7 @@ function StepCard({
                   <div key={m} className="flex items-center gap-1.5">
                     <RadioGroupItem value={m} id={`login-method-${index}-${m}`} />
                     <Label htmlFor={`login-method-${index}-${m}`} className="text-xs cursor-pointer capitalize">
-                      {m === "form" ? t.standardForm : m === "github" ? "GitHub OAuth" : m === "google" ? "Google OAuth" : "仅 Cookie"}
+                      {m === "form" ? t.standardForm : m === "github" ? "GitHub OAuth" : m === "google" ? "Google OAuth" : t.cookieOnlyMethod}
                     </Label>
                   </div>
                 ))}
@@ -408,7 +408,7 @@ function StepCard({
                 </div>
               )}
             </div>
-            {/* Success criteria. For 仅 Cookie there is no login flow to fall back on:
+            {/* Success criteria. For cookie-only login there is no login flow to fall back on:
                 the session check IS the whole step, and with neither field filled it can
                 only answer "not logged in" — so one of them is required, not optional. */}
             {(() => {
@@ -422,7 +422,7 @@ function StepCard({
                     <Label className="text-xs font-medium">
                       {t.successSelector}{" "}
                       <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
-                        {cookieOnly ? "(二选一必填)" : "(optional)"}
+                        ({cookieOnly ? t.requiredOneOfTwo : t.optionalSuffix})
                       </span>
                     </Label>
                     <Input
@@ -441,22 +441,22 @@ function StepCard({
                     <Label className="text-xs font-medium">
                       {t.successText}{" "}
                       <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
-                        {cookieOnly ? "(二选一必填)" : "(optional)"}
+                        ({cookieOnly ? t.requiredOneOfTwo : t.optionalSuffix})
                       </span>
                     </Label>
                     <Input
                       className={"font-mono text-xs h-8" + (missingCriteria ? " border-amber-500" : "")}
-                      placeholder="Welcome, Dashboard, 登录成功"
+                      placeholder={t.successTextPlaceholder}
                       value={step.successText ?? ""}
                       onChange={(e) => set({ successText: e.target.value || undefined })}
                     />
                     <p className="text-[10px] text-muted-foreground leading-snug">
-                      登录完成后检测页面是否包含该文字，找到则登录成功，找不到则失败。
+                      {t.successTextHint}
                     </p>
                   </div>
                   {missingCriteria && (
                     <p className="text-[10px] text-amber-500 leading-snug">
-                      仅 Cookie 模式必须填上面两项之一：没有判据就无法确认 cookie 是否有效，运行时会一律报「cookie 无效」。
+                      {t.cookieOnlyNeedsCriteria}
                     </p>
                   )}
                 </>
@@ -467,15 +467,13 @@ function StepCard({
               {/* Cookie-only login implies cookie mode — no toggle to tick. */}
               {step.loginMethod === "cookie" ? (
                 <p className="text-[10px] text-muted-foreground">
-                  <b>仅 Cookie</b>：不做自动登录。用下面粘贴的 cookie 打开页面，命中下方「登录成功判据」就算通过；
-                  判据没命中就<b>直接失败</b>（提示你重新粘贴），不会用错误的登录态往下跑。
-                  成功一次后会自动保存真实 cookie 并接管。
+                  {t.cookieOnlyExplain}
                 </p>
               ) : (
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label className="text-xs font-medium">Cookie 模式（会话保持）</Label>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">启用后，登录成功的会话（cookies + localStorage）会被加密保存。下次运行先检测会话是否有效：有效则跳过登录，失效则重新登录并刷新保存。</p>
+                    <Label className="text-xs font-medium">{t.cookieModeLabel}</Label>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{t.cookieModeHint}</p>
                   </div>
                   <input
                     type="checkbox"
@@ -487,14 +485,14 @@ function StepCard({
               )}
               {(step.cookieMode || step.loginMethod === "cookie") && (
                 <div className="space-y-1">
-                  <Label className="text-xs">Session Key <span className="font-normal text-muted-foreground">(可选)</span></Label>
+                  <Label className="text-xs">Session Key <span className="font-normal text-muted-foreground">({t.optionalSuffix})</span></Label>
                   <Input
                     className="font-mono text-xs h-8"
                     placeholder="default"
                     value={step.sessionKey ?? ""}
                     onChange={(e) => set({ sessionKey: e.target.value || undefined })}
                   />
-                  <p className="text-[10px] text-muted-foreground leading-snug">同一任务可用不同 key 保存多个身份，留空使用 &quot;default&quot;。</p>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{t.sessionKeyHint}</p>
                 </div>
               )}
               {(step.cookieMode || step.loginMethod === "cookie") && (
@@ -502,7 +500,7 @@ function StepCard({
                   <Label className="text-xs">
                     Cookie{" "}
                     <span className="font-normal text-muted-foreground">
-                      {step.loginMethod === "cookie" ? "(必填)" : "(可选，首次种子)"}
+                      ({step.loginMethod === "cookie" ? t.requiredSuffix : t.optionalSeedSuffix})
                     </span>
                   </Label>
                   <textarea
@@ -512,11 +510,7 @@ function StepCard({
                     onChange={(e) => set({ cookies: e.target.value || undefined })}
                   />
                   <p className="text-[10px] text-muted-foreground leading-snug">
-                    只需填<b>登录票据那一条</b>，不用把所有 cookie 都复制。名字各站不同（Pterodactyl/Laravel 面板是
-                    <code className="mx-0.5">remember_web_*</code>，GitHub 是 <code className="mx-0.5">_github_session</code>）：
-                    F12 → Application → Cookies 里找。多条用 <code className="mx-0.5">;</code> 分隔。
-                    <br />
-                    仅在<b>还没存过会话时</b>用作种子；成功跑一次后会自动保存真实 cookie 并接管，之后失效会走登录流程重登。
+                    {t.cookiePasteHint}
                   </p>
                 </div>
               )}
@@ -576,7 +570,7 @@ function StepCard({
           )}
           <div className="border-t border-border pt-3">
             <ConditionalActionEditor
-              label={`${t.thenExecute} (条件成立)`}
+              label={`${t.thenExecute} (${t.whenConditionTrue})`}
               idPrefix={`cond-then-${index}`}
               action={step.thenAction}
               onChange={(a) => set({ thenAction: a })}
@@ -584,7 +578,7 @@ function StepCard({
           </div>
           <div className="border-t border-border pt-3">
             <ConditionalActionEditor
-              label="Else — 条件不成立时"
+              label={t.elseWhenFalse}
               idPrefix={`cond-else-${index}`}
               action={step.elseAction}
               onChange={(a) => set({ elseAction: a })}
@@ -607,7 +601,7 @@ function StepCard({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">超时时间 (ms)</Label>
+              <Label className="text-xs">{t.timeoutMsLabel}</Label>
               <Input
                 type="number"
                 className="font-mono text-xs h-8"
@@ -810,7 +804,7 @@ function StepCard({
       )}
 
       {step.type === "dismissPopups" && (
-        <div className="px-3 py-2 text-xs text-muted-foreground font-mono">关闭 cookie 弹窗、遮罩层和广告浮层，避免它们遮挡后续操作。无需任何参数。</div>
+        <div className="px-3 py-2 text-xs text-muted-foreground font-mono">{t.dismissPopupsHint}</div>
       )}
 
       {step.type === "cfVerify" && (

@@ -141,7 +141,7 @@ import { useState, useEffect } from "react";
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{t.credentials}</h1>
             <p className="text-sm text-muted-foreground font-mono">
-              AES-256-GCM 加密存储，可跨任务复用
+              {t.credentialsIntro}
             </p>
           </div>
           <Button size="sm" className="gap-2" onClick={openCreate}>
@@ -200,7 +200,7 @@ import { useState, useEffect } from "react";
                       {revealing && revealId === c.id
                         ? <Loader2 className="h-3 w-3 animate-spin" />
                         : revealId === c.id ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                      {revealId === c.id ? "隐藏" : "显示"}
+                      {revealId === c.id ? t.hideValue : t.showValue}
                     </Button>
                     <span className="ml-auto text-muted-foreground/50 font-mono">
                       {new Date(c.updatedAt).toLocaleDateString("zh-CN")}
@@ -236,7 +236,7 @@ import { useState, useEffect } from "react";
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">
-                  {t.password} {editingId && <span className="text-muted-foreground font-normal">（留空保持不变）</span>}
+                  {t.password} {editingId && <span className="text-muted-foreground font-normal">{t.leaveEmptyToKeep}</span>}
                 </Label>
                 <div className="relative">
                   <Input type={showPassword ? "text" : "password"} className="font-mono text-sm pr-10"
@@ -252,7 +252,7 @@ import { useState, useEffect } from "react";
                 <Label className="text-xs">{t.totp}</Label>
                 <div className="relative">
                   <Input type={showTotp ? "text" : "password"} className="font-mono text-sm pr-10"
-                    placeholder={editingId ? "留空保持现有 2FA" : t.totpPlaceholder}
+                    placeholder={editingId ? t.leaveEmptyKeepTotp : t.totpPlaceholder}
                     autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                     value={form.totpSecret} onChange={(e) => setForm((f) => ({ ...f, totpSecret: e.target.value }))} />
                   <button type="button" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
@@ -260,7 +260,7 @@ import { useState, useEffect } from "react";
                     {showTotp ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-                <p className="text-xs text-muted-foreground font-mono">用于 GitHub / Google 双因素认证自动填写</p>
+                <p className="text-xs text-muted-foreground font-mono">{t.totpAutofillHint}</p>
               </div>
             </div>
             <DialogFooter>

@@ -541,7 +541,9 @@ export default function Home() {
       .then((res: { created: number; skipped: string[] }) => {
         toast({
           title: t.tasksImported,
-          description: `${res.created} 个任务已导入（已停用，请检查后再启用）${res.skipped.length ? `；${res.skipped.length} 个跳过` : ""}`,
+          description:
+              t.tasksImportedDetail.replace("{n}", String(res.created)) +
+              (res.skipped.length ? t.tasksSkipped.replace("{n}", String(res.skipped.length)) : ""),
           variant: "success",
         });
         queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
@@ -778,7 +780,7 @@ export default function Home() {
                         // the OS, so repeating it in the tooltip said nothing.
                         const fpName = (task as unknown as { fingerprintLabel?: string | null }).fingerprintLabel;
                         return (
-                          <span className="flex items-center border-l border-border pl-3" title={fpName ? `指纹：${fpName}` : `指纹：未绑定档案（${label}）`}>
+                          <span className="flex items-center border-l border-border pl-3" title={fpName ? t.fingerprintTip.replace("{name}", fpName) : t.fingerprintTipNone.replace("{os}", label)}>
                             <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         );

@@ -25,6 +25,7 @@ import TaskHistoryChart from "@/components/TaskHistoryChart";
 import { stepTypeLabel } from "@/components/StepEditor";
 
 function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number }) {
+  const { t } = useLang();
   const [loaded, setLoaded] = useState(false);
   const src = `/api/tasks/${taskId}/logs/${logId}/screenshot`;
 
@@ -49,7 +50,7 @@ function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number })
             src={src}
             alt="Execution screenshot"
             className="w-full h-auto object-contain max-h-[85vh]"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-zinc-500 font-mono text-center py-8">截图已过期</p>'); }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-zinc-500 font-mono text-center py-8">${t.screenshotExpired}</p>`); }}
           />
         </DialogContent>
       </Dialog>
@@ -62,7 +63,7 @@ function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number })
           src={loaded ? src : undefined}
           alt="Screenshot thumbnail"
           className="w-60 h-[135px] object-contain rounded"
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-xs text-zinc-500 font-mono text-center py-4">截图已过期</p>'); }}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-xs text-zinc-500 font-mono text-center py-4">${t.screenshotExpired}</p>`); }}
         />
       </HoverCardContent>
     </HoverCard>
@@ -637,7 +638,7 @@ export default function TaskDetail() {
                         src={`/api/tasks/${taskId}/logs/${latestScreenshotLog.id}/screenshot`}
                         alt="Captcha screenshot"
                         className="w-full rounded border border-amber-500/20 shadow-sm object-contain max-h-80"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-zinc-500 font-mono text-center py-4">截图已过期</p>'); }}
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-zinc-500 font-mono text-center py-4">${t.screenshotExpired}</p>`); }}
                       />
                       <div className="absolute inset-0 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity bg-black/40">
                         <div className="bg-zinc-900/80 rounded-full p-2">
@@ -651,7 +652,7 @@ export default function TaskDetail() {
                       src={`/api/tasks/${taskId}/logs/${latestScreenshotLog.id}/screenshot`}
                       alt="Captcha screenshot"
                       className="w-full h-auto object-contain max-h-[85vh]"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-zinc-500 font-mono text-center py-8">截图已过期</p>'); }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-zinc-500 font-mono text-center py-8">${t.screenshotExpired}</p>`); }}
                     />
                   </DialogContent>
                 </Dialog>
@@ -712,7 +713,7 @@ export default function TaskDetail() {
                     <Calendar className="h-3 w-3 text-muted-foreground" />
                     {scheduleInfo?.nextRunAt
                       ? format(new Date(scheduleInfo.nextRunAt), "MMM d, yyyy HH:mm:ss")
-                      : <span className="text-muted-foreground italic">无</span>}
+                      : <span className="text-muted-foreground italic">{t.noneValue}</span>}
                   </dd>
                 </div>
 
@@ -727,8 +728,8 @@ export default function TaskDetail() {
                           // on the Providers page — name it so the task page isn't vague.
                           const def = providersList.find((p) => p.isDefault && p.enabled !== false);
                           return def
-                            ? <span className="text-muted-foreground">默认（{def.name} · {def.type}）</span>
-                            : <span className="text-muted-foreground">默认（未设置默认 provider）</span>;
+                            ? <span className="text-muted-foreground">{t.defaultProviderIs.replace("{name}", def.name).replace("{type}", def.type)}</span>
+                            : <span className="text-muted-foreground">{t.defaultProviderUnset}</span>;
                         })()}
                   </dd>
                 </div>
@@ -825,7 +826,7 @@ export default function TaskDetail() {
 
                       return (
                         <div className="px-4 py-3">
-                            {/* Precheck Screenshot — 真实 Step 编号之外的预检截图 */}
+                            {/* Precheck screenshot — outside the real step numbering */}
                             {precheckScreenshotEntry && (() => {
                               return (
                                 <div className="flex gap-3 min-h-0">
@@ -912,11 +913,11 @@ export default function TaskDetail() {
                                     <Dialog>
                                       <DialogTrigger asChild>
                                         <button className="mt-2 cursor-zoom-in block" type="button">
-                                          <img src={src} alt={`Step ${stepNumber} screenshot`} className="max-h-40 rounded border border-border hover:border-primary/50 transition-colors" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-xs text-zinc-500 font-mono py-1">截图已过期</p>'); }} />
+                                          <img src={src} alt={`Step ${stepNumber} screenshot`} className="max-h-40 rounded border border-border hover:border-primary/50 transition-colors" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-xs text-zinc-500 font-mono py-1">${t.screenshotExpired}</p>`); }} />
                                         </button>
                                       </DialogTrigger>
                                       <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
-                                        <img src={src} alt={`Step ${stepNumber} screenshot`} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-zinc-500 font-mono text-center py-8">截图已过期</p>'); }} />
+                                        <img src={src} alt={`Step ${stepNumber} screenshot`} className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-zinc-500 font-mono text-center py-8">${t.screenshotExpired}</p>`); }} />
                                       </DialogContent>
                                     </Dialog>
                                   )}
@@ -936,12 +937,12 @@ export default function TaskDetail() {
                                 <div className="flex-1 pb-4 min-w-0">
                                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${step.status === "success" ? "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400" : "border-destructive/30 bg-destructive/10 text-destructive"}`}>{step.type}</span>
                                   <p className="text-xs text-muted-foreground mt-1">{step.message}</p>
-                                  {esrc && <img src={esrc} alt={`Step ${step.index}`} className="mt-2 max-h-40 rounded border border-border" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-xs text-zinc-500 font-mono py-1">截图已过期</p>'); }} />}
+                                  {esrc && <img src={esrc} alt={`Step ${step.index}`} className="mt-2 max-h-40 rounded border border-border" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-xs text-zinc-500 font-mono py-1">${t.screenshotExpired}</p>`); }} />}
                                 </div>
                               </div>
                             );
                           })}
-                            {/* Final Screenshot — 真实 Step 编号之外的最终截图 */}
+                            {/* Final screenshot — outside the real step numbering */}
                             {finalScreenshotEntry && (() => {
                               const ffname = finalScreenshotEntry.screenshotPath?.split("/").pop();
                               const fsrc = ffname ? `/api/tasks/${taskId}/step-screenshots/${ffname}` : undefined;
@@ -962,11 +963,11 @@ export default function TaskDetail() {
                                       <Dialog>
                                         <DialogTrigger asChild>
                                           <button className="mt-2 cursor-zoom-in block" type="button">
-                                            <img src={fsrc} alt="Postcheck screenshot" className="max-h-40 rounded border border-border hover:opacity-80 transition-opacity" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-xs text-zinc-500 font-mono py-1">截图已过期</p>'); }} />
+                                            <img src={fsrc} alt="Postcheck screenshot" className="max-h-40 rounded border border-border hover:opacity-80 transition-opacity" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-xs text-zinc-500 font-mono py-1">${t.screenshotExpired}</p>`); }} />
                                           </button>
                                         </DialogTrigger>
                                         <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
-                                          <img src={fsrc} alt="Postcheck screenshot" className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", '<p class="text-sm text-zinc-500 font-mono text-center py-8">截图已过期</p>'); }} />
+                                          <img src={fsrc} alt="Postcheck screenshot" className="w-full h-auto object-contain max-h-[85vh]" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).insertAdjacentHTML("afterend", `<p class="text-sm text-zinc-500 font-mono text-center py-8">${t.screenshotExpired}</p>`); }} />
                                         </DialogContent>
                                       </Dialog>
                                     )}
@@ -1287,8 +1288,8 @@ export default function TaskDetail() {
                         {screen && row("Screen", screen)}
                         {platform && row("Platform", platform)}
                         {cores != null && row("CPU cores", String(cores))}
-                        {row("Timezone", cfg?.timezone?.trim() || "auto（跟随出口 IP）")}
-                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : "auto（跟随出口 IP）"))}
+                        {row("Timezone", cfg?.timezone?.trim() || t.autoFollowExitIp)}
+                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : t.autoFollowExitIp))}
                         {ua && row("User-Agent", <span className="text-[11px] text-muted-foreground">{ua}</span>)}
                       </>
                     );

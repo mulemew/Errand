@@ -112,7 +112,7 @@ export default function Recorder() {
 
   const startSession = async () => {
     if (!startUrl.trim() || startUrl === "https://") {
-      setStartError("请输入有效的 URL");
+      setStartError(t.enterValidUrl);
       return;
     }
     setStartError(null);
