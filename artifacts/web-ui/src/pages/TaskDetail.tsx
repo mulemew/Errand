@@ -755,7 +755,12 @@ export default function TaskDetail() {
                   </h4>
                   <div className="space-y-1.5">
                     {task.steps.map((step, i) => {
-                      const s = step as { type: string; url?: string; selector?: string; selectorType?: string; value?: string; ms?: number; timeout?: number };
+                      const s = step as {
+                        type: string; url?: string; selector?: string; selectorType?: string;
+                        value?: string; ms?: number; timeout?: number; x?: number; y?: number;
+                        key?: string; maxReloads?: number; loginMethod?: string; loginUrl?: string;
+                        conditionType?: string; conditionValue?: string;
+                      };
                       const icon =
                         s.type === "navigate"   ? <Navigation className="h-3 w-3 text-primary shrink-0" /> :
                         s.type === "click"      ? <MousePointer className="h-3 w-3 text-primary shrink-0" /> :
@@ -764,29 +769,32 @@ export default function TaskDetail() {
                         s.type === "waitFor"    ? <Eye className="h-3 w-3 text-primary shrink-0" /> :
                         s.type === "screenshot" ? <Camera className="h-3 w-3 text-primary shrink-0" /> :
                         <Terminal className="h-3 w-3 text-primary shrink-0" />;
+                      // Every type's own parameters. A step that genuinely takes none
+                      // (screenshot, dismissPopups) shows nothing at all: repeating the
+                      // type there read as a duplicate column, especially in English where
+                      // the label and the type are the same word ("Scroll" / "scroll").
                       const detail =
-                        s.type === "navigate"   ? s.url :
-                        s.type === "click"      ? `[${s.selectorType}] ${s.selector}` :
-                        s.type === "fill"       ? `${s.selector} → "${s.value}"` :
-                        s.type === "wait"       ? `${s.ms}ms` :
-                        s.type === "waitFor"    ? `${s.selector}${s.timeout ? ` (${s.timeout}ms)` : ""}` :
-                        s.type === "screenshot" ? "capture page" :
+                        s.type === "navigate"        ? s.url :
+                        s.type === "click"           ? `[${s.selectorType}] ${s.selector}` :
+                        s.type === "hover"           ? `[${s.selectorType}] ${s.selector}` :
+                        s.type === "fill"            ? `${s.selector} → "${s.value}"` :
+                        s.type === "select"          ? `${s.selector} → ${s.value}` :
+                        s.type === "scroll"          ? (s.selector ? s.selector : `x ${s.x ?? 0}, y ${s.y ?? 0}`) :
+                        s.type === "wait"            ? `${s.ms}ms` :
+                        s.type === "waitFor"         ? `${s.selector}${s.timeout ? ` (${s.timeout}ms)` : ""}` :
+                        s.type === "keypress"        ? s.key :
+                        s.type === "switchToNewPage" ? (s.timeout ? `${s.timeout}ms` : null) :
+                        s.type === "cfVerify"        ? (s.maxReloads != null ? `max ${s.maxReloads} reloads` : null) :
+                        s.type === "login"           ? [s.loginMethod, s.loginUrl].filter(Boolean).join(" · ") :
+                        s.type === "condition"       ? [s.conditionType, s.conditionValue].filter(Boolean).join(": ") :
                         null;
                       return (
                         <div key={i} className="flex items-center gap-2 bg-muted/10 border border-border rounded px-3 py-2 text-xs font-mono">
                           <span className="text-muted-foreground w-5 text-right shrink-0">{i + 1}</span>
                           {icon}
-                          {/* Localized NAME, then the step's parameters. A step that takes no
-                              parameters (dismissPopups, cfVerify) shows its raw type instead —
-                              that is the name it has in the logs and in an exported task, and
-                              it beats repeating the label twice, which is what happened when
-                              the fallback was the label too. */}
+                          {/* Localized name, then this step's own parameters. */}
                           <span className="shrink-0">{stepTypeLabel(s.type, t)}</span>
-                          {detail ? (
-                            <span className="text-muted-foreground truncate">{detail}</span>
-                          ) : (
-                            <span className="text-muted-foreground/50 truncate">{s.type}</span>
-                          )}
+                          {detail && <span className="text-muted-foreground truncate">{detail}</span>}
                         </div>
                       );
                     })}
