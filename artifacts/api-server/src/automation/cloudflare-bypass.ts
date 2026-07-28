@@ -978,12 +978,23 @@ export async function bypassCloudflareChallenge(
     // bounds the give-up time on a genuine failure. Tunable via CF_JS_DEADLINE_MS.
     const jsDeadline = opts?.deadline ?? Date.now() + Number(process.env.CF_JS_DEADLINE_MS ?? 30_000);
     let attempt = 0;
+    // ONE click for the whole round. The comment below used to say "click it — once", but
+    // the click sat inside this loop, so it fired once PER ITERATION: a widget that was
+    // still verifying got clicked again every ~24 s, which restarts the verification. That
+    // is how a challenge "kept spinning" until the budget ran out — on BOTH backends, since
+    // this loop is backend-independent. The sibling turnstile_click branch was fixed for
+    // exactly this; this one was missed.
+    //
+    // Safe by construction: a site that passes today passes on its FIRST click and returns
+    // immediately, so it never reached a second one. Only runs that are already failing can
+    // notice this.
+    let clickedOnce = false;
     while (Date.now() < jsDeadline) {
       attempt++;
       // NOTE: no re-expansion and no keyboard/scroll here. A non-interactive challenge is
       // verifying in the background; every DOM mutation we make restarts it, which is how
       // "it just kept spinning" happened. Wait quietly, with a little pointer motion.
-      await simulateHumanPresence(page);
+      await simulateHumanPresence(page, { widgetPresent: clickedOnce });
       await sleep(attempt === 1 ? 4_000 + Math.random() * 2_000 : 3_000 + Math.random() * 1_500);
 
       const still = await detectCfChallenge(page);
@@ -995,20 +1006,22 @@ export async function bypassCloudflareChallenge(
         logger.info({ attempt }, "Turnstile token populated while waiting");
         return "passed";
       }
-      // If it upgraded to an interactive checkbox, click it — once. clickTurnstileCheckbox
-      // now waits for the verdict itself, so there is nothing to re-check here.
-      if (still === "turnstile_click") {
+      if (still === "turnstile_click" && !clickedOnce) {
         logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
         await simulateHumanPresence(page, { widgetPresent: true });
         await sleep(500 + Math.random() * 500);
+        clickedOnce = true;
         if (await clickTurnstileCheckbox(page)) {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
+        // Not settled within the click's own wait. It may STILL be verifying, so from here
+        // the loop only watches — clicking again would restart what we are waiting for.
+        logger.info({ attempt }, "Clicked; waiting for the verdict without touching it again");
       }
-      logger.debug({ attempt }, "CF JS challenge still verifying, waiting");
+      logger.debug({ attempt, clickedOnce }, "CF JS challenge still verifying, waiting");
     }
-    logger.warn({ attempt }, "Cloudflare JS challenge did not clear before the deadline");
+    logger.warn({ attempt, clickedOnce }, "Cloudflare JS challenge did not clear before the deadline");
     return "failed";
   }
 
