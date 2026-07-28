@@ -1,4 +1,4 @@
-import type { PageAdapter } from "./page-adapter";
+import type { FrameAdapter, PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { execSync, execFileSync } from "child_process";
 
@@ -231,9 +231,7 @@ export async function describeTurnstileState(page: PageAdapter): Promise<string>
 
 async function _describeTurnstileState(page: PageAdapter): Promise<string> {
   try {
-    const frame = page
-      .frames()
-      .find((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)));
+    const frame = cfWidgetFrames(page)[0];
     if (!frame) return "no turnstile frame";
     const body = await frame.$("body").catch(() => null);
     if (!body) return "frame present, no body";
@@ -428,6 +426,79 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
 
 /** Partial URL strings that identify CF Turnstile iframes */
 const CF_FRAME_PATTERNS = ["challenges.cloudflare.com", "cf-turnstile"];
+
+/**
+ * The same list PLUS the shape a FULL-PAGE interstitial actually has.
+ *
+ * This is what "no turnstile frame" in the logs was telling us. An EMBEDDED widget loads
+ * its iframe from challenges.cloudflare.com, so the two patterns above find it. A full-page
+ * challenge does not: Cloudflare serves that iframe from the SITE'S OWN origin, under
+ *   https://<site>/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/...
+ * which matches neither pattern. So on exactly the pages where the checkbox is hardest to
+ * find, the frame lookup always failed (`viaFrame:false`), the click fell back to guessing
+ * coordinates from whatever container the DOM scan could reach — and the iframe itself
+ * lives in a CLOSED shadow root, so that scan cannot see it either — and
+ * describeTurnstileState could only answer "no turnstile frame" instead of reporting what
+ * the widget actually showed.
+ *
+ * Deliberately NOT added to CF_FRAME_PATTERNS: that list also drives detectCfChallenge's
+ * classification, and a non-interactive challenge loads this same frame, so widening it
+ * there would re-route working js_challenge pages into the click path. This list is used
+ * only where we have already decided to click, and for diagnostics.
+ */
+const CF_WIDGET_FRAME_PATTERNS = [...CF_FRAME_PATTERNS, "/cdn-cgi/challenge-platform/"];
+
+/** Turnstile frames, the one carrying the widget UI first. */
+function cfWidgetFrames(page: PageAdapter): FrameAdapter[] {
+  try {
+    const all = page.frames().filter((f) => CF_WIDGET_FRAME_PATTERNS.some((pat) => f.url().includes(pat)));
+    // A challenge page has several: the orchestrator, and the visible widget under
+    // .../turnstile/if/... — prefer the latter, it is the one holding the checkbox.
+    return [
+      ...all.filter((f) => f.url().includes("/turnstile/")),
+      ...all.filter((f) => !f.url().includes("/turnstile/")),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Ask the widget's own document where its checkbox is.
+ *
+ * Ordered one selector at a time, NOT as one comma-separated list: `locator(a, b).first()`
+ * returns the first match in DOM order, which is not the first selector — the same trap
+ * that made the Google login click the wrong control. The visible label is what a hand
+ * hits; the <input> behind it is often 0x0 or opacity:0, so the box check filters it out.
+ */
+const CF_CHECKBOX_SELECTORS = [
+  ".cb-lb label",
+  ".cb-lb input",
+  "input[type='checkbox']",
+  ".cf-checkbox-label",
+  "#challenge-stage input",
+  ".mark",
+];
+
+async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarget | null> {
+  for (const frame of cfWidgetFrames(page)) {
+    for (const sel of CF_CHECKBOX_SELECTORS) {
+      const el = await frame.$(sel).catch(() => null);
+      if (!el) continue;
+      const box = await el.boundingBox?.().catch(() => null);
+      if (!box || box.width < 8 || box.height < 8) continue;
+      // Playwright reports this in MAIN-FRAME viewport coordinates, so it needs no offset
+      // arithmetic and no assumption about the widget's padding.
+      return {
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+        from: "frame:" + sel,
+        box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
+      };
+    }
+  }
+  return null;
+}
 
 // ── Detection ─────────────────────────────────────────────────────────────────
 
@@ -745,16 +816,27 @@ async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?:
  *     `.cf-turnstile` nor `iframe[src*=…]` can see it, which is why those challenges sat
  *     on screen unclicked.
  */
-async function locateTurnstileCheckbox(page: PageAdapter): Promise<{ x: number; y: number } | null> {
-  return evalBounded<{ x: number; y: number } | null>(
+type CheckboxTarget = {
+  x: number;
+  y: number;
+  /** Which element produced the point. Without it a click log cannot be read: aiming at the
+   *  widget and aiming 30px into some full-width wrapper look exactly the same. */
+  from: string;
+  box: { x: number; y: number; w: number; h: number };
+};
+
+async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarget | null> {
+  return evalBounded<CheckboxTarget | null>(
     page,
     () => {
       // The checkbox is a FIXED ~24px control after ~13px of padding, so its centre is
       // ~30px from the widget's left edge whatever the widget's width is. A proportional
       // offset lands in the padding and reads as "verification failed".
-      const point = (r: DOMRect) => ({
+      const point = (r: DOMRect, from: string) => ({
         x: Math.round(r.x + Math.min(Math.max(r.width - 8, 8), 30)),
         y: Math.round(r.y + r.height / 2),
+        from,
+        box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
       });
       const usable = (r: DOMRect) => r.width >= 20 && r.height >= 16;
 
@@ -762,17 +844,19 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<{ x: number; 
         const src = f.src || "";
         if (!/cloudflare|turnstile|challenges/.test(src)) continue;
         const r = f.getBoundingClientRect();
-        if (usable(r)) return point(r);
+        if (usable(r)) return point(r, "iframe");
       }
       const resp = document.querySelector(
         'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
       );
-      const candidates: Element[] = [];
-      if (resp?.parentElement) candidates.push(resp.parentElement);
-      candidates.push(...Array.from(document.querySelectorAll(".cf-turnstile, [data-sitekey], [id^='cf-chl-widget']")));
-      for (const c of candidates) {
+      const candidates: Array<[Element, string]> = [];
+      if (resp?.parentElement) candidates.push([resp.parentElement, "response-parent"]);
+      for (const c of Array.from(document.querySelectorAll(".cf-turnstile, [data-sitekey], [id^='cf-chl-widget']"))) {
+        candidates.push([c, "container"]);
+      }
+      for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
-        if (usable(r)) return point(r);
+        if (usable(r)) return point(r, from);
       }
       return null;
     },
@@ -885,21 +969,10 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
     const runClick = async (): Promise<boolean> => {
       await ensureFocused(page, "turnstile-click");
 
-      // Prefer the checkbox element inside the CF frame (frames() sees through the closed
-      // shadow root that DOM queries cannot); fall back to widget geometry.
-      let target: { x: number; y: number } | null = null;
-      const cfFrame = page
-        .frames()
-        .find((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)));
-      if (cfFrame) {
-        const checkbox = await cfFrame
-          .$("input[type='checkbox'], .cb-lb input, .cf-checkbox-label, #challenge-stage input, .mark")
-          .catch(() => null);
-        const box = checkbox ? await checkbox.boundingBox().catch(() => null) : null;
-        if (box && box.width > 0 && box.height > 0) {
-          target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-        }
-      }
+      // Ask the widget's own document first: an exact position, already in main-frame
+      // coordinates, with no assumption about the widget's internal padding. Only when the
+      // frame will not answer do we fall back to guessing from container geometry.
+      let target = await locateCheckboxInCfFrame(page);
       if (!target) target = await locateTurnstileCheckbox(page);
       if (!target) {
         logger.warn({ widget: await describeTurnstileState(page) }, "Turnstile widget is on the page but its checkbox could not be located");
@@ -909,7 +982,18 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       // ±2px of jitter — a pixel-exact centre every time is itself a pattern.
       const x = target.x + (Math.random() * 4 - 2);
       const y = target.y + (Math.random() * 4 - 2);
-      logger.info({ x: Math.round(x), y: Math.round(y), viaFrame: !!cfFrame }, "Clicking Turnstile checkbox");
+      // Enough to tell "aimed at the wrong place" apart from "aimed correctly and was
+      // refused": where we aimed, which element decided that, and the box it came from.
+      logger.info(
+        {
+          x: Math.round(x),
+          y: Math.round(y),
+          from: target.from,
+          box: target.box,
+          viaFrame: target.from.indexOf("frame:") === 0,
+        },
+        "Clicking Turnstile checkbox",
+      );
       await humanClickAt(page, x, y);
 
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
