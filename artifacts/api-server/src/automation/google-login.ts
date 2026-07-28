@@ -79,8 +79,24 @@ async function clickGoogleButton(page: PageAdapter): Promise<boolean> {
   return false;
 }
 
+// Google has shipped this field as type=tel, type=text, with and without name="totpPin",
+// and with an inputmode/autocomplete hint — the exact combination varies by flow and
+// locale. Matching too narrowly means landing on the code page and doing nothing, which is
+// indistinguishable from "the login just failed".
 const TOTP_INPUT_SEL =
-  "input[type='tel'], input[name='totpPin'], input[autocomplete='one-time-code'], input[inputmode='numeric']";
+  "input[name='totpPin'], input#totpPin, input[autocomplete='one-time-code'], " +
+  "input[type='tel'], input[inputmode='numeric'], input[maxlength='6'], " +
+  "input[aria-label*='code' i], input[aria-label*='驗證碼'], input[aria-label*='验证码']";
+
+/** Is the code field on screen? Waits briefly — it renders just after the navigation. */
+async function findTotpInput(page: PageAdapter, waitMs = 6000): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (await page.$(TOTP_INPUT_SEL)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
 
 /**
  * Get through Google's second-factor step, switching challenge type when necessary.
@@ -95,8 +111,13 @@ async function resolveSecondFactor(page: PageAdapter, totpSecret?: string): Prom
     const url = page.url();
     if (!url.includes("accounts.google.com")) return null; // already through
 
-    const totpInput = await page.$(TOTP_INPUT_SEL);
-    if (totpInput) {
+    // On the code page Google renders the field a beat after the navigation, so probing
+    // once loses the race and looks like "no code field here".
+    const onTotpPage = /\/challenge\/totp/.test(url);
+    const hasTotpInput = await findTotpInput(page, onTotpPage ? 8000 : 500);
+    logger.info({ round, url, hasTotpInput }, "Google 2FA - round");
+
+    if (hasTotpInput) {
       if (!totpSecret) {
         return {
           success: false,
@@ -110,12 +131,39 @@ async function resolveSecondFactor(page: PageAdapter, totpSecret?: string): Prom
       const totp = generateSync({ secret: totpSecret });
       logger.info({ round }, "Google 2FA - entering an authenticator code");
       await page.click(TOTP_INPUT_SEL);
+      // Clear first: a rejected code can be left in the field, and typing after it
+      // produces a 12-digit string that is refused for a reason nothing reports.
+      await page
+        .evaluate((sel: unknown) => {
+          const el = document.querySelector<HTMLInputElement>(sel as string);
+          if (el) el.value = "";
+        }, TOTP_INPUT_SEL as never)
+        .catch(() => {});
       await page.keyboard.type(totp, { delay: 80 });
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
-        page.keyboard.press("Enter"),
-      ]);
+      await new Promise((r) => setTimeout(r, 250));
+      // Submit through the page's own button when it exists — Enter alone does not
+      // always submit this form, and a code typed but never submitted is exactly the
+      // "it reached the code page and then failed" shape being reported.
+      await pressNext(page, "#totpNext", 30000);
       await new Promise((r) => setTimeout(r, 1500));
+
+      // Did Google reject it? Say so — a bad secret and a clock-skewed code both look
+      // like a generic login failure otherwise.
+      const codeError = (await page
+        .evaluate(() => {
+          const el = document.querySelector(".o6cuMc, .dEOOab, [jsname='B34EJ'], [aria-live='assertive']");
+          return (el?.textContent ?? "").trim().slice(0, 160);
+        })
+        .catch(() => "")) as string;
+      if (codeError && /wrong|invalid|incorrect|錯誤|错误|无效|無效/i.test(codeError)) {
+        return {
+          success: false,
+          captchaBlocked: false,
+          message:
+            `Google rejected the authenticator code ("${codeError}"). The stored TOTP secret is ` +
+            "probably wrong, or this machine's clock has drifted.",
+        };
+      }
       continue; // re-evaluate: accepted, or yet another challenge
     }
 
@@ -172,36 +220,53 @@ function describeChallenge(url: string, suffix: string): string {
  */
 async function switchToAuthenticatorChallenge(page: PageAdapter): Promise<boolean> {
   if (!/\/challenge\/selection/.test(page.url())) {
-    const clicked =
-      (await clickFirstMatching(page, [
-        "a[href*='challenge/selection']",
-        "[jsname='Cuz2Ue']",
-      ])) ??
-      (await clickButtonByText(page, [
-        "try another way", "try another method", "more ways to verify",
-        "試試其他方法", "试试其他方法",
-        "尝试其他方式", "嘗試其他方式",
-        "別の方法を試す", "다른 방법 시도",
-        "otra forma", "autre méthode", "andere option",
-      ]));
+    // "Try another way" is NOT there the moment the security-key page loads: Google first
+    // waits on the key, and only offers the alternative once that attempt is under way or
+    // has failed. Probing once meant sometimes finding it and sometimes not — which is
+    // exactly why the flow stopped in a different place on every run. Poll for it.
+    const deadline = Date.now() + 20_000;
+    let clicked: string | null = null;
+    while (!clicked && Date.now() < deadline) {
+      clicked =
+        (await clickFirstMatching(page, [
+          "a[href*='challenge/selection']",
+          "[jsname='Cuz2Ue']",
+        ])) ??
+        (await clickButtonByText(page, [
+          "try another way", "try another method", "more ways to verify",
+          "試試其他方法", "试试其他方法",
+          "尝试其他方式", "嘗試其他方式",
+          "別の方法を試す", "다른 방법 시도",
+          "otra forma", "autre méthode", "andere option",
+        ]));
+      if (!clicked) await new Promise((r) => setTimeout(r, 1000));
+    }
     if (!clicked) return false;
+    logger.info({ clicked }, "Google 2FA - opened the verification-method picker");
     await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
     await new Promise((r) => setTimeout(r, 1200));
   }
 
+  // The picker's entries are whole sentences ("從 Google Authenticator 應用程式取得驗證碼"),
+  // so they have to be matched as substrings — a prefix match never fires on them.
   const picked =
     (await clickFirstMatching(page, [
       "[data-challengetype='6']",
       "li[data-challengetype='6'] div[role='link']",
       "a[href*='challenge/totp']",
     ])) ??
-    (await clickButtonByText(page, [
-      "google authenticator", "authenticator app", "get a verification code",
-      "驗證器應用程式", "验证器应用",
-      "身分驗證器", "輸入驗證碼", "输入验证码",
-      "認証アプリ", "인증 앱",
-    ]));
+    (await clickButtonByText(
+      page,
+      [
+        "google authenticator", "authenticator", "verification code",
+        "驗證器應用程式", "验证器应用", "身分驗證器",
+        "驗證碼", "验证码",
+        "認証アプリ", "인증 앱",
+      ],
+      { contains: true, scope: "li, [role='listitem'], [role='link'], [data-challengetype], button, [role='button'], a" },
+    ));
   if (!picked) return false;
+  logger.info({ picked }, "Google 2FA - chose the authenticator option");
   await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
   await new Promise((r) => setTimeout(r, 1200));
   return !!(await page.$(TOTP_INPUT_SEL));

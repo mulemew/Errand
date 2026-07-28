@@ -141,13 +141,16 @@ export async function clickFirstMatching(page: PageAdapter, selectors: string[])
  * depending on the exit IP's locale), so an English-only text match is not enough — and
  * matching on element structure instead is what caused the wrong-button click above.
  */
-export async function clickButtonByText(page: PageAdapter, labels: string[]): Promise<string | null> {
+export async function clickButtonByText(
+  page: PageAdapter,
+  labels: string[],
+  opts?: { contains?: boolean; scope?: string },
+): Promise<string | null> {
   try {
-    return (await page.evaluate((needles: unknown) => {
-      const wanted = (needles as string[]).map((s) => s.toLowerCase());
-      const els = Array.from(
-        document.querySelectorAll<HTMLElement>("button, [role='button'], input[type='submit']"),
-      );
+    return (await page.evaluate((arg: unknown) => {
+      const { needles, contains, scope } = arg as { needles: string[]; contains: boolean; scope: string };
+      const wanted = needles.map((s) => s.toLowerCase());
+      const els = Array.from(document.querySelectorAll<HTMLElement>(scope));
       for (const el of els) {
         const r = el.getBoundingClientRect();
         const s = window.getComputedStyle(el);
@@ -161,14 +164,27 @@ export async function clickButtonByText(page: PageAdapter, labels: string[]): Pr
           .trim()
           .toLowerCase();
         if (!label) continue;
-        // Exact-ish match only: "next" must not match "next time" or a nav item.
-        if (wanted.some((w) => label === w || label.startsWith(w))) {
+        // Exact-ish by default: "next" must not match "next time" or a nav item.
+        // `contains` is for pickers, whose entries are whole sentences — Google's
+        // authenticator option reads "從 Google Authenticator 應用程式取得驗證碼", which
+        // no prefix match will ever find.
+        const hit = contains
+          ? wanted.some((w) => label.includes(w))
+          : wanted.some((w) => label === w || label.startsWith(w));
+        if (hit) {
           el.click();
           return label;
         }
       }
       return null;
-    }, labels as never)) as string | null;
+    }, {
+      needles: labels,
+      contains: opts?.contains === true,
+      // Buttons by default. A picker's rows are list items or link-roled divs, not
+      // buttons — scanning for those globally would risk matching ordinary navigation,
+      // so the caller opts in.
+      scope: opts?.scope ?? "button, [role='button'], input[type='submit']",
+    } as never)) as string | null;
   } catch {
     return null;
   }
