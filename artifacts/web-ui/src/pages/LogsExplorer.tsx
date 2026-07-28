@@ -35,11 +35,24 @@ import { useState } from "react";
 
   const PAGE_SIZE = 50;
 
+  // Every trigger the runner can record. The old version only knew cron and dry_run and
+  // painted EVERYTHING else as "Manual" — so a webhook-triggered run (the runner has always
+  // stored it correctly as "webhook") was mislabelled in the list.
+  const TRIGGER_LABELS: Record<string, string> = {
+    manual: "▶ Manual",
+    cron: "⏱ Scheduled",
+    webhook: "🔗 Webhook",
+    retry: "↻ Retry",
+    dry_run: "Dry Run",
+  };
+
   function TriggeredByBadge({ value }: { value: string | null }) {
     if (!value) return null;
-    if (value === "cron") return <Badge variant="outline" className="text-xs font-mono gap-1">⏱ Scheduled</Badge>;
-    if (value === "dry_run") return <Badge variant="secondary" className="text-xs font-mono">Dry Run</Badge>;
-    return <Badge variant="outline" className="text-xs font-mono">▶ Manual</Badge>;
+    return (
+      <Badge variant={value === "dry_run" ? "secondary" : "outline"} className="text-xs font-mono gap-1">
+        {TRIGGER_LABELS[value] ?? value}
+      </Badge>
+    );
   }
 
   export default function LogsExplorer() {
@@ -131,6 +144,8 @@ import { useState } from "react";
                     <SelectItem value="all">{t.allStatuses}</SelectItem>
                     <SelectItem value="manual">Manual</SelectItem>
                     <SelectItem value="cron">Scheduled</SelectItem>
+                    <SelectItem value="webhook">Webhook</SelectItem>
+                    <SelectItem value="retry">Retry</SelectItem>
                     <SelectItem value="dry_run">Dry Run</SelectItem>
                   </SelectContent>
                 </Select>

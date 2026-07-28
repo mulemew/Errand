@@ -146,9 +146,9 @@ export default function LogDetail() {
               )}
               {(log as unknown as { triggeredBy?: string }).triggeredBy && (
                 <Badge variant="outline" className="text-xs font-mono ml-1">
-                  {(log as unknown as { triggeredBy?: string }).triggeredBy === "dry_run" ? "Dry Run"
-                    : (log as unknown as { triggeredBy?: string }).triggeredBy === "cron" ? "⏱ Sched"
-                    : "▶ Manual"}
+                  {({ dry_run: "Dry Run", cron: "⏱ Sched", webhook: "🔗 Webhook", retry: "↻ Retry", manual: "▶ Manual" } as Record<string, string>)[
+                    (log as unknown as { triggeredBy?: string }).triggeredBy as string
+                  ] ?? (log as unknown as { triggeredBy?: string }).triggeredBy}
                 </Badge>
               )}
           </div>

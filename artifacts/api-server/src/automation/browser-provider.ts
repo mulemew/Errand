@@ -868,21 +868,25 @@ class CamoufoxProvider implements BrowserProvider {
       closed = true;
       this._browsers.delete(browser);
       this._ids.delete(browser);
-      // Release the sidecar session FIRST — it's a plain HTTP call that kills the launcher
-      // subprocess and does NOT depend on the (possibly dead/hung) ws. Then stop the proxy.
-      // Only after that do we best-effort close the playwright objects, bounded so a dead
-      // connection can't hang the caller forever. The sidecar reaper is the final net.
-      await this.release(id);
-      const rp = this._proxies.get(browser);
-      if (rp) { this._proxies.delete(browser); await rp.stop().catch(() => {}); }
+      // 1. Ask the browser to shut ITSELF down first. This is the documented way to stop a
+      //    Playwright browser (and what Camoufox's own context-manager usage does): it lets
+      //    Firefox flush and exit cleanly instead of being shot in the head. Bounded, so a
+      //    dead or hung ws cannot stall the caller. Doing this AFTER killing the sidecar
+      //    session — the previous order — meant the graceful path never ran at all.
       await Promise.race([
         (async () => {
           await page.close().catch(() => {});
           await context.close().catch(() => {});
           await browser.close().catch(() => {});
         })(),
-        new Promise<void>((r) => setTimeout(r, 8000)),
+        new Promise<void>((r) => setTimeout(r, 6000)),
       ]);
+      // 2. Then release the sidecar session regardless of how that went. This is the
+      //    GUARANTEE: it kills the launcher's whole process group, so a Firefox that
+      //    ignored the graceful close (or was never reachable) cannot survive the task.
+      await this.release(id);
+      const rp = this._proxies.get(browser);
+      if (rp) { this._proxies.delete(browser); await rp.stop().catch(() => {}); }
     };
     return adapter;
   }

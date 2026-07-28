@@ -44,10 +44,26 @@ function formatIntervalLabel(totalMinutes: number): string {
   return parts.join(" ");
 }
 
-function scheduleNextRunAfterCompletion(taskId: number, delayMinutes: number): void {
-  const nextRunAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+/**
+ * Seed next_run_at for an @after_completion task.
+ *
+ * The base is the task's LAST COMPLETION, not the moment we happen to be seeding. Using
+ * Date.now() meant the interval restarted from whenever the seed ran — re-enabling a task,
+ * editing it, or a server restart — so a "4 days after completion" task re-enabled six
+ * minutes after its last run came out as last-run + 4 days + 6 minutes. (A task that runs
+ * undisturbed never showed this, because there the seed happens at completion.)
+ *
+ * A base already in the past is left in the past on purpose: the task is overdue and the
+ * poller should fire it promptly rather than granting it a fresh full interval.
+ */
+function scheduleNextRunAfterCompletion(taskId: number, delayMinutes: number, lastRunAt?: Date | null): void {
+  const base = lastRunAt ? new Date(lastRunAt).getTime() : Date.now();
+  const nextRunAt = new Date(base + delayMinutes * 60 * 1000);
   db.update(tasksTable).set({ nextRunAt }).where(eq(tasksTable.id, taskId)).catch(() => {});
-  logger.info({ taskId, delayMinutes, nextRunAt: nextRunAt.toISOString() }, "Post-completion next run seeded");
+  logger.info(
+    { taskId, delayMinutes, basedOn: lastRunAt ? "lastRunAt" : "now", nextRunAt: nextRunAt.toISOString() },
+    "Post-completion next run seeded",
+  );
 }
 
 export function describeScheduleExpression(expression: string | null | undefined): string | null {
@@ -348,12 +364,12 @@ export function scheduleTask(taskId: number, expression: string): void {
     (async () => {
       try {
         const [t] = await db
-          .select({ enabled: tasksTable.enabled, nextRunAt: tasksTable.nextRunAt })
+          .select({ enabled: tasksTable.enabled, nextRunAt: tasksTable.nextRunAt, lastRunAt: tasksTable.lastRunAt })
           .from(tasksTable)
           .where(eq(tasksTable.id, taskId));
         // Only seed when enabled and no pending run is already scheduled.
         if (t?.enabled && !t.nextRunAt) {
-          scheduleNextRunAfterCompletion(taskId, afterCompletionMinutes);
+          scheduleNextRunAfterCompletion(taskId, afterCompletionMinutes, t.lastRunAt);
         }
       } catch (err) {
         logger.warn({ taskId, err }, "Failed to seed post-completion nextRunAt");

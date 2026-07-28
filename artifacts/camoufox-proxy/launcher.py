@@ -7,8 +7,23 @@ ws:// endpoint to stdout, which server.py reads back.
 """
 import json
 import os
+import signal
 
 from camoufox.server import launch_server
+
+
+def _terminate(_signum, _frame):
+    """Unwind on SIGTERM so Playwright's context manager closes the browser itself.
+
+    server.py kills this process's whole GROUP as the guarantee, which reliably removes
+    camoufox-bin — but a graceful exit is still preferable: it lets Firefox shut down
+    normally instead of being killed mid-write. SystemExit propagates through
+    launch_server's context managers, which is exactly what we want.
+    """
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, _terminate)
 
 cfg = json.loads(os.environ["CAMOUFOX_CFG"])
 
