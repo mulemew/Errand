@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search, FolderPlus } from "lucide-react";
+import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search, FolderPlus, GripVertical } from "lucide-react";
 import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
+import { Reorder, useDragControls } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow, format } from "date-fns";
 import { usePollingInterval } from "@/hooks/use-polling-interval";
@@ -155,7 +156,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
       // next: without it every square re-serves its own open delay, so sliding along the
       // row showed nothing. The wrapper's native `title` is gone for the same reason — a
       // browser tooltip on the parent competes with (and wins against) these.
-      <TooltipProvider delayDuration={120} skipDelayDuration={600}>
+      <TooltipProvider delayDuration={120} skipDelayDuration={600} disableHoverableContent>
         <span className="flex items-center gap-[3px]">
           {runs.map((r, i) => {
             const dimmed = dimOutside?.(r) ?? false;
@@ -597,8 +598,6 @@ export default function Home() {
     queryFn: () => fetch(`${BASE}/api/task-groups`).then((r) => r.json()),
     staleTime: 30_000,
   });
-  const [draggingId, setDraggingId] = useState<number | null>(null);
-  const [dragOverGroup, setDragOverGroup] = useState<number | null | undefined>(undefined);
   const [groupDialog, setGroupDialog] = useState<{ id: number | null; name: string } | null>(null);
   const [deleteGroupId, setDeleteGroupId] = useState<number | null>(null);
 
@@ -651,31 +650,28 @@ export default function Home() {
   const flatOrder = (): Array<{ id: number; groupId: number | null }> =>
     sections.flatMap((sec) => sec.tasks.map((tk) => ({ id: tk.id, groupId: sec.groupId })));
 
-  const dropOnTask = (targetId: number) => {
-    const src = draggingId;
-    setDraggingId(null);
-    setDragOverGroup(undefined);
-    if (!canReorder || src == null || src === targetId) return;
+  /** A section was reordered — rebuild the whole order with that section's new sequence. */
+  const reorderSection = (groupId: number | null, orderedIds: number[]) => {
     const order = flatOrder();
-    const from = order.findIndex((o) => o.id === src);
-    const to = order.findIndex((o) => o.id === targetId);
-    if (from < 0 || to < 0) return;
-    const [moved] = order.splice(from, 1);
-    // Dropping onto a row means "take that row's place", including its group.
-    order.splice(to, 0, { ...moved, groupId: order[to]?.groupId ?? moved.groupId });
-    void persistOrder(order);
+    const others = order.filter((o) => o.groupId !== groupId);
+    const moved = orderedIds.map((id) => ({ id, groupId }));
+    // Keep sections in their displayed order: everything before this group, then it,
+    // then the rest.
+    const idx = sections.findIndex((sec) => sec.groupId === groupId);
+    const beforeIds = new Set(sections.slice(0, idx).flatMap((sec) => sec.tasks.map((tk) => tk.id)));
+    const before = others.filter((o) => beforeIds.has(o.id));
+    const after = others.filter((o) => !beforeIds.has(o.id));
+    void persistOrder([...before, ...moved, ...after]);
   };
 
-  const dropOnGroup = (groupId: number | null) => {
-    const src = draggingId;
-    setDraggingId(null);
-    setDragOverGroup(undefined);
-    if (!canReorder || src == null) return;
+  /** Move one task into another group (or out of all of them), appended at its end.
+   *  A menu action rather than a cross-list drag: dragging between two separately
+   *  animated lists is fiddly to hit, and this states the destination outright. */
+  const moveTaskToGroup = (taskId: number, groupId: number | null) => {
     const order = flatOrder();
-    const from = order.findIndex((o) => o.id === src);
+    const from = order.findIndex((o) => o.id === taskId);
     if (from < 0) return;
     const [moved] = order.splice(from, 1);
-    // Append to the end of that group.
     const lastOfGroup = order.map((o) => o.groupId).lastIndexOf(groupId);
     order.splice(lastOfGroup + 1, 0, { ...moved, groupId });
     void persistOrder(order);
@@ -719,9 +715,38 @@ export default function Home() {
     }
   };
 
+  /** One reorderable row. Each item needs its own useDragControls (hooks cannot run in a
+   *  loop), and dragListener={false} means only the grip starts a drag. */
+  function DraggableTaskRow({
+    id,
+    enabled,
+    children,
+  }: {
+    id: number;
+    enabled: boolean;
+    children: (startDrag: (e: React.PointerEvent) => void) => React.ReactNode;
+  }) {
+    const controls = useDragControls();
+    return (
+      <Reorder.Item
+        value={id}
+        dragListener={false}
+        dragControls={controls}
+        transition={{ type: "spring", stiffness: 600, damping: 40 }}
+        whileDrag={{ scale: 1.01, zIndex: 30, boxShadow: "0 8px 24px rgba(0,0,0,0.28)" }}
+        className="relative"
+      >
+        {children((e) => { if (enabled) controls.start(e); })}
+      </Reorder.Item>
+    );
+  }
+
   /** One task row. Extracted from the list so grouped sections can render the exact
    *  same card — the markup below is unchanged from the flat list it replaced. */
-  const renderTaskCard = (task: (typeof displayedTasks)[number]) => {
+  const renderTaskCard = (
+    task: (typeof displayedTasks)[number],
+    startDrag?: (e: React.PointerEvent) => void,
+  ) => {
                 const stepProg = stepProgressMap.get(task.id);
                 const totalMetroSteps = stepProg?.totalSteps ?? (Array.isArray(task.steps) ? (task.steps as unknown[]).length : 0);
                 const completedMetroSteps = stepProg?.completedSteps ?? new Map<number, { type: string; message: string; status: "success" | "failed" }>();
@@ -853,11 +878,45 @@ export default function Home() {
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
+                  {groupList.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" title={t.moveToGroup}>
+                          <FolderPlus className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {groupList.map((g) => (
+                          <DropdownMenuItem key={g.id} onClick={() => moveTaskToGroup(task.id, g.id)}>
+                            {g.name}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuItem onClick={() => moveTaskToGroup(task.id, null)}>
+                          {t.ungrouped}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
                   <Link href={`/tasks/${task.id}`}>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground group-hover:text-foreground">
                       <ArrowRight className="h-4 w-4" />
                     </Button>
                   </Link>
+                  {/* Drag handle, last in the row. Only this starts a drag, and it is the
+                      ONLY thing here carrying a tooltip — a title on the row itself sits
+                      above the run squares and steals their tooltips. */}
+                  {startDrag && (
+                    <button
+                      type="button"
+                      onPointerDown={startDrag}
+                      title={t.dragHandleTooltip}
+                      aria-label={t.dragHandleTooltip}
+                      className="h-8 w-6 flex items-center justify-center rounded text-muted-foreground/40
+                                 hover:text-foreground hover:bg-accent cursor-ns-resize touch-none"
+                    >
+                      <GripVertical className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
                 </div>
                 {showMetro && (
@@ -998,19 +1057,8 @@ export default function Home() {
             {sections.map((section) => (
               <div key={section.key} className="contents">
                 {showGroupHeaders && (
-                  <div
-                    className={
-                      "flex items-center gap-2 px-1 pt-2 " +
-                      (dragOverGroup === section.groupId ? "opacity-100" : "")
-                    }
-                    onDragOver={(e) => { if (canReorder) { e.preventDefault(); setDragOverGroup(section.groupId); } }}
-                    onDragLeave={() => setDragOverGroup(undefined)}
-                    onDrop={(e) => { e.preventDefault(); dropOnGroup(section.groupId); }}
-                  >
-                    <span className={
-                      "text-xs font-semibold uppercase tracking-wider " +
-                      (dragOverGroup === section.groupId ? "text-primary" : "text-muted-foreground")
-                    }>
+                  <div className="flex items-center gap-2 px-1 pt-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       {section.name}
                     </span>
                     <span className="text-[10px] text-muted-foreground">{section.tasks.length}</span>
@@ -1035,23 +1083,23 @@ export default function Home() {
                     <span className="h-px flex-1 bg-border" />
                   </div>
                 )}
-                {section.tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable={canReorder}
-                    onDragStart={() => setDraggingId(task.id)}
-                    onDragEnd={() => { setDraggingId(null); setDragOverGroup(undefined); }}
-                    onDragOver={(e) => { if (canReorder && draggingId !== null) e.preventDefault(); }}
-                    onDrop={(e) => { e.preventDefault(); dropOnTask(task.id); }}
-                    className={
-                      (canReorder ? "cursor-grab active:cursor-grabbing " : "") +
-                      (draggingId === task.id ? "opacity-40 " : "")
-                    }
-                    title={canReorder ? t.dragToReorderTasks : undefined}
-                  >
-                    {renderTaskCard(task)}
-                  </div>
-                ))}
+                {/* framer-motion Reorder, exactly like the step editor: neighbours spring
+                    aside as the row passes them, and ONLY the grip starts a drag, so the
+                    row's own buttons and links keep working. Nothing here carries a
+                    `title` — a native tooltip on an ancestor beats the run squares' own
+                    tooltips to the pointer, which is what made them show the wrong run. */}
+                <Reorder.Group
+                  axis="y"
+                  values={section.tasks.map((tk) => tk.id)}
+                  onReorder={(ids: number[]) => canReorder && reorderSection(section.groupId, ids)}
+                  className="contents"
+                >
+                  {section.tasks.map((task) => (
+                    <DraggableTaskRow key={task.id} id={task.id} enabled={canReorder}>
+                      {(startDrag) => renderTaskCard(task, canReorder ? startDrag : undefined)}
+                    </DraggableTaskRow>
+                  ))}
+                </Reorder.Group>
               </div>
             ))}
           </div>

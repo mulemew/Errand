@@ -21,6 +21,9 @@ import { Router, type IRouter } from "express";
   // own auth; everything below stays session-protected.
   router.use(webhookRouter);
   router.use(requireAuth);
+  // BEFORE tasksRouter: it owns /tasks/reorder, and tasks.ts has /tasks/:id, which
+  // matches "reorder" as an id and answers 400 before this router is ever reached.
+  router.use(taskGroupsRouter);
   router.use(tasksRouter);
   router.use(settingsRouter);
   router.use(recorderRouter);
@@ -28,7 +31,6 @@ import { Router, type IRouter } from "express";
   router.use(fingerprintProfilesRouter);
   router.use(proxyProfilesRouter);
   router.use(providersRouter);
-  router.use(taskGroupsRouter);
 
   export default router;
   

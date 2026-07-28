@@ -771,12 +771,14 @@ export default function TaskDetail() {
                         s.type === "wait"       ? `${s.ms}ms` :
                         s.type === "waitFor"    ? `${s.selector}${s.timeout ? ` (${s.timeout}ms)` : ""}` :
                         s.type === "screenshot" ? "capture page" :
-                        s.type;
+                        stepTypeLabel(s.type, t);
                       return (
                         <div key={i} className="flex items-center gap-2 bg-muted/10 border border-border rounded px-3 py-2 text-xs font-mono">
                           <span className="text-muted-foreground w-5 text-right shrink-0">{i + 1}</span>
                           {icon}
-                          <span className="text-muted-foreground capitalize shrink-0">{s.type}</span>
+                          {/* The localized step NAME — stepTypeLabel is what the editor and
+                              the run timeline already use; this list printed the raw type. */}
+                          <span className="text-muted-foreground shrink-0">{stepTypeLabel(s.type, t)}</span>
                           <span className="text-foreground truncate">{detail}</span>
                         </div>
                       );

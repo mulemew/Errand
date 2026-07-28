@@ -495,24 +495,46 @@ function StepCard({
                   <p className="text-[10px] text-muted-foreground leading-snug">{t.sessionKeyHint}</p>
                 </div>
               )}
+              {step.cookieMode && step.loginMethod !== "cookie" && (
+                <>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{t.cookieReuseExplain}</p>
+                  {!step.successText?.trim() && !step.successSelector?.trim() && (
+                    <p className="text-[10px] text-amber-500 leading-snug">{t.cookieCriterionRecommended}</p>
+                  )}
+                </>
+              )}
               {(step.cookieMode || step.loginMethod === "cookie") && (
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Cookie{" "}
-                    <span className="font-normal text-muted-foreground">
-                      ({step.loginMethod === "cookie" ? t.requiredSuffix : t.optionalSeedSuffix})
-                    </span>
-                  </Label>
-                  <textarea
-                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs min-h-[56px]"
-                    placeholder="remember_web_xxx=yyy; other=zzz"
-                    value={step.cookies ?? ""}
-                    onChange={(e) => set({ cookies: e.target.value || undefined })}
-                  />
-                  <p className="text-[10px] text-muted-foreground leading-snug">
-                    {t.cookiePasteHint}
-                  </p>
-                </div>
+                // Required for cookie-only (there is no login to fall back on), and folded
+                // away for cookie mode, where the session is captured automatically.
+                step.loginMethod === "cookie" ? (
+                  <div className="space-y-1">
+                    <Label className="text-xs">
+                      Cookie <span className="font-normal text-muted-foreground">({t.requiredSuffix})</span>
+                    </Label>
+                    <textarea
+                      className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs min-h-[56px]"
+                      placeholder="remember_web_xxx=yyy; other=zzz"
+                      value={step.cookies ?? ""}
+                      onChange={(e) => set({ cookies: e.target.value || undefined })}
+                    />
+                    <p className="text-[10px] text-muted-foreground leading-snug">{t.cookiePasteHint}</p>
+                  </div>
+                ) : (
+                  <details className="group/seed" open={!!step.cookies}>
+                    <summary className="text-[10px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                      {t.cookieSeedOptionalTitle}
+                    </summary>
+                    <div className="space-y-1 pt-1">
+                      <textarea
+                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 font-mono text-xs min-h-[56px]"
+                        placeholder="remember_web_xxx=yyy; other=zzz"
+                        value={step.cookies ?? ""}
+                        onChange={(e) => set({ cookies: e.target.value || undefined })}
+                      />
+                      <p className="text-[10px] text-muted-foreground leading-snug">{t.cookiePasteHint}</p>
+                    </div>
+                  </details>
+                )
               )}
             </div>
           </div>

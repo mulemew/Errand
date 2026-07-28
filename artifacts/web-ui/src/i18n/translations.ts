@@ -563,6 +563,11 @@ export interface Translations {
       unitSecondsZeroForever: string;
       liveUpdatesEvery3s: string;
       taskTimeoutCardHint: string;
+      moveToGroup: string;
+      dragHandleTooltip: string;
+      cookieSeedOptionalTitle: string;
+      cookieReuseExplain: string;
+      cookieCriterionRecommended: string;
   }
 
   export const zh: Translations = {
@@ -1101,6 +1106,11 @@ export interface Translations {
       unitSecondsZeroForever: "秒（0 = 一直等）",
       liveUpdatesEvery3s: "每 3 秒刷新",
       taskTimeoutCardHint: "单次任务运行的时间上限，超过就中止并记为失败，对所有运行（含定时触发）生效。注意这和 Providers 页里的「会话超时」不是一回事——那个是浏览器会话本身能活多久。",
+      moveToGroup: "移动到分组",
+      dragHandleTooltip: "按住拖动排序",
+      cookieSeedOptionalTitle: "手动粘贴 cookie（可选，几乎用不到）",
+      cookieReuseExplain: "不需要手动填 cookie：第一次登录成功后，会话（cookies + localStorage）会自动加密保存，之后每次运行先用它，有效就跳过登录。只有当你想连第一次登录都跳过时，才需要在下面粘一条现成的 cookie 当种子。",
+      cookieCriterionRecommended: "建议填上面的「登录成功判据」：有判据才能可靠判断保存的会话是否还有效；没有的话只能从页面上猜，猜不出来就会每次都重新登录（不会出错，只是白跑一遍）。",
   };
 
   export const en: Translations = {
@@ -1640,5 +1650,10 @@ export interface Translations {
       unitSecondsZeroForever: "seconds (0 = wait forever)",
       liveUpdatesEvery3s: "Updates every 3s",
       taskTimeoutCardHint: "How long a single task run may take before it is aborted and recorded as failed. Applies to every run, scheduled ones included. Not the same as a provider's \"session timeout\", which is how long the browser session itself may live.",
+      moveToGroup: "Move to group",
+      dragHandleTooltip: "Hold to drag and reorder",
+      cookieSeedOptionalTitle: "Paste a cookie manually (optional, rarely needed)",
+      cookieReuseExplain: "You do not need to paste anything: after the first successful login the session (cookies + localStorage) is saved encrypted, and every later run restores it and skips the login while it stays valid. Pasting a cookie below is only for skipping that very first login.",
+      cookieCriterionRecommended: "Filling in a success criterion above is recommended: it is what tells a still-valid saved session from an expired one. Without it the check falls back to reading the page, and when that is inconclusive the task simply logs in again every run — correct, just wasteful.",
   };
   
