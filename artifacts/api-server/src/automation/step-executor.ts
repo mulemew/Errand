@@ -142,6 +142,12 @@ const MAX_WAIT_MS = 60_000;
    * driving the browser in the background after the user hit cancel.
    */
   shouldCancel?: () => boolean,
+  /**
+   * Called BEFORE each step runs. Results are only recorded when a step FINISHES, so a step
+   * that hangs leaves no trace at all — a timed-out run then reports nothing but "Task
+   * timed out after 30 min", with no way to tell which step was in flight.
+   */
+  onStepStart?: (info: { index: number; type: string }) => void,
 ): Promise<{ results: StepResult[]; finalPage: PageAdapter }> {
   const results: StepResult[] = [];
   let currentPage = page;
@@ -169,6 +175,7 @@ const MAX_WAIT_MS = 60_000;
       }
 
       const _stepStart = Date.now();
+      onStepStart?.({ index: i, type: step.type });
       // A login step must NOT be retried here: it runs its own 3-attempt loop, so the two
       // layers MULTIPLY into six full login attempts. With each attempt able to spend
       // minutes on navigations, CF clearing and selector waits, that alone is what let a

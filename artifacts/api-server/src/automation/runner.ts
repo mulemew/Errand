@@ -290,6 +290,19 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     let semaphoreAcquired = false;
     let concKey = "default";
     let browserProvider: import("./browser-provider").BrowserProvider | undefined;
+    // What the run is doing RIGHT NOW. Steps are recorded when they FINISH, so a step that
+    // hangs leaves an empty timeline and the run reports nothing but "Task timed out after
+    // 30 min" — as does a hang before the first step even starts (proxy, browser launch).
+    // These two make the failure say where the time actually went.
+    let phase = "starting";
+    let inFlightStep: { index: number; type: string; startedAt: number } | null = null;
+    const whereItStopped = (): string => {
+      if (inFlightStep) {
+        const secs = Math.round((Date.now() - inFlightStep.startedAt) / 1000);
+        return `step ${inFlightStep.index + 1} [${inFlightStep.type}], running for ${secs}s`;
+      }
+      return phase;
+    };
     const collectedStepLogs: Array<{ stepIndex: number; type: string; success: boolean; message: string; screenshotPath?: string; durationMs?: number }> = [];
 
     // A run writes EXACTLY ONE log. The timeout/cancel race used to leave the workflow
@@ -469,6 +482,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         logger.info({ taskId, provider: _selProvider.name, type: _selProvider.type }, "Task using selected provider");
       }
 
+      phase = "creating the browser provider";
       browserProvider = createBrowserProvider(browserConfig);
 
       if (!dryRun) {
@@ -557,7 +571,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         ? new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
               timedOut = true;
-              reject(new Error(`Task timed out after ${timeoutConfig.timeoutMinutes} min`));
+              reject(new Error(`Task timed out after ${timeoutConfig.timeoutMinutes} min — stuck at: ${whereItStopped()}`));
             }, timeoutMs);
           })
         : new Promise<never>(() => {});
@@ -567,7 +581,9 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         cancelCheckInterval = setInterval(() => { if (cancelRequested.has(taskId)) reject(new Error("Task cancelled by user")); }, 500);
       });
 
+      phase = "launching the browser (and its proxy)";
       const page = await browserProvider.newPage();
+      phase = "running workflow steps";
       // Browser launch is slow — honour a cancel made during it. The page/session
       // exists now but the try/finally that closes it hasn't been entered yet, so
       // tear it down by hand before throwing; otherwise cancelling at exactly this
@@ -647,6 +663,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                 const { results: stepResults, finalPage: stepsPage } = await executeWorkflowSteps(
                   page, effectiveStepsWithCreds, DATA_DIR, taskId, creds, solver, task.targetUrl,
                   (r: StepResult) => {
+                    inFlightStep = null;
                     const stepIdx = _stepCallbackIdx++;
                     collectedStepLogs.push({
                       stepIndex: stepIdx,
@@ -667,6 +684,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                   // waiting for it, leaving the steps driving the browser in the
                   // background after the user cancelled (or the task timed out).
                   () => cancelRequested.has(taskId) || timedOut,
+                  (info) => {
+                    inFlightStep = { ...info, startedAt: Date.now() };
+                    emitTaskProgress(taskId, `Step ${info.index + 1} [${info.type}] started…`);
+                  },
                 );
                 finalPage = stepsPage;
                 fullMessage = stepResults.map((r) => r.message).join("\n");
