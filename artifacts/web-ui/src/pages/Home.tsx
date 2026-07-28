@@ -150,20 +150,23 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
    */
   function RunSquares({ runs, dimOutside }: { runs: RecentRun[]; dimOutside?: (r: RecentRun) => boolean }) {
     const { t } = useLang();
+    // WHICH square the pointer is on — this component owns that, rather than letting each
+    // Tooltip decide for itself. Uncontrolled, every square runs its own open/close timers:
+    // sliding across the row leaves one still closing while the next is still opening, and
+    // whichever wins is a race — hence a tooltip that skips squares on the way right and
+    // then appears when you come back over them. One hovered index cannot race itself.
+    const [hovered, setHovered] = useState<number | null>(null);
     if (!runs.length) return null;
     return (
-      // skipDelayDuration keeps the tooltip following the pointer from one square to the
-      // next: without it every square re-serves its own open delay, so sliding along the
-      // row showed nothing. The wrapper's native `title` is gone for the same reason — a
-      // browser tooltip on the parent competes with (and wins against) these.
-      <TooltipProvider delayDuration={120} skipDelayDuration={600} disableHoverableContent>
-        <span className="flex items-center gap-[3px]">
+      <TooltipProvider delayDuration={0} disableHoverableContent>
+        <span className="flex items-center gap-[3px]" onPointerLeave={() => setHovered(null)}>
           {runs.map((r, i) => {
             const dimmed = dimOutside?.(r) ?? false;
             return (
-              <Tooltip key={`${r.runAt}-${i}`}>
+              <Tooltip key={`${r.runAt}-${i}`} open={hovered === i}>
                 <TooltipTrigger asChild>
                   <span
+                    onPointerEnter={() => setHovered(i)}
                     className={
                       "inline-block h-3 w-[6px] rounded-[1px] cursor-default origin-bottom " +
                       "transition-transform duration-100 hover:scale-y-[1.35] hover:scale-x-[1.6] " +
@@ -1053,9 +1056,9 @@ export default function Home() {
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-md" />)}
           </div>
         ) : displayedTasks.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3">
+          <div className="space-y-3">
             {sections.map((section) => (
-              <div key={section.key} className="contents">
+              <div key={section.key} className="space-y-3">
                 {showGroupHeaders && (
                   <div className="flex items-center gap-2 px-1 pt-2">
                     <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1087,12 +1090,14 @@ export default function Home() {
                     aside as the row passes them, and ONLY the grip starts a drag, so the
                     row's own buttons and links keep working. Nothing here carries a
                     `title` — a native tooltip on an ancestor beats the run squares' own
-                    tooltips to the pointer, which is what made them show the wrong run. */}
+                    tooltips to the pointer, which is what made them show the wrong run.
+                    The group must be a REAL box (not display:contents): Reorder measures
+                    it and its children to know when to swap them. */}
                 <Reorder.Group
                   axis="y"
                   values={section.tasks.map((tk) => tk.id)}
                   onReorder={(ids: number[]) => canReorder && reorderSection(section.groupId, ids)}
-                  className="contents"
+                  className="space-y-3"
                 >
                   {section.tasks.map((task) => (
                     <DraggableTaskRow key={task.id} id={task.id} enabled={canReorder}>
