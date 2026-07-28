@@ -45,25 +45,22 @@ function formatIntervalLabel(totalMinutes: number): string {
 }
 
 /**
- * Seed next_run_at for an @after_completion task.
+ * Seed next_run_at for an @after_completion task, from NOW.
  *
- * The base is the task's LAST COMPLETION, not the moment we happen to be seeding. Using
- * Date.now() meant the interval restarted from whenever the seed ran — re-enabling a task,
- * editing it, or a server restart — so a "4 days after completion" task re-enabled six
- * minutes after its last run came out as last-run + 4 days + 6 minutes. (A task that runs
- * undisturbed never showed this, because there the seed happens at completion.)
+ * "Now" is deliberate, and it is not the same base the runner uses. This function only runs
+ * when there is no pending next run to preserve — the task was just enabled, edited, or the
+ * server restarted — and in those cases the intended behaviour is that the clock STARTS
+ * OVER: enabling a task means "begin the interval now", not "honour an interval that
+ * elapsed while it was switched off" (which would fire it immediately on enable).
  *
- * A base already in the past is left in the past on purpose: the task is overdue and the
- * poller should fire it promptly rather than granting it a fresh full interval.
+ * The completion-driven seed lives in the runner (schedulePostCompletionIfNeeded) and is
+ * based on the moment the run finished — that is the one that keeps a normally-running
+ * task exactly one interval apart.
  */
-function scheduleNextRunAfterCompletion(taskId: number, delayMinutes: number, lastRunAt?: Date | null): void {
-  const base = lastRunAt ? new Date(lastRunAt).getTime() : Date.now();
-  const nextRunAt = new Date(base + delayMinutes * 60 * 1000);
+function scheduleNextRunAfterCompletion(taskId: number, delayMinutes: number): void {
+  const nextRunAt = new Date(Date.now() + delayMinutes * 60 * 1000);
   db.update(tasksTable).set({ nextRunAt }).where(eq(tasksTable.id, taskId)).catch(() => {});
-  logger.info(
-    { taskId, delayMinutes, basedOn: lastRunAt ? "lastRunAt" : "now", nextRunAt: nextRunAt.toISOString() },
-    "Post-completion next run seeded",
-  );
+  logger.info({ taskId, delayMinutes, nextRunAt: nextRunAt.toISOString() }, "Post-completion next run seeded");
 }
 
 export function describeScheduleExpression(expression: string | null | undefined): string | null {
@@ -364,12 +361,12 @@ export function scheduleTask(taskId: number, expression: string): void {
     (async () => {
       try {
         const [t] = await db
-          .select({ enabled: tasksTable.enabled, nextRunAt: tasksTable.nextRunAt, lastRunAt: tasksTable.lastRunAt })
+          .select({ enabled: tasksTable.enabled, nextRunAt: tasksTable.nextRunAt })
           .from(tasksTable)
           .where(eq(tasksTable.id, taskId));
         // Only seed when enabled and no pending run is already scheduled.
         if (t?.enabled && !t.nextRunAt) {
-          scheduleNextRunAfterCompletion(taskId, afterCompletionMinutes, t.lastRunAt);
+          scheduleNextRunAfterCompletion(taskId, afterCompletionMinutes);
         }
       } catch (err) {
         logger.warn({ taskId, err }, "Failed to seed post-completion nextRunAt");
