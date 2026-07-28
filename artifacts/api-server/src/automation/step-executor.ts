@@ -73,6 +73,23 @@ export class CaptchaBlockedError extends Error {
 }
 
 /**
+ * The login step ran out of wall-clock budget.
+ *
+ * It needs its own type because the retry loop's catch treats every Error as "this attempt
+ * failed, try the next one" — so the budget verdict, thrown from inside the same try, was
+ * swallowed and stored as the previous error, and the loop carried on. That is why a
+ * timed-out run reported "gave up after 1796s (2 of 3 attempts used). Last error: gave up
+ * after 1796s (1 of 3 attempts used)…": the message nested inside itself once per attempt
+ * while the budget stopped nothing at all.
+ */
+export class LoginBudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LoginBudgetExceededError";
+  }
+}
+
+/**
  * Thrown by a condition step's exitSuccess / exitFailure branch to END the whole
  * task early (like a return in an if/else). `succeeded` decides the task outcome.
  * Caught by the workflow loop, which records a final step result and stops.
@@ -767,9 +784,11 @@ async function executeStep(
             if (attempt > 0) {
               const spent = Date.now() - loginStart;
               if (Date.now() >= loginDeadline) {
-                throw new Error(
+                // Trim the previous error so the message cannot nest budget verdicts.
+                const why = (lastLoginErr?.message ?? "unknown").split(" Last error: ")[0].slice(0, 300);
+                throw new LoginBudgetExceededError(
                   `Login gave up after ${Math.round(spent / 1000)}s (budget ${Math.round(loginBudgetMs / 1000)}s, ` +
-                    `${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used). Last error: ${lastLoginErr?.message ?? "unknown"}`,
+                    `${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used). Last error: ${why}`,
                 );
               }
               logger.info({ taskId, stepIndex, attempt, spentMs: spent }, "Retrying login step");
@@ -788,7 +807,20 @@ async function executeStep(
             // driving the page for a moment afterwards, which is acceptable because the
             // step has failed and the page is about to be closed or reused for a fresh
             // attempt. Hanging for half an hour is not.
-            const attemptCap = Math.max(60_000, loginDeadline - Date.now());
+            const remainingBudget = loginDeadline - Date.now();
+            if (remainingBudget <= 0) {
+              throw new LoginBudgetExceededError(
+                `Login gave up after ${Math.round((Date.now() - loginStart) / 1000)}s ` +
+                  `(budget ${Math.round(loginBudgetMs / 1000)}s, ${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used)`,
+              );
+            }
+            // Cap ONE attempt well below the whole budget: a hung attempt should die and
+            // leave room for another, not consume every second the step has. A legitimate
+            // slow attempt (captcha solving plus a Cloudflare clear) fits inside 5 minutes.
+            const attemptCap = Math.max(
+              60_000,
+              Math.min(remainingBudget, Number(process.env.LOGIN_ATTEMPT_CAP_MS ?? 300_000)),
+            );
             const runLogin = async () => {
               if (step.loginMethod === "github") {
                 return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
@@ -829,6 +861,9 @@ async function executeStep(
             return { message: attempt > 0 ? `${loginResult.message} (attempt ${attempt + 1})` : loginResult.message };
           } catch (retryErr) {
             if (retryErr instanceof CaptchaBlockedError) throw retryErr;
+            // The budget is a verdict on the whole step, not on one attempt — it must
+            // leave the loop rather than becoming the next attempt's "last error".
+            if (retryErr instanceof LoginBudgetExceededError) throw retryErr;
             if (attempt >= MAX_LOGIN_RETRIES) throw retryErr;
             lastLoginErr = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
             logger.warn(
