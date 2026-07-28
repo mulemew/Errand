@@ -46,7 +46,9 @@ async function transcribeViaWhisper(audio: Buffer): Promise<string | null> {
   const url = `${DEFAULT_CF_PROXY_URL.replace(/\/$/, "")}/transcribe`;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000);
+    // The sidecar serialises transcription (one model, shared by every task), so this has
+    // to cover a queue wait plus the decode itself — not just the decode.
+    const timer = setTimeout(() => controller.abort(), 90_000);
     let res: Response;
     try {
       res = await fetch(url, {

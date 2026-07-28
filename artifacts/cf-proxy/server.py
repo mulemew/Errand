@@ -791,8 +791,35 @@ def _normalize_answer(text: str) -> str:
     return " ".join(cleaned.split())
 
 
+# Transcription runs on the CPU and is SHARED by every task: the api-server posts here for
+# the Playwright/camoufox backends too, so a busy fleet can hit one model at once. Two
+# things go wrong then: faster-whisper's WhisperModel is not documented as safe for
+# concurrent transcribe() calls on one instance, and N parallel decodes simply thrash the
+# CPU until each one blows the caller's HTTP timeout — the captcha is then reported
+# unsolved for reasons that have nothing to do with the audio. So requests queue instead of
+# competing. Raise WHISPER_CONCURRENCY if the host has cores to spare.
+_transcribe_gate = threading.BoundedSemaphore(max(1, int(os.getenv("WHISPER_CONCURRENCY", "1"))))
+_TRANSCRIBE_QUEUE_WAIT = float(os.getenv("WHISPER_QUEUE_WAIT", "45"))
+
+
 def _transcribe_bytes(data: bytes, engine: str = "whisper") -> str:
-    """Transcribe raw audio bytes (reCAPTCHA serves MP3) to text."""
+    """Transcribe raw audio bytes (reCAPTCHA serves MP3) to text. Serialised — see above."""
+    waited = time.time()
+    if not _transcribe_gate.acquire(timeout=_TRANSCRIBE_QUEUE_WAIT):
+        raise RuntimeError(
+            f"transcription queue busy for >{_TRANSCRIBE_QUEUE_WAIT:.0f}s "
+            f"(WHISPER_CONCURRENCY={_transcribe_gate._initial_value})"
+        )
+    queued_for = time.time() - waited
+    if queued_for > 1:
+        print(f"[whisper] waited {queued_for:.1f}s for a transcription slot", flush=True)
+    try:
+        return _transcribe_bytes_locked(data, engine=engine)
+    finally:
+        _transcribe_gate.release()
+
+
+def _transcribe_bytes_locked(data: bytes, engine: str = "whisper") -> str:
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         f.write(data)

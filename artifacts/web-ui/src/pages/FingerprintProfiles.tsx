@@ -28,6 +28,28 @@ interface Form {
 }
 
 const EMPTY: Form = { name: "", os: "windows", locale: "", timezone: "", screen: "" };
+
+/**
+ * Render a screen value as "1920x1080", whatever shape it arrives in.
+ *
+ * A generated fingerprint carries its screen as structured data, and older sidecar builds
+ * stored it as the raw object — which the edit dialog then dropped straight into the text
+ * field, so you saw {'width': 1536, 'height': 864, 'colorDepth': 24, ...} instead of a
+ * resolution. Accepts an object, a "WxH" string, or a stringified dict.
+ */
+function formatScreen(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    const o = value as { width?: number; height?: number };
+    return o.width && o.height ? `${o.width}x${o.height}` : "";
+  }
+  const raw = String(value).trim();
+  if (!raw) return "";
+  if (/^\d+\s*[x\u00d7]\s*\d+$/i.test(raw)) return raw.replace(/\s+/g, "");
+  const w = /["']?width["']?\s*[:=]\s*(\d+)/i.exec(raw)?.[1];
+  const h = /["']?height["']?\s*[:=]\s*(\d+)/i.exec(raw)?.[1];
+  return w && h ? `${w}x${h}` : "";
+}
 const OS_OPTIONS = [
   { value: "windows", label: "Windows" },
   { value: "mac", label: "macOS" },
@@ -69,8 +91,14 @@ export default function FingerprintProfiles() {
     // A generated fingerprint carries its own screen (in summary) — show it so the field
     // isn't blank on edit. (For generated profiles it's fixed; the manual field only
     // applies to the non-generated cf-proxy fallback.)
-    const summaryScreen = ((cfg.summary as { screen?: string } | undefined)?.screen) ?? "";
-    setForm({ name: p.name, os: p.os, locale: (cfg.locale as string) ?? "", timezone: (cfg.timezone as string) ?? "", screen: (cfg.screen as string) || summaryScreen || "" });
+    const summaryScreen = formatScreen((cfg.summary as { screen?: unknown } | undefined)?.screen);
+    setForm({
+      name: p.name,
+      os: p.os,
+      locale: (cfg.locale as string) ?? "",
+      timezone: (cfg.timezone as string) ?? "",
+      screen: formatScreen(cfg.screen) || summaryScreen,
+    });
     // A saved generated fingerprint carries fp/preset/summary — keep it fixed on edit.
     if (cfg.fp || cfg.preset) { setGenerated(cfg); setGenSummary((cfg.summary as Record<string, unknown>) ?? null); }
     else { setGenerated(null); setGenSummary(null); }
@@ -218,7 +246,7 @@ export default function FingerprintProfiles() {
               {genSummary ? (
                 <div className="text-[11px] font-mono text-muted-foreground space-y-0.5 break-all">
                   {genSummary.webglRenderer || genSummary.webglVendor ? <div>GPU: {[genSummary.webglVendor, genSummary.webglRenderer].filter(Boolean).map(String).join(" · ")}</div> : null}
-                  {genSummary.screen ? <div>屏幕: {String(genSummary.screen)}</div> : null}
+                  {formatScreen(genSummary.screen) ? <div>屏幕: {formatScreen(genSummary.screen)}</div> : null}
                   {genSummary.platform ? <div>平台: {String(genSummary.platform)}</div> : null}
                   {genSummary.hardwareConcurrency != null ? <div>CPU 核: {String(genSummary.hardwareConcurrency)}</div> : null}
                   {genSummary.userAgent ? <div>UA: {String(genSummary.userAgent)}</div> : null}
@@ -239,8 +267,18 @@ export default function FingerprintProfiles() {
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Screen <span className="text-muted-foreground">(optional)</span></Label>
-              <Input value={form.screen} onChange={(e) => setForm({ ...form, screen: e.target.value })} placeholder="1920x1080" />
+              <Label>
+                Screen{" "}
+                <span className="text-muted-foreground">
+                  {generated ? "(fixed by the generated fingerprint)" : "(optional)"}
+                </span>
+              </Label>
+              <Input
+                value={form.screen}
+                onChange={(e) => setForm({ ...form, screen: e.target.value })}
+                placeholder="1920x1080"
+                disabled={!!generated}
+              />
             </div>
           </div>
           <DialogFooter>

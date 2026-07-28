@@ -139,11 +139,30 @@ def _g(obj, *names):
     return None
 
 
+def _screen_wh(scr):
+    """(width, height) from a Screen object, a plain dict, or a stringified dict.
+
+    browserforge/camoufox have moved between these shapes across versions, and when the
+    lookup failed the summary ended up carrying the raw value — which the profile editor
+    then showed verbatim ("{'width': 1536, 'height': 864, ...}") instead of a resolution.
+    """
+    if scr is None:
+        return None, None
+    if isinstance(scr, dict):
+        return scr.get("width"), scr.get("height")
+    w, h = _g(scr, "width"), _g(scr, "height")
+    if w and h:
+        return w, h
+    m_w = re.search(r"['\"]?width['\"]?\s*[:=]\s*(\d+)", str(scr))
+    m_h = re.search(r"['\"]?height['\"]?\s*[:=]\s*(\d+)", str(scr))
+    return (int(m_w.group(1)) if m_w else None, int(m_h.group(1)) if m_h else None)
+
+
 def _summ_from_fp(fp, os_name: str) -> dict:
     nav = getattr(fp, "navigator", None)
     scr = getattr(fp, "screen", None)
     vc = getattr(fp, "videoCard", None) or getattr(fp, "video_card", None)
-    w, h = _g(scr, "width"), _g(scr, "height")
+    w, h = _screen_wh(scr)
     return {
         "source": "browserforge",
         "os": "mac" if os_name == "macos" else os_name,
@@ -165,9 +184,8 @@ def _summ_from_preset(preset: dict, os_name: str) -> dict:
     scr = preset.get("screen") if isinstance(preset, dict) else None
     wg = preset.get("webgl") if isinstance(preset, dict) else None
     nav = nav if isinstance(nav, dict) else {}
-    scr = scr if isinstance(scr, dict) else {}
     wg = wg if isinstance(wg, dict) else {}
-    w, h = scr.get("width"), scr.get("height")
+    w, h = _screen_wh(scr)
     return {
         "source": "preset",
         "os": "mac" if os_name == "macos" else os_name,
