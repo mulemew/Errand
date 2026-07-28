@@ -5,40 +5,42 @@
 # "playwright" or "puppeteer" provider settings.
 # =============================================================
 
-# ─── Stage 1: Build web UI ───────────────────────────────────
+# ─── Stage 1: Workspace dependencies (shared) ────────────────
 # --platform=$BUILDPLATFORM: compile JS on the build host (amd64) natively.
 # The Vite/Rollup output is pure JS — platform-agnostic — so this is safe.
-FROM --platform=$BUILDPLATFORM node:20-bookworm AS web-builder
+#
+# The web and API builders used to run a full `pnpm install` EACH, installing the
+# same workspace twice per image and twice again for the second architecture.
+# Installing once here and branching off it removes that duplicate work, and the
+# layer is cached across builds because only manifests land in it — editing
+# source no longer re-resolves dependencies.
+FROM --platform=$BUILDPLATFORM node:20-bookworm AS deps
 
 WORKDIR /workspace
 RUN npm install -g pnpm
 
+# Manifests only (plus lib/, whose sources both builders need anyway) so that a
+# code change does not invalidate the install layer.
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY tsconfig.base.json tsconfig.json ./
 COPY lib/ lib/
-COPY artifacts/web-ui/ artifacts/web-ui/
+COPY artifacts/web-ui/package.json artifacts/web-ui/
+COPY artifacts/api-server/package.json artifacts/api-server/
+COPY scripts/package.json scripts/
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN pnpm install --frozen-lockfile
 
+# ─── Stage 2: Build web UI ───────────────────────────────────
+FROM deps AS web-builder
+COPY artifacts/web-ui/ artifacts/web-ui/
 ENV BASE_PATH=/ NODE_ENV=production
 RUN pnpm --filter @workspace/web-ui run build
 
-# ─── Stage 2: Build API server ───────────────────────────────
-FROM --platform=$BUILDPLATFORM node:20-bookworm AS api-builder
-
-WORKDIR /workspace
-RUN npm install -g pnpm
-
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
-COPY tsconfig.base.json tsconfig.json ./
-COPY lib/ lib/
+# ─── Stage 3: Build API server ───────────────────────────────
+FROM deps AS api-builder
 COPY artifacts/api-server/ artifacts/api-server/
-
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @workspace/api-server run build
 
 # ─── Stage: sing-box binary source ───────────────────────────

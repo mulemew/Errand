@@ -24,7 +24,7 @@ A self-hosted web automation platform — schedule form logins, OTP handling, CA
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/kuailedubage/webauto.git
+git clone https://github.com/mulemew/webauto.git
 cd webauto
 ```
 
@@ -48,6 +48,13 @@ Everything else — browser provider, captcha keys, CORS, secrets — is either 
 ```bash
 docker compose up -d
 ```
+
+Two compose files ship:
+
+| File | Use |
+|---|---|
+| `docker-compose.yml` | Local development — builds the images from this checkout |
+| `docker-compose.image.yml` | Deployment — pulls the prebuilt images from GHCR |
 
 Open **http://localhost** and log in with your `DASHBOARD_PASSWORD`.
 
@@ -80,30 +87,22 @@ A single Docker image contains everything:
 The image is published to GHCR on every push to `main`:
 
 ```
-ghcr.io/kuailedubage/webauto:latest
+ghcr.io/mulemew/webauto:latest
 ```
 
 ---
 
 ## Using an External PostgreSQL
 
-Set `DATABASE_URL` in your `.env` and use the provided override file to skip the bundled database containers:
+Set `DATABASE_URL` in your `.env` and comment out the bundled `db` service (and the `app`
+service's `depends_on: db`) in the compose file you use:
 
 ```env
 DATABASE_URL=postgresql://user:password@your-pg-host:5432/dbname
 ```
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d
-```
-
 Compatible with: Neon, Supabase, Aiven, Railway, Amazon RDS, and any standard PostgreSQL.
-
-To run the migration against your external database:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.external-db.yml run --rm migrate
-```
+Migrations run automatically on startup against whatever `DATABASE_URL` points at.
 
 ---
 
@@ -160,7 +159,7 @@ On any **Login** step you can enable **会话保持 / Cookie 模式 (Cookie mode
 # Install Docker
 curl -fsSL https://get.docker.com | sh
 
-git clone https://github.com/kuailedubage/webauto.git
+git clone https://github.com/mulemew/webauto.git
 cd webauto && cp .env.example .env
 # edit .env — set DASHBOARD_PASSWORD and POSTGRES_PASSWORD
 docker compose up -d
@@ -171,19 +170,19 @@ Add Caddy or Traefik in front for HTTPS/TLS termination.
 ### Pull prebuilt image
 
 ```bash
-docker pull ghcr.io/kuailedubage/webauto:latest
+docker pull ghcr.io/mulemew/webauto:latest
 
 docker run -d \
   -p 80:8080 \
   -v autoops_data:/app/data \
   -e DATABASE_URL=postgresql://... \
   -e DASHBOARD_PASSWORD=... \
-  ghcr.io/kuailedubage/webauto:latest
+  ghcr.io/mulemew/webauto:latest
 ```
 
 ### Kubernetes / Coolify / Portainer
 
-Use the image `ghcr.io/kuailedubage/webauto:latest`. The container:
+Use the image `ghcr.io/mulemew/webauto:latest`. The container:
 - Listens on port `8080`
 - Requires a PostgreSQL database
 - Needs a persistent volume mounted at `/app/data` (stores secrets and screenshots)
@@ -203,7 +202,7 @@ This app runs cron jobs internally and maintains a persistent Chromium instance.
 Requires: [VS Code](https://code.visualstudio.com) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) + Docker
 
 ```bash
-git clone https://github.com/kuailedubage/webauto.git
+git clone https://github.com/mulemew/webauto.git
 code webauto
 # VS Code prompt: "Reopen in Container" → click it
 ```

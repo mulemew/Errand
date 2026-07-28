@@ -52,7 +52,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Serve web UI static files in production.
 // In Docker the built assets are copied to dist/public alongside the bundle.
-// In Replit dev mode this directory does not exist, so nothing is served here
+// In local development this directory does not exist, so nothing is served here
 // and the Vite dev server handles the frontend separately.
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
 if (existsSync(publicDir)) {
