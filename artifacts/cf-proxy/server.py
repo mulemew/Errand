@@ -780,8 +780,16 @@ def _get_whisper():
             if _whisper_model is None:
                 from faster_whisper import WhisperModel
                 size = os.getenv("WHISPER_MODEL", "small")
+                # The Dockerfile pre-download ends in `|| true`, so an image CAN ship without
+                # the weights — and then this call quietly downloads ~500MB while the caller
+                # burns its HTTP timeout and reports "no STT engine returned text". Time it
+                # so the log says which of the two happened.
+                t0 = time.time()
                 _whisper_model = WhisperModel(size, device="cpu", compute_type="int8")
-                print(f"[whisper] model loaded: {size}", flush=True)
+                took = time.time() - t0
+                print(f"[whisper] model loaded: {size} in {took:.1f}s"
+                      f"{' (downloaded — it was NOT baked into the image)' if took > 20 else ''}",
+                      flush=True)
     return _whisper_model
 
 
@@ -813,8 +821,15 @@ def _transcribe_bytes(data: bytes, engine: str = "whisper") -> str:
     queued_for = time.time() - waited
     if queued_for > 1:
         print(f"[whisper] waited {queued_for:.1f}s for a transcription slot", flush=True)
+    started = time.time()
     try:
-        return _transcribe_bytes_locked(data, engine=engine)
+        text = _transcribe_bytes_locked(data, engine=engine)
+        # One line per transcription: engine, audio size, queue wait, decode time, and
+        # whether anything came out. Without it there is no way to tell a slow decode from
+        # a queue backlog from a clip that simply is not speech.
+        print(f"[whisper] engine={engine} audio={len(data)}B queued={queued_for:.1f}s "
+              f"decode={time.time() - started:.1f}s chars={len(text or '')}", flush=True)
+        return text
     finally:
         _transcribe_gate.release()
 
@@ -2856,11 +2871,14 @@ def solve_recaptcha_audio(sid):
                 time.sleep(1)
                 continue
 
+            _stt_started = time.time()
             try:
                 answer = _transcribe_bytes(data, engine=engine)
             except Exception as e:
                 d.switch_to.default_content()
-                return {"solved": False, "blocked": False, "message": f"transcription failed: {e}"}
+                return {"solved": False, "blocked": False,
+                        "message": f"transcription failed ({engine}, {len(data)}B audio): {e}"}
+            _stt_secs = time.time() - _stt_started
             print(f"[recaptcha] round {rnd + 1}/{max_rounds} audio={len(data)}B "
                   f"engine={engine} transcribed={answer!r}", flush=True)
             if not answer:
@@ -2880,7 +2898,11 @@ def solve_recaptcha_audio(sid):
             d.switch_to.default_content()
             _detached_wait(sb, 3)
             if token_present():
-                return {"solved": True, "blocked": False, "message": f"solved via audio (round {rnd + 1})"}
+                # Name the engine and how long it took: with one shared, serialised model,
+                # "which task got the slot and for how long" is the whole diagnosis when a
+                # concurrent task reports a transcription failure at the same moment.
+                return {"solved": True, "blocked": False,
+                        "message": f"solved via audio (round {rnd + 1}, stt={engine} {_stt_secs:.1f}s)"}
             print(f"[recaptcha] round {rnd + 1} answer rejected (no token yet)", flush=True)
             # Re-enter bframe for the next clip.
             try:

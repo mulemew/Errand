@@ -21,7 +21,7 @@
  */
 import type { PageAdapter, FrameAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
-import { transcribeAudio } from "./stt";
+import { transcribeAudio, describeSttAttempts } from "./stt";
 
 export interface RecaptchaAudioResult {
   solved: boolean;
@@ -136,21 +136,38 @@ async function solveViaFrames(page: PageAdapter): Promise<RecaptchaAudioResult> 
     }
 
     // Download + transcribe.
+    //
+    // NOTE: this fetch goes out from the API container directly — NOT through the task's
+    // browser session or proxy. Log what actually came back (status, type, size): feeding
+    // an HTML error page to whisper produces an empty transcript, which is otherwise
+    // indistinguishable from a busy sidecar.
     let audioBuf: Buffer | null = null;
+    let downloadNote = "";
     try {
       const res = await fetch(audioUrl);
+      const type = res.headers.get("content-type") ?? "?";
       if (res.ok) audioBuf = Buffer.from(await res.arrayBuffer());
+      downloadNote = `HTTP ${res.status}, ${type}, ${audioBuf?.length ?? 0}B`;
+      logger.info({ round, status: res.status, type, bytes: audioBuf?.length ?? 0 }, "reCAPTCHA audio clip downloaded");
     } catch (err) {
-      logger.debug({ err }, "reCAPTCHA audio download failed");
+      downloadNote = `download failed: ${(err as Error)?.message ?? String(err)}`;
+      logger.warn({ err, round }, "reCAPTCHA audio download failed");
     }
     if (!audioBuf || audioBuf.length === 0) {
       await sleep(1000);
       continue;
     }
 
-    const answer = await transcribeAudio(audioBuf);
+    const stt = await transcribeAudio(audioBuf);
+    const answer = stt.text;
     if (!answer) {
-      return { solved: false, blocked: false, message: "Audio transcription failed (no STT engine returned text). Check RECAPTCHA_STT_ORDER / WIT_AI_TOKEN / cf-proxy /transcribe." };
+      return {
+        solved: false,
+        blocked: false,
+        message:
+          `Audio transcription failed (clip: ${downloadNote}). ` +
+          `Engines tried — ${describeSttAttempts(stt.attempts)}.`,
+      };
     }
 
     // Type the answer and verify.
@@ -173,7 +190,11 @@ async function solveViaFrames(page: PageAdapter): Promise<RecaptchaAudioResult> 
     await sleep(2500);
 
     if (await tokenPresent(page)) {
-      return { solved: true, blocked: false, message: `reCAPTCHA solved via audio (round ${round})` };
+      return {
+        solved: true,
+        blocked: false,
+        message: `reCAPTCHA solved via audio (round ${round}, stt=${stt.engine} ${((stt.ms ?? 0) / 1000).toFixed(1)}s)`,
+      };
     }
     logger.debug({ round, answer }, "reCAPTCHA audio answer not accepted — retrying with a fresh clip");
     await sleep(1200);

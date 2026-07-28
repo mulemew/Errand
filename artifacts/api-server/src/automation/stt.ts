@@ -42,7 +42,17 @@ function cleanTranscript(text: string): string {
 
 // ── whisper (via cf-proxy local faster-whisper) ──────────────────────────────
 
-async function transcribeViaWhisper(audio: Buffer): Promise<string | null> {
+/** One engine's outcome. `reason` is only set when it produced no text. */
+export type SttAttempt = { engine: string; ms: number; reason?: string };
+export type SttResult = { text: string | null; engine?: string; ms?: number; attempts: SttAttempt[] };
+type EngineResult = { text: string | null; reason?: string };
+
+/** Human-readable "who was tried and why each one gave up", for a task-log line. */
+export function describeSttAttempts(attempts: SttAttempt[]): string {
+  return attempts.map((a) => `${a.engine}: ${a.reason ?? "no text"} (${(a.ms / 1000).toFixed(1)}s)`).join("; ");
+}
+
+async function transcribeViaWhisper(audio: Buffer): Promise<EngineResult> {
   const url = `${DEFAULT_CF_PROXY_URL.replace(/\/$/, "")}/transcribe`;
   try {
     const controller = new AbortController();
@@ -64,22 +74,28 @@ async function transcribeViaWhisper(audio: Buffer): Promise<string | null> {
     }
     const data = (await res.json().catch(() => ({}))) as { ok?: boolean; text?: string; error?: string };
     if (!res.ok || data.error || typeof data.text !== "string") {
-      logger.debug({ status: res.status, err: data.error }, "cf-proxy /transcribe returned no text");
-      return null;
+      return { text: null, reason: `HTTP ${res.status}${data.error ? ` — ${data.error}` : ""}` };
     }
     const cleaned = cleanTranscript(data.text);
-    return cleaned || null;
+    // An EMPTY transcript is not the same failure as an unreachable sidecar: whisper ran and
+    // heard nothing, which usually means what we posted was not audio at all.
+    return cleaned ? { text: cleaned } : { text: null, reason: "ran but transcript was empty" };
   } catch (err) {
-    logger.debug({ err }, "whisper (cf-proxy /transcribe) unavailable");
-    return null;
+    const aborted = (err as { name?: string })?.name === "AbortError";
+    return {
+      text: null,
+      reason: aborted
+        ? "timed out after 90s (cf-proxy queue + decode)"
+        : `cf-proxy unreachable: ${(err as Error)?.message ?? String(err)}`,
+    };
   }
 }
 
 // ── wit.ai ───────────────────────────────────────────────────────────────────
 
-async function transcribeViaWitAi(audio: Buffer): Promise<string | null> {
+async function transcribeViaWitAi(audio: Buffer): Promise<EngineResult> {
   const token = process.env.WIT_AI_TOKEN;
-  if (!token) return null;
+  if (!token) return { text: null, reason: "WIT_AI_TOKEN not set — skipped" };
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
@@ -102,24 +118,21 @@ async function transcribeViaWitAi(audio: Buffer): Promise<string | null> {
     }
     // wit.ai streams multiple JSON objects; the final one carries the full text.
     const body = await res.text();
-    if (!res.ok) {
-      logger.debug({ status: res.status }, "wit.ai /speech error");
-      return null;
-    }
+    if (!res.ok) return { text: null, reason: `HTTP ${res.status}` };
     // Grab the last "text" field in the (possibly chunked) response.
     const matches = [...body.matchAll(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g)];
     const last = matches.length ? matches[matches.length - 1][1] : "";
     const cleaned = cleanTranscript(last.replace(/\\"/g, '"'));
-    return cleaned || null;
+    return cleaned ? { text: cleaned } : { text: null, reason: "ran but transcript was empty" };
   } catch (err) {
-    logger.debug({ err }, "wit.ai transcription failed");
-    return null;
+    const aborted = (err as { name?: string })?.name === "AbortError";
+    return { text: null, reason: aborted ? "timed out after 30s" : `${(err as Error)?.message ?? String(err)}` };
   }
 }
 
 // ── google (unofficial free endpoint, via cf-proxy FLAC conversion) ──────────
 
-async function transcribeViaGoogle(audio: Buffer): Promise<string | null> {
+async function transcribeViaGoogle(audio: Buffer): Promise<EngineResult> {
   // The free Google speech endpoint needs 16 kHz mono FLAC. Rather than pull a
   // second audio toolchain into the Node container, ask cf-proxy to do the
   // conversion + recognition (it has ffmpeg + SpeechRecognition). If cf-proxy is
@@ -142,34 +155,52 @@ async function transcribeViaGoogle(audio: Buffer): Promise<string | null> {
       clearTimeout(timer);
     }
     const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
-    if (!res.ok || data.error || typeof data.text !== "string") return null;
+    if (!res.ok || data.error || typeof data.text !== "string") {
+      return { text: null, reason: `HTTP ${res.status}${data.error ? ` — ${data.error}` : ""}` };
+    }
     const cleaned = cleanTranscript(data.text);
-    return cleaned || null;
+    return cleaned ? { text: cleaned } : { text: null, reason: "ran but transcript was empty" };
   } catch (err) {
-    logger.debug({ err }, "google STT (via cf-proxy) unavailable");
-    return null;
+    const aborted = (err as { name?: string })?.name === "AbortError";
+    return {
+      text: null,
+      reason: aborted ? "timed out after 45s" : `cf-proxy unreachable: ${(err as Error)?.message ?? String(err)}`,
+    };
   }
 }
 
 /**
- * Transcribe reCAPTCHA audio to text, trying each configured engine in order
- * until one returns a non-empty result. Returns null if every engine fails.
+ * Transcribe reCAPTCHA audio to text, trying each configured engine in order until one
+ * returns a non-empty result.
+ *
+ * Returns WHICH engine answered and, on failure, what every engine said. This used to be a
+ * bare `string | null` with each engine's reason logged at debug and then dropped, so the
+ * task log could only ever say "no STT engine returned text" — identical output whether the
+ * sidecar was busy, the model was missing, the clip was not audio, or wit.ai had no token.
+ * Four different fixes, one indistinguishable message.
  */
-export async function transcribeAudio(audio: Buffer): Promise<string | null> {
+export async function transcribeAudio(audio: Buffer): Promise<SttResult> {
+  const attempts: SttAttempt[] = [];
   for (const engine of engineOrder()) {
-    let text: string | null = null;
-    if (engine === "whisper") text = await transcribeViaWhisper(audio);
-    else if (engine === "witai") text = await transcribeViaWitAi(audio);
-    else if (engine === "google") text = await transcribeViaGoogle(audio);
+    const started = Date.now();
+    let out: EngineResult;
+    if (engine === "whisper") out = await transcribeViaWhisper(audio);
+    else if (engine === "witai") out = await transcribeViaWitAi(audio);
+    else if (engine === "google") out = await transcribeViaGoogle(audio);
     else {
       logger.warn({ engine }, "Unknown STT engine in RECAPTCHA_STT_ORDER — skipping");
+      attempts.push({ engine, ms: 0, reason: "unknown engine" });
       continue;
     }
-    if (text) {
-      logger.info({ engine, chars: text.length }, "reCAPTCHA audio transcribed");
-      return text;
+    const ms = Date.now() - started;
+    if (out.text) {
+      logger.info({ engine, ms, chars: out.text.length }, "reCAPTCHA audio transcribed");
+      attempts.push({ engine, ms });
+      return { text: out.text, engine, ms, attempts };
     }
-    logger.debug({ engine }, "STT engine returned no text — trying next");
+    // WARN, not debug: this is the only place the actual cause exists.
+    logger.warn({ engine, ms, reason: out.reason }, "STT engine returned no text — trying next");
+    attempts.push({ engine, ms, reason: out.reason });
   }
-  return null;
+  return { text: null, attempts };
 }
