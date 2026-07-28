@@ -79,6 +79,134 @@ async function clickGoogleButton(page: PageAdapter): Promise<boolean> {
   return false;
 }
 
+const TOTP_INPUT_SEL =
+  "input[type='tel'], input[name='totpPin'], input[autocomplete='one-time-code'], input[inputmode='numeric']";
+
+/**
+ * Get through Google's second-factor step, switching challenge type when necessary.
+ *
+ * Returns a LoginResult only to ABORT (a factor we cannot satisfy); null means "carry on",
+ * either because there was no challenge or because a code was submitted.
+ */
+async function resolveSecondFactor(page: PageAdapter, totpSecret?: string): Promise<LoginResult | null> {
+  const deadline = Date.now() + 90_000;
+
+  for (let round = 0; round < 4 && Date.now() < deadline; round++) {
+    const url = page.url();
+    if (!url.includes("accounts.google.com")) return null; // already through
+
+    const totpInput = await page.$(TOTP_INPUT_SEL);
+    if (totpInput) {
+      if (!totpSecret) {
+        return {
+          success: false,
+          captchaBlocked: false,
+          message:
+            "Google is asking for a 2FA code but this credential has no TOTP secret. " +
+            "Add the authenticator secret to the saved credential.",
+        };
+      }
+      const { generateSync } = await import("otplib");
+      const totp = generateSync({ secret: totpSecret });
+      logger.info({ round }, "Google 2FA - entering an authenticator code");
+      await page.click(TOTP_INPUT_SEL);
+      await page.keyboard.type(totp, { delay: 80 });
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
+        page.keyboard.press("Enter"),
+      ]);
+      await new Promise((r) => setTimeout(r, 1500));
+      continue; // re-evaluate: accepted, or yet another challenge
+    }
+
+    if (!/\/challenge\//.test(url)) return null; // not a challenge page - let the caller judge
+
+    // A challenge we cannot answer directly. Without a TOTP there is nothing to switch TO.
+    if (!totpSecret) {
+      return {
+        success: false,
+        captchaBlocked: false,
+        message: describeChallenge(url, "and this credential has no TOTP secret to fall back on"),
+      };
+    }
+
+    logger.info({ url }, "Google presented a non-code challenge - switching to the authenticator app");
+    const switched = await switchToAuthenticatorChallenge(page);
+    if (!switched) {
+      return {
+        success: false,
+        captchaBlocked: false,
+        message: describeChallenge(url, "and no authenticator-app option was offered as an alternative"),
+      };
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+
+  return null;
+}
+
+/** Name the challenge from its URL, so a failure says what Google actually wanted. */
+function describeChallenge(url: string, suffix: string): string {
+  const kind = /\/challenge\/(sk|ipp|iap|totp|dp|az|kpp|pwd|selection)/.exec(url)?.[1] ?? "";
+  const human: Record<string, string> = {
+    sk: "a security key (WebAuthn)",
+    kpp: "a passkey",
+    ipp: "a code sent to your phone",
+    iap: "a code sent by SMS",
+    dp: "a tap on the Google prompt on your phone",
+    az: "a tap on the Google prompt on your phone",
+    pwd: "your password again",
+    totp: "an authenticator code",
+    selection: "you to pick a verification method",
+  };
+  return `Google is asking for ${human[kind] ?? "an additional verification step"} ${suffix}. Page: ${url}`;
+}
+
+/**
+ * From a challenge page, click "Try another way" and choose the authenticator-app option.
+ *
+ * The picker's entries carry data-challengetype, which is language-independent - 6 is the
+ * authenticator app. Text matching is only the fallback, and it has to cover the locale
+ * Google picked from the exit IP (this account renders in Traditional Chinese), not just
+ * English.
+ */
+async function switchToAuthenticatorChallenge(page: PageAdapter): Promise<boolean> {
+  if (!/\/challenge\/selection/.test(page.url())) {
+    const clicked =
+      (await clickFirstMatching(page, [
+        "a[href*='challenge/selection']",
+        "[jsname='Cuz2Ue']",
+      ])) ??
+      (await clickButtonByText(page, [
+        "try another way", "try another method", "more ways to verify",
+        "試試其他方法", "试试其他方法",
+        "尝试其他方式", "嘗試其他方式",
+        "別の方法を試す", "다른 방법 시도",
+        "otra forma", "autre méthode", "andere option",
+      ]));
+    if (!clicked) return false;
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+
+  const picked =
+    (await clickFirstMatching(page, [
+      "[data-challengetype='6']",
+      "li[data-challengetype='6'] div[role='link']",
+      "a[href*='challenge/totp']",
+    ])) ??
+    (await clickButtonByText(page, [
+      "google authenticator", "authenticator app", "get a verification code",
+      "驗證器應用程式", "验证器应用",
+      "身分驗證器", "輸入驗證碼", "输入验证码",
+      "認証アプリ", "인증 앱",
+    ]));
+  if (!picked) return false;
+  await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+  await new Promise((r) => setTimeout(r, 1200));
+  return !!(await page.$(TOTP_INPUT_SEL));
+}
+
 /** Google's "Next", resolved safely: the step's own id (scoped so we cannot stray to
  *  another button), then the localised label, then Enter. */
 async function pressNext(page: PageAdapter, idSel: string, timeout: number): Promise<void> {
@@ -176,26 +304,16 @@ async function completeGoogleAuth(
     }
   }
 
-  const currentUrl = page.url();
-
-  // Step 3: TOTP / 2FA if present
-  const totpSel = "input[type='tel'], input[name='totpPin'], input[autocomplete='one-time-code'], input[inputmode='numeric']";
-  const totpInput = await page.$(totpSel);
-  if (totpInput) {
-    logger.info("Google 2FA page detected");
-    if (!credentials.totpSecret) {
-      return { success: false, captchaBlocked: false, message: "Google requires 2FA but no TOTP secret was provided" };
-    }
-    const { generateSync } = await import("otplib");
-    const totp = generateSync({ secret: credentials.totpSecret });
-    await page.click(totpSel);
-    await page.keyboard.type(totp, { delay: 80 });
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {}),
-      page.keyboard.press("Enter"),
-    ]);
-    await new Promise((r) => setTimeout(r, 1000));
-  }
+  // Step 3: second factor.
+  //
+  // Google does not always land on the code entry form. When the account has a security key
+  // registered it goes to /challenge/sk/webauthn first ("use your security key"), which no
+  // automation can satisfy - but that page offers "Try another way", and the authenticator
+  // app (the TOTP we hold) is one of the alternatives. The old code only looked for a code
+  // input, did not find one, and gave up with "requires additional verification" while a
+  // usable path was one click away.
+  const secondFactorFailure = await resolveSecondFactor(page, credentials.totpSecret);
+  if (secondFactorFailure) return secondFactorFailure;
 
   await dismissPopups(page);
 
@@ -208,7 +326,7 @@ async function completeGoogleAuth(
     logger.warn({ finalUrl, blockedText }, "Still on Google auth page after login attempt");
 
     if (finalUrl.includes("/challenge") || finalUrl.includes("/v3/signin")) {
-      return { success: false, captchaBlocked: false, message: `Google requires additional verification (e.g., phone/email code). Current page: ${finalUrl}` };
+      return { success: false, captchaBlocked: false, message: describeChallenge(finalUrl, "that could not be completed automatically") };
     }
 
     return { success: false, captchaBlocked: false, message: `Google login did not complete. Still on: ${finalUrl}. ${blockedText.trim()}` };
