@@ -119,6 +119,17 @@ import { pool } from "@workspace/db";
   -- gone). At most one row may carry it; a partial unique index enforces that in the DB.
   ALTER TABLE "providers" ADD COLUMN IF NOT EXISTS "is_default" boolean NOT NULL DEFAULT false;
   CREATE UNIQUE INDEX IF NOT EXISTS "providers_single_default" ON "providers" ("is_default") WHERE "is_default";
+  -- Dashboard grouping + manual ordering. No foreign key on purpose: a group is a view
+  -- convenience and deleting one must never be able to take tasks with it.
+  CREATE TABLE IF NOT EXISTS "task_groups" (
+    "id"         serial      PRIMARY KEY,
+    "name"       text        NOT NULL,
+    "sort_order" integer     NOT NULL DEFAULT 0,
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "updated_at" timestamptz NOT NULL DEFAULT now()
+  );
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "group_id" integer;
+  ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "sort_order" integer;
   `;
 
   export async function runMigrations(): Promise<void> {

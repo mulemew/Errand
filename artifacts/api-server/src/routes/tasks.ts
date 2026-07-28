@@ -353,7 +353,13 @@ router.get("/tasks/next-runs", async (_req, res): Promise<void> => {
   });
 
 router.get("/tasks", async (req, res): Promise<void> => {
-  const tasks = await db.select().from(tasksTable).orderBy(desc(tasksTable.createdAt));
+  // Manual order first (NULLS LAST so tasks that were never dragged keep their old
+  // newest-first position), then creation date. Existing lists therefore look exactly as
+  // they did until something is actually reordered.
+  const tasks = await db
+    .select()
+    .from(tasksTable)
+    .orderBy(sql`${tasksTable.sortOrder} ASC NULLS LAST`, desc(tasksTable.createdAt));
   // Re-attach the cached exit geo after schema parse (the generated response schema
   // doesn't model it) so the list can render the exit flag without a live lookup.
   const parsed = ListTasksResponse.parse(tasks);
@@ -366,6 +372,9 @@ router.get("/tasks", async (req, res): Promise<void> => {
     // The list's platform badge tooltip names the PROFILE ("Win10 主力机"), not its OS —
     // the icon already says which OS it is. Null when the task uses an inline fingerprint.
     fingerprintLabel: fingerprintLabel(tasks[i], maps),
+    // Dashboard organisation — stripped by the generated response schema, so re-attached.
+    groupId: tasks[i]?.groupId ?? null,
+    sortOrder: tasks[i]?.sortOrder ?? null,
   })));
 });
 

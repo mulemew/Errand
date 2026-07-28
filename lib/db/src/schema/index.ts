@@ -8,4 +8,5 @@
   export * from "./fingerprint-profiles";
   export * from "./proxy-profiles";
   export * from "./providers";
+  export * from "./task-groups";
  

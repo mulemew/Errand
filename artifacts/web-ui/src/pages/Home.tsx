@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
-import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search } from "lucide-react";
+import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search, FolderPlus } from "lucide-react";
 import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { formatDistanceToNow, format } from "date-fns";
@@ -585,125 +589,137 @@ export default function Home() {
     Failed: d.failed,
   }));
 
-  return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.dashboard}</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">{t.dashboardSubtitle}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t.searchTasks}
-              className="h-9 w-44 sm:w-60 rounded-md border border-input bg-background pl-8 pr-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="shadow-sm gap-2">
-                <Archive className="h-4 w-4" /> {t.backup}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={() => handleExport(false)}>
-                <Download className="h-4 w-4 mr-2" /> {t.exportTasks}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport(true)}>
-                <Download className="h-4 w-4 mr-2" /> {t.exportTemplates}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => importInputRef.current?.click()}>
-                <Upload className="h-4 w-4 mr-2" /> {t.importTasks}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {/* Hidden picker driven by the menu item above. */}
-          <input
-            ref={importInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleImportFile(f);
-              e.target.value = ""; // allow re-importing the same file
-            }}
-          />
-          <Link href="/tasks/new">
-            <Button className="shadow-sm font-semibold tracking-wide">
-              <Plus className="mr-2 h-4 w-4" /> {t.newMission}
-            </Button>
-          </Link>
-        </div>
-      </div>
+  // ── Groups + manual ordering ────────────────────────────────────────────────
+  const { data: groups } = useQuery<Array<{ id: number; name: string; sortOrder: number }>>({
+    queryKey: ["task-groups"],
+    queryFn: () => fetch(`${BASE}/api/task-groups`).then((r) => r.json()),
+    staleTime: 30_000,
+  });
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<number | null | undefined>(undefined);
+  const [groupDialog, setGroupDialog] = useState<{ id: number | null; name: string } | null>(null);
+  const [deleteGroupId, setDeleteGroupId] = useState<number | null>(null);
 
-      {/* Summary Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-        <StatCard title={t.totalJobs} value={summary?.total} icon={<Activity className="h-4 w-4 text-primary" />} isLoading={isLoadingSummary} active={activeFilter === null} activeRing="ring-primary/60" onClick={() => setActiveFilter(null)} />
-        <StatCard title={t.runningNow} value={summary?.running} icon={<Loader2 className="h-4 w-4 text-blue-500 animate-spin" />} isLoading={isLoadingSummary} active={activeFilter === "running"} activeRing="ring-blue-500/60" onClick={() => toggleFilter("running")} />
-        <StatCard title={t.inQueue} value={summary?.queued} icon={<Timer className="h-4 w-4 text-purple-500" />} isLoading={isLoadingSummary} active={activeFilter === "queued"} activeRing="ring-purple-500/60" onClick={() => toggleFilter("queued")} />
-        <StatCard title={t.successLast24h} value={summary?.successLast24h} icon={<CheckCircle2 className="h-4 w-4 text-green-500" />} isLoading={isLoadingSummary} active={activeFilter === "success"} activeRing="ring-green-500/60" onClick={() => toggleFilter("success")} />
-        <StatCard title={t.failedLast24h} value={summary?.failedLast24h} icon={<XCircle className="h-4 w-4 text-destructive" />} isLoading={isLoadingSummary} active={activeFilter === "failed"} activeRing="ring-destructive/60" onClick={() => toggleFilter("failed")} />
-        <StatCard title={t.needsAttention} value={summary?.needsAttention} icon={<AlertTriangle className="h-4 w-4 text-amber-500" />} isLoading={isLoadingSummary} highlight={!!summary?.needsAttention} active={activeFilter === "needs_attention"} activeRing="ring-amber-500/60" onClick={() => toggleFilter("needs_attention")} />
-      </div>
+  // Reordering is only meaningful over the WHOLE list: with a filter or a search on, the
+  // positions you see are a subset, and dropping between two visible rows says nothing
+  // about where the item belongs among the hidden ones.
+  const canReorder = !activeFilter && !q;
 
-      {/* 7-Day History Chart */}
-      <Card className="border-border shadow-sm">
-        <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
-          <CardTitle className="text-base flex items-center gap-2">
-            <BarChart2 className="h-4 w-4 text-primary" /> {t.sevenDayHistory}
-          </CardTitle>
-          <span className="text-xs font-mono text-muted-foreground">{t.successVsFailure}</span>
-        </CardHeader>
-        <CardContent className="pt-4 pb-2">
-          {isLoadingHistory ? (
-            <Skeleton className="h-48 w-full" />
-          ) : (
-            <HomeRunChart chartData={chartData ?? []} />
-          )}
-        </CardContent>
-      </Card>
+  const groupList = groups ?? [];
+  const knownGroupIds = new Set(groupList.map((g) => g.id));
+  type TaskRow = (typeof displayedTasks)[number] & { groupId?: number | null };
+  const groupOf = (tk: TaskRow) => {
+    const gid = tk.groupId ?? null;
+    return gid != null && knownGroupIds.has(gid) ? gid : null;
+  };
+  // Headers only appear once a group exists, so a user who never makes one sees exactly
+  // the list they had before.
+  const showGroupHeaders = groupList.length > 0;
+  const sections = [
+    ...groupList.map((g) => ({
+      key: `g${g.id}`,
+      groupId: g.id as number | null,
+      name: g.name,
+      tasks: (displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === g.id),
+    })),
+    {
+      key: "ungrouped",
+      groupId: null as number | null,
+      name: t.ungrouped,
+      tasks: (displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === null),
+    },
+  ];
 
-      {/* Tasks List */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-            <TerminalIcon /> {t.activeConfigurations}
-          </h2>
-          {activeFilter && (
-            <div className={`flex items-center gap-2 text-sm font-mono ${
-              activeFilter === "needs_attention" ? "text-amber-600 dark:text-amber-400" :
-              activeFilter === "running" ? "text-blue-600 dark:text-blue-400" :
-              activeFilter === "queued" ? "text-purple-600 dark:text-purple-400" :
-              activeFilter === "success" ? "text-green-600 dark:text-green-400" :
-              "text-destructive"
-            }`}>
-              {activeFilter === "needs_attention" && <AlertTriangle className="h-4 w-4" />}
-              {activeFilter === "running" && <Loader2 className="h-4 w-4 animate-spin" />}
-              {activeFilter === "queued" && <Timer className="h-4 w-4" />}
-              {activeFilter === "success" && <CheckCircle2 className="h-4 w-4" />}
-              {activeFilter === "failed" && <XCircle className="h-4 w-4" />}
-              <span>
-                Showing {displayedTasks.length} {activeFilter === "needs_attention" ? "blocked" : activeFilter === "queued" ? "queued" : activeFilter} task{displayedTasks.length !== 1 ? "s" : ""}
-              </span>
-              <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-xs" onClick={() => setActiveFilter(null)}>
-                <X className="h-3 w-3" /> {t.reset}
-              </Button>
-            </div>
-          )}
-        </div>
-        
-        {isLoadingTasks ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-md" />)}
-          </div>
-        ) : displayedTasks.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3">
-            {displayedTasks.map((task) => {
+  /** Persist the given full order (already flattened, in display order). */
+  const persistOrder = async (ordered: Array<{ id: number; groupId: number | null }>) => {
+    try {
+      const res = await fetch(`${BASE}/api/tasks/reorder`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: ordered.map((o, i) => ({ id: o.id, groupId: o.groupId, sortOrder: i })) }),
+      });
+      if (!res.ok) throw new Error();
+      queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
+    } catch {
+      toast({ title: t.failedToReorder, variant: "destructive" });
+    }
+  };
+
+  /** Current display order, flattened across sections. */
+  const flatOrder = (): Array<{ id: number; groupId: number | null }> =>
+    sections.flatMap((sec) => sec.tasks.map((tk) => ({ id: tk.id, groupId: sec.groupId })));
+
+  const dropOnTask = (targetId: number) => {
+    const src = draggingId;
+    setDraggingId(null);
+    setDragOverGroup(undefined);
+    if (!canReorder || src == null || src === targetId) return;
+    const order = flatOrder();
+    const from = order.findIndex((o) => o.id === src);
+    const to = order.findIndex((o) => o.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [moved] = order.splice(from, 1);
+    // Dropping onto a row means "take that row's place", including its group.
+    order.splice(to, 0, { ...moved, groupId: order[to]?.groupId ?? moved.groupId });
+    void persistOrder(order);
+  };
+
+  const dropOnGroup = (groupId: number | null) => {
+    const src = draggingId;
+    setDraggingId(null);
+    setDragOverGroup(undefined);
+    if (!canReorder || src == null) return;
+    const order = flatOrder();
+    const from = order.findIndex((o) => o.id === src);
+    if (from < 0) return;
+    const [moved] = order.splice(from, 1);
+    // Append to the end of that group.
+    const lastOfGroup = order.map((o) => o.groupId).lastIndexOf(groupId);
+    order.splice(lastOfGroup + 1, 0, { ...moved, groupId });
+    void persistOrder(order);
+  };
+
+  const saveGroup = async () => {
+    if (!groupDialog || !groupDialog.name.trim()) return;
+    const editing = groupDialog.id != null;
+    try {
+      const res = await fetch(editing ? `${BASE}/api/task-groups/${groupDialog.id}` : `${BASE}/api/task-groups`, {
+        method: editing ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: groupDialog.name.trim() }),
+      });
+      if (!res.ok) throw new Error();
+      toast({ title: editing ? t.groupUpdated : t.groupCreated, variant: "success" });
+      setGroupDialog(null);
+      queryClient.invalidateQueries({ queryKey: ["task-groups"] });
+    } catch {
+      toast({ title: t.failedToSave, variant: "destructive" });
+    }
+  };
+
+  const removeGroup = async () => {
+    if (deleteGroupId == null) return;
+    try {
+      const res = await fetch(`${BASE}/api/task-groups/${deleteGroupId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({} as { ungroupedTasks?: number }));
+      toast({
+        title: t.groupDeleted,
+        description: data.ungroupedTasks
+          ? t.tasksUngrouped.replace("{n}", String(data.ungroupedTasks))
+          : undefined,
+        variant: "success",
+      });
+      setDeleteGroupId(null);
+      queryClient.invalidateQueries({ queryKey: ["task-groups"] });
+      queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
+    } catch {
+      toast({ title: t.failedToDelete, variant: "destructive" });
+    }
+  };
+
+  /** One task row. Extracted from the list so grouped sections can render the exact
+   *  same card — the markup below is unchanged from the flat list it replaced. */
+  const renderTaskCard = (task: (typeof displayedTasks)[number]) => {
                 const stepProg = stepProgressMap.get(task.id);
                 const totalMetroSteps = stepProg?.totalSteps ?? (Array.isArray(task.steps) ? (task.steps as unknown[]).length : 0);
                 const completedMetroSteps = stepProg?.completedSteps ?? new Map<number, { type: string; message: string; status: "success" | "failed" }>();
@@ -849,7 +865,193 @@ export default function Home() {
                 )}
               </div>
                 );
-              })}
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.dashboard}</h1>
+          <p className="text-muted-foreground mt-1 font-mono text-sm">{t.dashboardSubtitle}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t.searchTasks}
+              className="h-9 w-44 sm:w-60 rounded-md border border-input bg-background pl-8 pr-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="shadow-sm gap-2">
+                <Archive className="h-4 w-4" /> {t.backup}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={() => handleExport(false)}>
+                <Download className="h-4 w-4 mr-2" /> {t.exportTasks}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport(true)}>
+                <Download className="h-4 w-4 mr-2" /> {t.exportTemplates}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => importInputRef.current?.click()}>
+                <Upload className="h-4 w-4 mr-2" /> {t.importTasks}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* Hidden picker driven by the menu item above. */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImportFile(f);
+              e.target.value = ""; // allow re-importing the same file
+            }}
+          />
+          <Button
+            variant="outline"
+            className="shadow-sm"
+            onClick={() => setGroupDialog({ id: null, name: "" })}
+            title={t.newGroup}
+          >
+            <FolderPlus className="mr-2 h-4 w-4" /> {t.newGroup}
+          </Button>
+          <Link href="/tasks/new">
+            <Button className="shadow-sm font-semibold tracking-wide">
+              <Plus className="mr-2 h-4 w-4" /> {t.newMission}
+            </Button>
+          </Link>
+        </div>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
+        <StatCard title={t.totalJobs} value={summary?.total} icon={<Activity className="h-4 w-4 text-primary" />} isLoading={isLoadingSummary} active={activeFilter === null} activeRing="ring-primary/60" onClick={() => setActiveFilter(null)} />
+        <StatCard title={t.runningNow} value={summary?.running} icon={<Loader2 className="h-4 w-4 text-blue-500 animate-spin" />} isLoading={isLoadingSummary} active={activeFilter === "running"} activeRing="ring-blue-500/60" onClick={() => toggleFilter("running")} />
+        <StatCard title={t.inQueue} value={summary?.queued} icon={<Timer className="h-4 w-4 text-purple-500" />} isLoading={isLoadingSummary} active={activeFilter === "queued"} activeRing="ring-purple-500/60" onClick={() => toggleFilter("queued")} />
+        <StatCard title={t.successLast24h} value={summary?.successLast24h} icon={<CheckCircle2 className="h-4 w-4 text-green-500" />} isLoading={isLoadingSummary} active={activeFilter === "success"} activeRing="ring-green-500/60" onClick={() => toggleFilter("success")} />
+        <StatCard title={t.failedLast24h} value={summary?.failedLast24h} icon={<XCircle className="h-4 w-4 text-destructive" />} isLoading={isLoadingSummary} active={activeFilter === "failed"} activeRing="ring-destructive/60" onClick={() => toggleFilter("failed")} />
+        <StatCard title={t.needsAttention} value={summary?.needsAttention} icon={<AlertTriangle className="h-4 w-4 text-amber-500" />} isLoading={isLoadingSummary} highlight={!!summary?.needsAttention} active={activeFilter === "needs_attention"} activeRing="ring-amber-500/60" onClick={() => toggleFilter("needs_attention")} />
+      </div>
+
+      {/* 7-Day History Chart */}
+      <Card className="border-border shadow-sm">
+        <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
+          <CardTitle className="text-base flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-primary" /> {t.sevenDayHistory}
+          </CardTitle>
+          <span className="text-xs font-mono text-muted-foreground">{t.successVsFailure}</span>
+        </CardHeader>
+        <CardContent className="pt-4 pb-2">
+          {isLoadingHistory ? (
+            <Skeleton className="h-48 w-full" />
+          ) : (
+            <HomeRunChart chartData={chartData ?? []} />
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Tasks List */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+            <TerminalIcon /> {t.activeConfigurations}
+          </h2>
+          {activeFilter && (
+            <div className={`flex items-center gap-2 text-sm font-mono ${
+              activeFilter === "needs_attention" ? "text-amber-600 dark:text-amber-400" :
+              activeFilter === "running" ? "text-blue-600 dark:text-blue-400" :
+              activeFilter === "queued" ? "text-purple-600 dark:text-purple-400" :
+              activeFilter === "success" ? "text-green-600 dark:text-green-400" :
+              "text-destructive"
+            }`}>
+              {activeFilter === "needs_attention" && <AlertTriangle className="h-4 w-4" />}
+              {activeFilter === "running" && <Loader2 className="h-4 w-4 animate-spin" />}
+              {activeFilter === "queued" && <Timer className="h-4 w-4" />}
+              {activeFilter === "success" && <CheckCircle2 className="h-4 w-4" />}
+              {activeFilter === "failed" && <XCircle className="h-4 w-4" />}
+              <span>
+                Showing {displayedTasks.length} {activeFilter === "needs_attention" ? "blocked" : activeFilter === "queued" ? "queued" : activeFilter} task{displayedTasks.length !== 1 ? "s" : ""}
+              </span>
+              <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-xs" onClick={() => setActiveFilter(null)}>
+                <X className="h-3 w-3" /> {t.reset}
+              </Button>
+            </div>
+          )}
+        </div>
+        
+        {isLoadingTasks ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full rounded-md" />)}
+          </div>
+        ) : displayedTasks.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3">
+            {sections.map((section) => (
+              <div key={section.key} className="contents">
+                {showGroupHeaders && (
+                  <div
+                    className={
+                      "flex items-center gap-2 px-1 pt-2 " +
+                      (dragOverGroup === section.groupId ? "opacity-100" : "")
+                    }
+                    onDragOver={(e) => { if (canReorder) { e.preventDefault(); setDragOverGroup(section.groupId); } }}
+                    onDragLeave={() => setDragOverGroup(undefined)}
+                    onDrop={(e) => { e.preventDefault(); dropOnGroup(section.groupId); }}
+                  >
+                    <span className={
+                      "text-xs font-semibold uppercase tracking-wider " +
+                      (dragOverGroup === section.groupId ? "text-primary" : "text-muted-foreground")
+                    }>
+                      {section.name}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{section.tasks.length}</span>
+                    {section.groupId != null && (
+                      <>
+                        <button
+                          type="button"
+                          className="text-[10px] text-muted-foreground hover:text-foreground"
+                          onClick={() => { setGroupDialog({ id: section.groupId as number, name: section.name }); }}
+                        >
+                          {t.renameGroup}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-[10px] text-muted-foreground hover:text-destructive"
+                          onClick={() => setDeleteGroupId(section.groupId as number)}
+                        >
+                          {t.actionDelete}
+                        </button>
+                      </>
+                    )}
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                )}
+                {section.tasks.map((task) => (
+                  <div
+                    key={task.id}
+                    draggable={canReorder}
+                    onDragStart={() => setDraggingId(task.id)}
+                    onDragEnd={() => { setDraggingId(null); setDragOverGroup(undefined); }}
+                    onDragOver={(e) => { if (canReorder && draggingId !== null) e.preventDefault(); }}
+                    onDrop={(e) => { e.preventDefault(); dropOnTask(task.id); }}
+                    className={
+                      (canReorder ? "cursor-grab active:cursor-grabbing " : "") +
+                      (draggingId === task.id ? "opacity-40 " : "")
+                    }
+                    title={canReorder ? t.dragToReorderTasks : undefined}
+                  >
+                    {renderTaskCard(task)}
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         ) : activeFilter ? (
           <div className={`flex flex-col items-center justify-center py-16 text-center border border-dashed rounded-md ${
@@ -884,6 +1086,44 @@ export default function Home() {
           </div>
         )}
       </div>
+      {/* Create / rename a group */}
+      <Dialog open={groupDialog !== null} onOpenChange={(o) => !o && setGroupDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{groupDialog?.id != null ? t.renameGroup : t.newGroup}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label>{t.groupName}</Label>
+            <Input
+              autoFocus
+              value={groupDialog?.name ?? ""}
+              onChange={(e) => setGroupDialog((g) => (g ? { ...g, name: e.target.value } : g))}
+              onKeyDown={(e) => { if (e.key === "Enter") void saveGroup(); }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGroupDialog(null)}>{t.cancel}</Button>
+            <Button onClick={() => void saveGroup()} disabled={!groupDialog?.name.trim()}>
+              {groupDialog?.id != null ? t.actionSave : t.actionAdd}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteGroupId !== null} onOpenChange={(o) => !o && setDeleteGroupId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.deleteGroupTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{t.deleteGroupDesc}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void removeGroup()} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {t.actionDelete}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

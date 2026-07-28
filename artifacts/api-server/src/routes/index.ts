@@ -8,6 +8,7 @@ import { Router, type IRouter } from "express";
   import fingerprintProfilesRouter from "./fingerprint-profiles";
   import proxyProfilesRouter from "./proxy-profiles";
   import providersRouter from "./providers";
+  import taskGroupsRouter from "./task-groups";
   import webhookRouter from "./webhook";
   import { requireAuth } from "../middlewares/requireAuth";
 
@@ -27,6 +28,7 @@ import { Router, type IRouter } from "express";
   router.use(fingerprintProfilesRouter);
   router.use(proxyProfilesRouter);
   router.use(providersRouter);
+  router.use(taskGroupsRouter);
 
   export default router;
   

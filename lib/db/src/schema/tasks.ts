@@ -44,6 +44,12 @@ export const tasksTable = pgTable("tasks", {
   // dropdown in the task editor (like saved credentials). null = none selected.
   fingerprintProfileId: integer("fingerprint_profile_id"),
   proxyProfileId: integer("proxy_profile_id"),
+  // Dashboard organisation. Both are view-level and deliberately unconstrained: a group
+  // that was deleted just renders the task as ungrouped, and a null sortOrder means "never
+  // dragged" — those keep falling back to newest-first, so existing lists are untouched
+  // until someone actually reorders something.
+  groupId: integer("group_id"),
+  sortOrder: integer("sort_order"),
 });
 
 export const insertTaskSchema = createInsertSchema(tasksTable).omit({ id: true, createdAt: true, updatedAt: true });

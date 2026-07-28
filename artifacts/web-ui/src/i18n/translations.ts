@@ -450,6 +450,21 @@ export interface Translations {
       // ── Dashboard run squares ────────────────────────────────────────────
       runDurationSuffix: string;
       last24hOnly: string;
+      // ── Task groups / manual ordering ────────────────────────────────────
+      newGroup: string;
+      groupName: string;
+      renameGroup: string;
+      deleteGroupTitle: string;
+      deleteGroupDesc: string;
+      ungrouped: string;
+      dragToReorderTasks: string;
+      dragDisabledWhileFiltering: string;
+      groupCreated: string;
+      groupUpdated: string;
+      groupDeleted: string;
+      tasksUngrouped: string;
+      orderSaved: string;
+      failedToReorder: string;
   }
 
   export const zh: Translations = {
@@ -877,6 +892,20 @@ export interface Translations {
       cpuCoresLabel: "CPU 核心",
       runDurationSuffix: "耗时",
       last24hOnly: "仅显示 24 小时内",
+      newGroup: "新建分组",
+      groupName: "分组名称",
+      renameGroup: "重命名分组",
+      deleteGroupTitle: "删除这个分组？",
+      deleteGroupDesc: "分组里的任务不会被删除，只会变成未分组。",
+      ungrouped: "未分组",
+      dragToReorderTasks: "拖拽调整顺序，拖到分组标题上可移入该分组",
+      dragDisabledWhileFiltering: "筛选或搜索时无法拖拽排序",
+      groupCreated: "分组已创建",
+      groupUpdated: "分组已更新",
+      groupDeleted: "分组已删除",
+      tasksUngrouped: "{n} 个任务已变为未分组",
+      orderSaved: "顺序已保存",
+      failedToReorder: "保存顺序失败",
   };
 
   export const en: Translations = {
@@ -1305,5 +1334,19 @@ export interface Translations {
       cpuCoresLabel: "CPU cores",
       runDurationSuffix: "took",
       last24hOnly: "last 24h only",
+      newGroup: "New group",
+      groupName: "Group name",
+      renameGroup: "Rename group",
+      deleteGroupTitle: "Delete this group?",
+      deleteGroupDesc: "Tasks in it are not deleted — they simply become ungrouped.",
+      ungrouped: "Ungrouped",
+      dragToReorderTasks: "Drag to reorder; drop on a group header to move it there",
+      dragDisabledWhileFiltering: "Reordering is unavailable while filtering or searching",
+      groupCreated: "Group created",
+      groupUpdated: "Group updated",
+      groupDeleted: "Group deleted",
+      tasksUngrouped: "{n} task(s) are now ungrouped",
+      orderSaved: "Order saved",
+      failedToReorder: "Failed to save the order",
   };
   
