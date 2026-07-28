@@ -3,6 +3,7 @@ import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
 import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
 import { clearCloudflareInterstitial } from "./cloudflare-bypass";
+import { generateTotpCode } from "../lib/totp";
 import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
 import type { LoginResult } from "./form-login";
@@ -127,8 +128,11 @@ async function resolveSecondFactor(page: PageAdapter, totpSecret?: string): Prom
             "Add the authenticator secret to the saved credential.",
         };
       }
-      const { generateSync } = await import("otplib");
-      const totp = generateSync({ secret: totpSecret });
+      // NOT otplib: its base32 decoder rejects the spaces Google puts in the secret it
+      // shows you ("abcd efgh ijkl mnop"), which threw
+      // `Invalid Base32 string: Unknown letter: " "` and read as a plain login failure.
+      // generateTotpCode normalises first, so a secret stored with spaces still works.
+      const totp = generateTotpCode(totpSecret);
       logger.info({ round }, "Google 2FA - entering an authenticator code");
       await page.click(TOTP_INPUT_SEL);
       // Clear first: a rejected code can be left in the field, and typing after it

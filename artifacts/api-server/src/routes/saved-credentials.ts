@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
   import { db, savedCredentialsTable, eq } from "@workspace/db";
   import { encrypt, decrypt } from "../lib/encryption";
+import { normalizeTotpSecret } from "../lib/totp";
   import { logger } from "../lib/logger";
   import { z } from "zod";
 
@@ -41,7 +42,10 @@ import { Router, type IRouter } from "express";
       return;
     }
     const { name, username, password, totpSecret } = body.data;
-    const encryptedData = encrypt(JSON.stringify({ password, totpSecret: totpSecret ?? null }));
+    // Store the secret as base32 and nothing else: issuers display it in groups of four,
+    // and those spaces reach the decoder as-is otherwise.
+    const cleanTotp = normalizeTotpSecret(totpSecret) || null;
+    const encryptedData = encrypt(JSON.stringify({ password, totpSecret: cleanTotp }));
     const [row] = await db
       .insert(savedCredentialsTable)
       .values({ name, username, encryptedData })
@@ -86,7 +90,7 @@ import { Router, type IRouter } from "express";
       update.encryptedData = encrypt(
         JSON.stringify({
           password: body.data.password,
-          totpSecret: body.data.totpSecret !== undefined ? body.data.totpSecret : prevDecrypted.totpSecret,
+          totpSecret: body.data.totpSecret !== undefined ? (normalizeTotpSecret(body.data.totpSecret) || null) : prevDecrypted.totpSecret,
         }),
       );
     } else if (body.data.totpSecret !== undefined) {
@@ -95,7 +99,7 @@ import { Router, type IRouter } from "express";
         prevDecrypted = JSON.parse(decrypt(existing.encryptedData));
       } catch {}
       update.encryptedData = encrypt(
-        JSON.stringify({ password: prevDecrypted.password, totpSecret: body.data.totpSecret }),
+        JSON.stringify({ password: prevDecrypted.password, totpSecret: normalizeTotpSecret(body.data.totpSecret) || null }),
       );
     }
     const [updated] = await db

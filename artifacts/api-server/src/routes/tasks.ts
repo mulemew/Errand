@@ -19,6 +19,7 @@ import {
 } from "@workspace/api-zod";
 import { execFile } from "child_process";
 import { encrypt, decrypt } from "../lib/encryption";
+import { normalizeTotpSecret } from "../lib/totp";
 import { startLocalProxy, resolveProxyType } from "../automation/proxy-manager";
 import { runTask, isTaskRunning, requestCancelTask } from "../automation/runner";
 import { getTaskEmitter, getTaskEventBuffer, type TaskStreamEvent } from "../lib/taskEvents";
@@ -222,7 +223,7 @@ async function promoteInlineCredentials(
       const encryptedData = encrypt(
         JSON.stringify({
           password: step.inlinePassword,
-          totpSecret: (typeof step.inlineTotp === "string" && step.inlineTotp.length > 0) ? step.inlineTotp : null,
+          totpSecret: (typeof step.inlineTotp === "string" && step.inlineTotp.length > 0) ? (normalizeTotpSecret(step.inlineTotp) || null) : null,
         }),
       );
       const [saved] = await db

@@ -4,6 +4,7 @@ import type { PageAdapter } from "./page-adapter";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { verifyOAuthLanding, detectLoginState, clickFirstMatching, gotoTolerant } from "./login-verify";
   import { clearCloudflareInterstitial } from "./cloudflare-bypass";
+  import { normalizeTotpSecret } from "../lib/totp";
   import { detectAndHandleCaptcha } from "./captcha";
   import type { CaptchaSolver } from "./captcha-solver";
   import type { LoginResult } from "./form-login";
@@ -26,7 +27,9 @@ import type { PageAdapter } from "./page-adapter";
   }
 
   function generateTOTP(secret: string, digits = 6, period = 30): string {
-    const key = decodeBase32(secret);
+    // Normalise first: these decoders happen to skip stray characters, but the secret is
+    // shared with flows that use a strict decoder, so they should all see the same value.
+    const key = decodeBase32(normalizeTotpSecret(secret));
     const counter = Math.floor(Date.now() / 1000 / period);
     const buf = Buffer.alloc(8);
     buf.writeBigUInt64BE(BigInt(counter));
