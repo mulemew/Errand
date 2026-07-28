@@ -18,9 +18,7 @@ __pycache__
 .venv
 **/.venv
 
-# Replit-specific — not needed in Docker
-.replit
-.replitignore
+# Dev-environment metadata — not needed in Docker
 .local/
 .cache/
 .agents/

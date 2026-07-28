@@ -47,7 +47,7 @@ testem.log
 .DS_Store
 Thumbs.db
 
-# Replit (dev environment metadata — not needed in the repo)
+# Dev-environment metadata — not needed in the repo
 .cache/
 .local/
 .agents/
@@ -60,5 +60,5 @@ Thumbs.db
 .env.local
 .env.*.local
 
-# Replit attached assets (pasted logs, screenshots — local only)
+# Attached assets (pasted logs, screenshots — local only)
 attached_assets/
