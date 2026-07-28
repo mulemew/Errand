@@ -397,6 +397,56 @@ export interface Translations {
       actionSave: string;
       actionAdd: string;
       actionDelete: string;
+      // ── Proxies page ─────────────────────────────────────────────────────
+      proxiesTitle: string;
+      proxiesIntro: string;
+      addProxy: string;
+      editProxy: string;
+      noProxiesYet: string;
+      proxyUrlLabel: string;
+      proxyUrlHint: string;
+      refreshExitAll: string;
+      refreshExitOne: string;
+      exitNotChecked: string;
+      exitCheckFailed: string;
+      exitCheckingInBackground: string;
+      allProxiesRefreshed: string;
+      failedToRefresh: string;
+      proxySaved: string;
+      proxyUpdated: string;
+      proxyDeleted: string;
+      deleteProxyTitle: string;
+      deleteProxyDesc: string;
+      tasksFellBackToNoProxy: string;
+      nameAndProxyUrlRequired: string;
+      // ── Fingerprints page ────────────────────────────────────────────────
+      fingerprintsTitle: string;
+      fingerprintsIntro: string;
+      addFingerprint: string;
+      editFingerprint: string;
+      noFingerprintsYet: string;
+      operatingSystem: string;
+      generateFingerprint: string;
+      generatedFixedOnSave: string;
+      sourceBrowserforge: string;
+      sourceRealPreset: string;
+      generateHint: string;
+      fingerprintGenerated: string;
+      generateFailed: string;
+      screenFixedByFingerprint: string;
+      optionalSuffix: string;
+      autoFromProxyIp: string;
+      fingerprintSaved: string;
+      fingerprintUpdated: string;
+      fingerprintDeleted: string;
+      deleteFingerprintTitle: string;
+      deleteFingerprintDesc: string;
+      tasksFellBackToDefaultFp: string;
+      nameRequired: string;
+      gpuLabel: string;
+      screenLabel: string;
+      platformLabel: string;
+      cpuCoresLabel: string;
   }
 
   export const zh: Translations = {
@@ -773,6 +823,55 @@ export interface Translations {
       actionSave: "保存",
       actionAdd: "添加",
       actionDelete: "删除",
+      proxiesTitle: "代理",
+      proxiesIntro: "可复用的出口代理。添加一次，之后在任务里下拉选择。WARP 是按任务配置的，不在这里。",
+      addProxy: "添加代理",
+      editProxy: "编辑代理",
+      noProxiesYet: "还没有代理。",
+      proxyUrlLabel: "代理地址",
+      proxyUrlHint: "必须带协议前缀：http/https/socks5/vless/vmess/trojan/…",
+      refreshExitAll: "刷新全部",
+      refreshExitOne: "刷新出口信息",
+      exitNotChecked: "未检测",
+      exitCheckFailed: "检测失败",
+      exitCheckingInBackground: "出口 IP 正在后台检测，稍后刷新或点单条的刷新按钮查看",
+      allProxiesRefreshed: "全部代理已刷新",
+      failedToRefresh: "刷新失败",
+      proxySaved: "代理已保存",
+      proxyUpdated: "代理已更新",
+      proxyDeleted: "代理已删除",
+      deleteProxyTitle: "删除这个代理？",
+      deleteProxyDesc: "使用它的任务会回落到不使用代理。",
+      tasksFellBackToNoProxy: "{n} 个任务已回落到无代理",
+      nameAndProxyUrlRequired: "名称和代理地址不能为空",
+      fingerprintsTitle: "浏览器指纹",
+      fingerprintsIntro:
+        "可复用的设备指纹。给任务绑一个，它每次运行就都是同一台「设备」——真人本来就只有一台。在任务里下拉选择。",
+      addFingerprint: "添加指纹",
+      editFingerprint: "编辑指纹",
+      noFingerprintsYet: "还没有指纹档案。",
+      operatingSystem: "操作系统",
+      generateFingerprint: "生成指纹",
+      generatedFixedOnSave: "已生成 · 保存后固定",
+      sourceBrowserforge: "browserforge 合成",
+      sourceRealPreset: "真机预设",
+      generateHint: "点「生成指纹」产出一套真实且内部一致的指纹（Camoufox 引擎级伪装），保存后固定不变。",
+      fingerprintGenerated: "指纹已生成 —— 保存后固定",
+      generateFailed: "生成失败",
+      screenFixedByFingerprint: "由生成的指纹决定",
+      optionalSuffix: "可选",
+      autoFromProxyIp: "留空 = 跟随代理出口 IP",
+      fingerprintSaved: "指纹已保存",
+      fingerprintUpdated: "指纹已更新",
+      fingerprintDeleted: "指纹已删除",
+      deleteFingerprintTitle: "删除这个指纹？",
+      deleteFingerprintDesc: "使用它的任务会回落到默认指纹。",
+      tasksFellBackToDefaultFp: "{n} 个任务已回落到默认指纹",
+      nameRequired: "名称不能为空",
+      gpuLabel: "显卡",
+      screenLabel: "屏幕",
+      platformLabel: "平台",
+      cpuCoresLabel: "CPU 核心",
   };
 
   export const en: Translations = {
@@ -1148,5 +1247,56 @@ export interface Translations {
       actionSave: "Save",
       actionAdd: "Add",
       actionDelete: "Delete",
+      proxiesTitle: "Proxies",
+      proxiesIntro:
+        "Reusable exit proxies. Add them once, then pick one per task from a dropdown. WARP is configured per task, not here.",
+      addProxy: "Add proxy",
+      editProxy: "Edit proxy",
+      noProxiesYet: "No proxies yet.",
+      proxyUrlLabel: "Proxy URL",
+      proxyUrlHint: "Scheme required: http/https/socks5/vless/vmess/trojan/…",
+      refreshExitAll: "Refresh all",
+      refreshExitOne: "Refresh exit details",
+      exitNotChecked: "Not checked",
+      exitCheckFailed: "Check failed",
+      exitCheckingInBackground: "Checking the exit IP in the background — refresh, or use the row's refresh button.",
+      allProxiesRefreshed: "All proxies refreshed",
+      failedToRefresh: "Failed to refresh",
+      proxySaved: "Proxy saved",
+      proxyUpdated: "Proxy updated",
+      proxyDeleted: "Proxy deleted",
+      deleteProxyTitle: "Delete this proxy?",
+      deleteProxyDesc: "Tasks using it fall back to no proxy.",
+      tasksFellBackToNoProxy: "{n} task(s) fell back to no proxy",
+      nameAndProxyUrlRequired: "Name and proxy URL are required",
+      fingerprintsTitle: "Browser fingerprints",
+      fingerprintsIntro:
+        "Reusable device fingerprints. Assign one to a task so it always looks like the SAME device — a real user has exactly one. Pick one per task from a dropdown.",
+      addFingerprint: "Add fingerprint",
+      editFingerprint: "Edit fingerprint",
+      noFingerprintsYet: "No fingerprints yet.",
+      operatingSystem: "Operating system",
+      generateFingerprint: "Generate",
+      generatedFixedOnSave: "Generated · fixed once saved",
+      sourceBrowserforge: "browserforge (synthetic)",
+      sourceRealPreset: "Real device preset",
+      generateHint:
+        "Generate produces one authentic, internally consistent fingerprint (applied at Camoufox's engine level) and pins it on save.",
+      fingerprintGenerated: "Fingerprint generated — fixed once saved",
+      generateFailed: "Generation failed",
+      screenFixedByFingerprint: "fixed by the generated fingerprint",
+      optionalSuffix: "optional",
+      autoFromProxyIp: "leave empty to follow the proxy's exit IP",
+      fingerprintSaved: "Fingerprint saved",
+      fingerprintUpdated: "Fingerprint updated",
+      fingerprintDeleted: "Fingerprint deleted",
+      deleteFingerprintTitle: "Delete this fingerprint?",
+      deleteFingerprintDesc: "Tasks using it fall back to the default fingerprint.",
+      tasksFellBackToDefaultFp: "{n} task(s) fell back to the default fingerprint",
+      nameRequired: "Name is required",
+      gpuLabel: "GPU",
+      screenLabel: "Screen",
+      platformLabel: "Platform",
+      cpuCoresLabel: "CPU cores",
   };
   

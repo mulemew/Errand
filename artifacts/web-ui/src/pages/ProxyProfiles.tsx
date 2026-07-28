@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { Network, Plus, Trash2, Pencil, Loader2, RefreshCw } from "lucide-react";
+import { Network, Plus, Trash2, Pencil, Loader2, RefreshCw, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useLang } from "@/contexts/lang-context";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,11 @@ interface ExitGeo {
   configured?: boolean; direct?: boolean; ok?: boolean; error?: string;
   exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string; isp?: string; timezone?: string; at?: string;
 }
+/** A task that has this proxy selected — supplied by the list endpoint. */
+interface TaskRef {
+  id: number;
+  name: string;
+}
 interface ProxyProfile {
   id: number;
   name: string;
@@ -22,12 +28,14 @@ interface ProxyProfile {
   geoUpdatedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  usedBy?: TaskRef[];
 }
 
 const EMPTY = { name: "", url: "" };
 
 export default function ProxyProfiles() {
   const { toast } = useToast();
+  const { t } = useLang();
   const [rows, setRows] = useState<ProxyProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -38,12 +46,15 @@ export default function ProxyProfiles() {
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
   const [refreshingAll, setRefreshingAll] = useState(false);
 
+  const fill = (template: string, vars: Record<string, string | number>) =>
+    Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), template);
+
   const load = () => {
     setLoading(true);
     fetch(`${BASE}/api/proxy-profiles`)
       .then((r) => r.json())
       .then((data) => setRows(data))
-      .catch(() => toast({ title: "Failed to load", variant: "destructive" }))
+      .catch(() => toast({ title: t.failedToLoad, variant: "destructive" }))
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -53,7 +64,7 @@ export default function ProxyProfiles() {
 
   const handleSubmit = async () => {
     if (!form.name.trim() || !form.url.trim()) {
-      toast({ title: "Name and proxy URL are required", variant: "destructive" });
+      toast({ title: t.nameAndProxyUrlRequired, variant: "destructive" });
       return;
     }
     setSubmitting(true);
@@ -66,16 +77,22 @@ export default function ProxyProfiles() {
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || (await res.text()));
       const saved: ProxyProfile = await res.json();
-      // Patch the single row instead of re-fetching (and blanking) the whole list.
-      setRows((prev) => (editingId ? prev.map((r) => (r.id === saved.id ? saved : r)) : [...prev, saved]));
+      // Patch the single row instead of re-fetching (and blanking) the whole list. The
+      // server does not re-probe the exit IP inline any more, so `usedBy` is preserved
+      // from the row we already had rather than coming back with the response.
+      setRows((prev) =>
+        editingId
+          ? prev.map((r) => (r.id === saved.id ? { ...saved, usedBy: r.usedBy } : r))
+          : [...prev, { ...saved, usedBy: [] }],
+      );
       toast({
-        title: editingId ? "Proxy updated" : "Proxy saved",
-        description: "出口 IP 在后台检测中，稍后刷新或点单条的检测按钮查看",
+        title: editingId ? t.proxyUpdated : t.proxySaved,
+        description: t.exitCheckingInBackground,
         variant: "success",
       });
       setDialogOpen(false);
     } catch (err) {
-      toast({ title: "Failed to save", description: err instanceof Error ? err.message : "", variant: "destructive" });
+      toast({ title: t.failedToSave, description: err instanceof Error ? err.message : "", variant: "destructive" });
     } finally {
       setSubmitting(false);
     }
@@ -86,11 +103,15 @@ export default function ProxyProfiles() {
     try {
       const res = await fetch(`${BASE}/api/proxy-profiles/${deleteId}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
-      toast({ title: "Proxy deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到无代理` : undefined, variant: "success" });
+      toast({
+        title: t.proxyDeleted,
+        description: data.affectedTasks ? fill(t.tasksFellBackToNoProxy, { n: data.affectedTasks }) : undefined,
+        variant: "success",
+      });
       setRows((prev) => prev.filter((r) => r.id !== deleteId));
       setDeleteId(null);
     } catch {
-      toast({ title: "Failed to delete", variant: "destructive" });
+      toast({ title: t.failedToDelete, variant: "destructive" });
     }
   };
 
@@ -100,9 +121,9 @@ export default function ProxyProfiles() {
       const res = await fetch(`${BASE}/api/proxy-profiles/${id}/refresh`, { method: "POST" });
       if (!res.ok) throw new Error();
       const updated: ProxyProfile = await res.json();
-      setRows((prev) => prev.map((r) => (r.id === id ? updated : r)));
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...updated, usedBy: r.usedBy } : r)));
     } catch {
-      toast({ title: "Failed to refresh", variant: "destructive" });
+      toast({ title: t.failedToRefresh, variant: "destructive" });
     } finally {
       setRefreshingId(null);
     }
@@ -113,10 +134,11 @@ export default function ProxyProfiles() {
     try {
       const res = await fetch(`${BASE}/api/proxy-profiles/refresh-all`, { method: "POST" });
       if (!res.ok) throw new Error();
-      setRows(await res.json());
-      toast({ title: "All proxies refreshed", variant: "success" });
+      await res.json();
+      load(); // reload so usedBy comes back with the fresh geo
+      toast({ title: t.allProxiesRefreshed, variant: "success" });
     } catch {
-      toast({ title: "Failed to refresh", variant: "destructive" });
+      toast({ title: t.failedToRefresh, variant: "destructive" });
     } finally {
       setRefreshingAll(false);
     }
@@ -128,10 +150,10 @@ export default function ProxyProfiles() {
   // Country flag as an <img> (flagcdn) — Windows browsers don't render flag emoji.
   const GeoLine = ({ geo }: { geo?: ExitGeo | null }) => {
     if (!geo || (geo.configured === false && !geo.ok && !geo.direct)) {
-      return <span className="text-xs text-muted-foreground">未检测</span>;
+      return <span className="text-xs text-muted-foreground">{t.exitNotChecked}</span>;
     }
     if (!geo.ok) {
-      return <span className="text-xs text-destructive truncate">检测失败{geo.error ? `：${geo.error}` : ""}</span>;
+      return <span className="text-xs text-destructive truncate">{t.exitCheckFailed}{geo.error ? `: ${geo.error}` : ""}</span>;
     }
     const cc = geo.countryCode?.toLowerCase();
     const place = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
@@ -152,25 +174,42 @@ export default function ProxyProfiles() {
     );
   };
 
+  /** Tasks bound to this proxy. Deleting is safe — the reference is stripped and the run
+   *  falls back to no proxy — but the blast radius should be visible first. */
+  const UsageLine = ({ tasks }: { tasks?: TaskRef[] }) => {
+    if (!tasks?.length) return <span className="text-[11px] text-muted-foreground">{t.notInUse}</span>;
+    const shown = tasks.slice(0, 3).map((x) => x.name).join(", ");
+    const rest = tasks.length - 3;
+    return (
+      <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1 min-w-0 max-w-full">
+        <Link2 className="h-3 w-3 shrink-0" />
+        <span className="truncate">
+          {fill(t.inUseByTasks, { n: tasks.length })}: {shown}
+          {rest > 0 ? ` ${fill(t.andNMore, { n: rest })}` : ""}
+        </span>
+      </span>
+    );
+  };
+
+  const deleteTarget = rows.find((r) => r.id === deleteId) ?? null;
+
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Network className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Proxies</h1>
+          <h1 className="text-lg font-semibold">{t.proxiesTitle}</h1>
         </div>
         <div className="flex items-center gap-2">
           {rows.length > 0 && (
             <Button size="sm" variant="outline" className="gap-2" onClick={refreshAll} disabled={refreshingAll}>
-              <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />刷新全部
+              <RefreshCw className={`h-4 w-4 ${refreshingAll ? "animate-spin" : ""}`} />{t.refreshExitAll}
             </Button>
           )}
-          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add proxy</Button>
+          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />{t.addProxy}</Button>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">
-        Reusable exit proxies. Add them once, then pick one per task from a dropdown. WARP is configured per task, not here.
-      </p>
+      <p className="text-sm text-muted-foreground">{t.proxiesIntro}</p>
 
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
@@ -178,22 +217,23 @@ export default function ProxyProfiles() {
         <Card className="border-dashed border-border">
           <CardContent className="flex flex-col items-center justify-center py-12 gap-3 text-center">
             <Network className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No proxies yet.</p>
-            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />Add proxy</Button>
+            <p className="text-sm text-muted-foreground">{t.noProxiesYet}</p>
+            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />{t.addProxy}</Button>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-2">
           {rows.map((p) => (
             <Card key={p.id} className="border-border shadow-sm">
-              <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4">
+              <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4 gap-3">
                 <div className="min-w-0 space-y-1">
                   <CardTitle className="text-sm font-semibold">{p.name}</CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
                   <GeoLine geo={p.exitGeo} />
+                  <UsageLine tasks={p.usedBy} />
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title="刷新出口信息" onClick={() => refreshOne(p.id)} disabled={refreshingId === p.id || refreshingAll}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title={t.refreshExitOne} onClick={() => refreshOne(p.id)} disabled={refreshingId === p.id || refreshingAll}>
                     <RefreshCw className={`h-4 w-4 ${refreshingId === p.id ? "animate-spin" : ""}`} />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
@@ -207,22 +247,22 @@ export default function ProxyProfiles() {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>{editingId ? "Edit proxy" : "Add proxy"}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? t.editProxy : t.addProxy}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. US residential #1" />
+              <Label>{t.fieldName}</Label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="US residential #1" />
             </div>
             <div className="space-y-1.5">
-              <Label>Proxy URL</Label>
+              <Label>{t.proxyUrlLabel}</Label>
               <Input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="socks5://user:pass@host:port" className="font-mono" />
-              <p className="text-xs text-muted-foreground">Scheme required: http/https/socks5/vless/vmess/trojan/…</p>
+              <p className="text-xs text-muted-foreground">{t.proxyUrlHint}</p>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>{t.cancel}</Button>
             <Button onClick={handleSubmit} disabled={submitting} className="gap-2">
-              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? "Save" : "Add"}
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? t.actionSave : t.actionAdd}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -231,12 +271,23 @@ export default function ProxyProfiles() {
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete proxy?</AlertDialogTitle>
-            <AlertDialogDescription>Tasks using it will fall back to no proxy.</AlertDialogDescription>
+            <AlertDialogTitle>{t.deleteProxyTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t.deleteProxyDesc}
+              {deleteTarget && deleteTarget.usedBy && deleteTarget.usedBy.length > 0 && (
+                <span className="mt-2 block text-amber-600 dark:text-amber-400">
+                  {t.deleteInUseWarning}
+                  <span className="mt-1 block font-mono text-xs">
+                    {deleteTarget.usedBy.slice(0, 8).map((x) => x.name).join(", ")}
+                    {deleteTarget.usedBy.length > 8 ? ` ${fill(t.andNMore, { n: deleteTarget.usedBy.length - 8 })}` : ""}
+                  </span>
+                </span>
+              )}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+            <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{t.actionDelete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
