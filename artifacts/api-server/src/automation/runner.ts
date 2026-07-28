@@ -157,11 +157,21 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     return p;
   }
 
-    /** Live concurrency status for the Settings UI — summed across all provider pools. */
+    /** Live concurrency status for the Settings UI — summed across all provider pools.
+     *  (So the number there is the whole fleet, not one backend.) */
     export function getConcurrencyStatus(): { running: number; queued: number } {
       let running = 0, queued = 0;
       for (const p of _pools.values()) { running += p.current; queued += p.queue.length; }
       return { running, queued };
+    }
+
+    /** Per-pool breakdown, keyed the way the pools are: "p<id>" for a named provider,
+     *  "default" for tasks that did not pick one. The summed figure alone cannot tell you
+     *  WHICH backend is saturated, which is the only actionable part. */
+    export function getPoolStatus(): Record<string, { running: number; queued: number }> {
+      const out: Record<string, { running: number; queued: number }> = {};
+      for (const [key, p] of _pools.entries()) out[key] = { running: p.current, queued: p.queue.length };
+      return out;
     }
 
     /** Running count for one provider pool (drives the "queued" pre-check). */

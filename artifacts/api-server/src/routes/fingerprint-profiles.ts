@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, fingerprintProfilesTable, tasksTable, eq, sql } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { z } from "zod";
+import { loadUsageMaps } from "../lib/profileUsage";
 
 const router: IRouter = Router();
 
@@ -21,7 +22,8 @@ const UpdateBody = z.object({
 
 router.get("/fingerprint-profiles", async (_req, res): Promise<void> => {
   const rows = await db.select().from(fingerprintProfilesTable).orderBy(fingerprintProfilesTable.name);
-  res.json(rows);
+  const usage = await loadUsageMaps();
+  res.json(rows.map((r) => ({ ...r, usedBy: usage.fingerprint.get(r.id) ?? [] })));
 });
 
 // Proxy to the camoufox-proxy sidecar's /generate (the browser is internal-only). The UI

@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { resolveExitGeo } from "./tasks";
 import { resolveProxyType } from "../automation/proxy-manager";
 import { z } from "zod";
+import { loadUsageMaps } from "../lib/profileUsage";
 
 const router: IRouter = Router();
 
@@ -44,7 +45,8 @@ async function refreshProfileGeo(id: number) {
 
 router.get("/proxy-profiles", async (_req, res): Promise<void> => {
   const rows = await db.select().from(proxyProfilesTable).orderBy(proxyProfilesTable.name);
-  res.json(rows);
+  const usage = await loadUsageMaps();
+  res.json(rows.map((r) => ({ ...r, usedBy: usage.proxy.get(r.id) ?? [] })));
 });
 
 router.post("/proxy-profiles", async (req, res): Promise<void> => {

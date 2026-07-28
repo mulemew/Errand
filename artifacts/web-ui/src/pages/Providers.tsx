@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle, Star } from "lucide-react";
+import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle, Star, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useLang } from "@/contexts/lang-context";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
@@ -13,6 +14,11 @@ import { Switch } from "@/components/ui/switch";
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 type PType = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
+/** A task that has this provider selected — supplied by the list endpoint. */
+interface TaskRef {
+  id: number;
+  name: string;
+}
 interface Provider {
   id: number;
   name: string;
@@ -20,7 +26,6 @@ interface Provider {
   url: string;
   concurrency: number;
   enabled: boolean;
-  /** The backend used by tasks left on "默认" — exactly one provider carries it. */
   isDefault: boolean;
   stealth: boolean | null;
   blockAds: boolean | null;
@@ -33,6 +38,9 @@ interface Provider {
   healthy: boolean | null;
   lastError: string | null;
   lastCheckedAt: string | null;
+  usedBy: TaskRef[];
+  running: number;
+  queued: number;
 }
 
 // Which params each type honours (mirrors PROVIDER_TYPE_PARAMS on the server).
@@ -47,6 +55,7 @@ const isBrowserless = (t: PType) => t === "playwright" || t === "puppeteer";
 
 export default function Providers() {
   const { toast } = useToast();
+  const { t } = useLang();
   const [rows, setRows] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -56,14 +65,17 @@ export default function Providers() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [checkingId, setCheckingId] = useState<number | null>(null);
   const [checkingAll, setCheckingAll] = useState(false);
-  const [defaultingId, setDefaultingId] = useState<number | null>(null);
+  const [settingDefaultId, setSettingDefaultId] = useState<number | null>(null);
+
+  const fill = (template: string, vars: Record<string, string | number>) =>
+    Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), template);
 
   const load = () => {
     setLoading(true);
     fetch(`${BASE}/api/providers`)
       .then((r) => r.json())
       .then((data) => setRows(data))
-      .catch(() => toast({ title: "Failed to load", variant: "destructive" }))
+      .catch(() => toast({ title: t.failedToLoad, variant: "destructive" }))
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -98,7 +110,7 @@ export default function Providers() {
   };
 
   const handleSubmit = async () => {
-    if (!form.name.trim() || !form.url.trim()) { toast({ title: "Name and URL are required", variant: "destructive" }); return; }
+    if (!form.name.trim() || !form.url.trim()) { toast({ title: t.nameAndUrlRequired, variant: "destructive" }); return; }
     setSubmitting(true);
     try {
       const url = editingId ? `${BASE}/api/providers/${editingId}` : `${BASE}/api/providers`;
@@ -108,11 +120,11 @@ export default function Providers() {
         : { name: form.name.trim(), type: form.type, url: form.url.trim(), concurrency: form.concurrency, enabled: form.enabled, ...paramPayload() };
       const res = await fetch(url, { method: editingId ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || (await res.text()));
-      toast({ title: editingId ? "Provider updated" : "Provider saved", variant: "success" });
+      toast({ title: editingId ? t.providerUpdated : t.providerSaved, variant: "success" });
       setDialogOpen(false);
       load();
     } catch (err) {
-      toast({ title: "Failed to save", description: err instanceof Error ? err.message : "", variant: "destructive" });
+      toast({ title: t.failedToSave, description: err instanceof Error ? err.message : "", variant: "destructive" });
     } finally { setSubmitting(false); }
   };
 
@@ -121,10 +133,26 @@ export default function Providers() {
     try {
       const res = await fetch(`${BASE}/api/providers/${deleteId}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({} as { affectedTasks?: number }));
-      toast({ title: "Provider deleted", description: data.affectedTasks ? `${data.affectedTasks} 个任务已回落到默认后端` : undefined, variant: "success" });
+      toast({
+        title: t.providerDeleted,
+        description: data.affectedTasks ? fill(t.tasksFellBackToDefault, { n: data.affectedTasks }) : undefined,
+        variant: "success",
+      });
       setDeleteId(null);
       load();
-    } catch { toast({ title: "Failed to delete", variant: "destructive" }); }
+    } catch { toast({ title: t.failedToDelete, variant: "destructive" }); }
+  };
+
+  const makeDefault = async (id: number) => {
+    setSettingDefaultId(id);
+    try {
+      const res = await fetch(`${BASE}/api/providers/${id}/default`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "");
+      // The endpoint returns the bare rows; reload so usedBy / live counters come with them.
+      load();
+    } catch (err) {
+      toast({ title: t.failedToSave, description: err instanceof Error ? err.message : "", variant: "destructive" });
+    } finally { setSettingDefaultId(null); }
   };
 
   const checkOne = async (id: number) => {
@@ -133,8 +161,9 @@ export default function Providers() {
       const res = await fetch(`${BASE}/api/providers/${id}/health`, { method: "POST" });
       if (!res.ok) throw new Error();
       const updated: Provider = await res.json();
-      setRows((prev) => prev.map((r) => (r.id === id ? updated : r)));
-    } catch { toast({ title: "Health check failed", variant: "destructive" }); }
+      // Keep the list-only fields the health endpoint does not return.
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...updated, usedBy: r.usedBy, running: r.running, queued: r.queued } : r)));
+    } catch { toast({ title: t.healthCheckFailed, variant: "destructive" }); }
     finally { setCheckingId(null); }
   };
 
@@ -143,28 +172,35 @@ export default function Providers() {
     try {
       const res = await fetch(`${BASE}/api/providers/health-all`, { method: "POST" });
       if (!res.ok) throw new Error();
-      setRows(await res.json());
-      toast({ title: "Health refreshed", variant: "success" });
-    } catch { toast({ title: "Health check failed", variant: "destructive" }); }
+      await res.json();
+      load();
+    } catch { toast({ title: t.healthCheckFailed, variant: "destructive" }); }
     finally { setCheckingAll(false); }
-  };
-
-  const setDefault = async (id: number) => {
-    setDefaultingId(id);
-    try {
-      const res = await fetch(`${BASE}/api/providers/${id}/default`, { method: "POST" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "");
-      setRows(await res.json());
-      toast({ title: "已设为默认后端", description: "任务里选「默认」的都会走这个 provider", variant: "success" });
-    } catch (err) {
-      toast({ title: "设置默认失败", description: err instanceof Error ? err.message : "", variant: "destructive" });
-    } finally { setDefaultingId(null); }
   };
 
   const maskUrl = (u: string) => u.replace(/(:\/\/[^:@/]+:)[^@/]+@/, "$1••••@");
 
   const HealthDot = ({ h }: { h: boolean | null }) =>
     h === true ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : h === false ? <XCircle className="h-4 w-4 text-destructive" /> : <HelpCircle className="h-4 w-4 text-muted-foreground" />;
+
+  /** Tasks bound to this provider. Deleting is safe — the reference is stripped and the
+   *  runner falls back — but you should be able to SEE the blast radius first. */
+  const UsageLine = ({ tasks }: { tasks: TaskRef[] }) => {
+    if (!tasks?.length) return <span className="text-[11px] text-muted-foreground">{t.notInUse}</span>;
+    const shown = tasks.slice(0, 3).map((x) => x.name).join(", ");
+    const rest = tasks.length - 3;
+    return (
+      <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1 min-w-0 max-w-full">
+        <Link2 className="h-3 w-3 shrink-0" />
+        <span className="truncate">
+          {fill(t.inUseByTasks, { n: tasks.length })}: {shown}
+          {rest > 0 ? ` ${fill(t.andNMore, { n: rest })}` : ""}
+        </span>
+      </span>
+    );
+  };
+
+  const deleteTarget = rows.find((r) => r.id === deleteId) ?? null;
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4">
@@ -176,22 +212,13 @@ export default function Providers() {
         <div className="flex items-center gap-2">
           {rows.length > 0 && (
             <Button size="sm" variant="outline" className="gap-2" onClick={checkAll} disabled={checkingAll}>
-              <RefreshCw className={`h-4 w-4 ${checkingAll ? "animate-spin" : ""}`} />检测全部
+              <RefreshCw className={`h-4 w-4 ${checkingAll ? "animate-spin" : ""}`} />{t.checkAll}
             </Button>
           )}
-          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />Add provider</Button>
+          <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />{t.addProvider}</Button>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground">
-        浏览器后端全部在这里配置（引擎、地址、Stealth、分辨率…）。建好后在任务里下拉选择用哪个跑，
-        每个 provider 有自己的并发上限(例:sb=2、playwright=3),各管各的。点 ★ 把某个设为
-        <b>默认后端</b>：任务里选「默认」的都走它。
-      </p>
-      {!loading && rows.length > 0 && !rows.some((r) => r.isDefault && r.enabled) && (
-        <p className="text-sm text-amber-500">
-          还没有默认 provider —— 选「默认」的任务会回落到环境变量里的后端。点某一行的 ★ 设一个。
-        </p>
-      )}
+      <p className="text-sm text-muted-foreground">{t.providersIntro}</p>
 
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
@@ -199,43 +226,45 @@ export default function Providers() {
         <Card className="border-dashed border-border">
           <CardContent className="flex flex-col items-center justify-center py-12 gap-3 text-center">
             <Server className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">还没有 provider —— 任务会回落到环境变量里的后端。加一个吧。</p>
-            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />Add provider</Button>
+            <p className="text-sm text-muted-foreground">{t.noProvidersYet}</p>
+            <Button size="sm" variant="outline" onClick={openCreate} className="gap-2 mt-2"><Plus className="h-4 w-4" />{t.addProvider}</Button>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-2">
           {rows.map((p) => (
             <Card key={p.id} className="border-border shadow-sm">
-              <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4">
+              <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4 gap-3">
                 <div className="min-w-0 space-y-1">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
                     <HealthDot h={p.healthy} />
                     {p.name}
                     <span className="text-[10px] font-mono uppercase text-muted-foreground border border-border rounded px-1 py-0.5">{p.type}</span>
-                    <span className="text-[10px] text-primary">并发 {p.concurrency}</span>
+                    <span className="text-[10px] text-primary">{t.concurrencyShort} {p.concurrency}</span>
                     {p.isDefault && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 border border-amber-500/40 rounded px-1 py-0.5">
-                        <Star className="h-3 w-3 fill-current" />默认
+                      <span className="text-[10px] inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 font-medium text-primary" title={t.defaultProviderHint}>
+                        <Star className="h-2.5 w-2.5 fill-current" />{t.defaultBadge}
                       </span>
                     )}
-                    {!p.enabled && <span className="text-[10px] text-muted-foreground">(disabled)</span>}
+                    {!p.enabled && <span className="text-[10px] text-muted-foreground">({t.disabledSuffix})</span>}
+                    {(p.running > 0 || p.queued > 0) && (
+                      <span className={`text-[10px] font-mono ${p.queued > 0 ? "text-amber-500" : "text-muted-foreground"}`}>
+                        {fill(t.liveRunningQueued, { r: p.running, q: p.queued })}
+                      </span>
+                    )}
                   </CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
-                  {p.healthy === false && p.lastError && <p className="text-[11px] text-destructive truncate">检测失败:{p.lastError}</p>}
+                  <UsageLine tasks={p.usedBy} />
+                  {p.healthy === false && p.lastError && <p className="text-[11px] text-destructive truncate">{t.healthCheckFailed}: {p.lastError}</p>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={"h-7 w-7 " + (p.isDefault ? "text-amber-500" : "text-muted-foreground")}
-                    title={p.isDefault ? "已是默认后端" : p.enabled ? "设为默认后端" : "停用的 provider 不能当默认"}
-                    onClick={() => setDefault(p.id)}
-                    disabled={p.isDefault || !p.enabled || defaultingId === p.id}
-                  >
-                    {defaultingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Star className={"h-4 w-4 " + (p.isDefault ? "fill-current" : "")} />}
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title="检测" onClick={() => checkOne(p.id)} disabled={checkingId === p.id || checkingAll}>
+                  {!p.isDefault && p.enabled && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title={t.setAsDefault}
+                      onClick={() => makeDefault(p.id)} disabled={settingDefaultId === p.id}>
+                      <Star className={`h-4 w-4 ${settingDefaultId === p.id ? "animate-pulse" : ""}`} />
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title={t.checkOne} onClick={() => checkOne(p.id)} disabled={checkingId === p.id || checkingAll}>
                     <RefreshCw className={`h-4 w-4 ${checkingId === p.id ? "animate-spin" : ""}`} />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
@@ -249,15 +278,15 @@ export default function Providers() {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>{editingId ? "Edit provider" : "Add provider"}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? t.editProvider : t.addProvider}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. browserless #1" />
+              <Label>{t.fieldName}</Label>
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="browserless #1" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Type</Label>
+                <Label>{t.fieldType}</Label>
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as PType })} disabled={!!editingId}>
                   <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -269,7 +298,7 @@ export default function Providers() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>并发上限</Label>
+                <Label>{t.concurrencyLimit}</Label>
                 <Input type="number" min={1} max={64} value={form.concurrency}
                   onChange={(e) => setForm({ ...form, concurrency: Math.max(1, parseInt(e.target.value || "1", 10)) })} />
               </div>
@@ -280,7 +309,7 @@ export default function Providers() {
                 placeholder={isBrowserless(form.type) ? "ws://browserless:3000?token=…" : form.type === "camoufox" ? "http://camoufox-proxy:7318" : "http://cf-proxy:7317"}
                 className="font-mono" />
               <p className="text-xs text-muted-foreground">
-                {isBrowserless(form.type) ? "CDP WebSocket 端点 (ws:// / wss://)" : "sidecar HTTP 地址 (http:// / https://),健康检查 GET /health"}
+                {isBrowserless(form.type) ? t.urlHintCdp : t.urlHintSidecar}
               </p>
             </div>
 
@@ -288,27 +317,27 @@ export default function Providers() {
             <div className="rounded-md border border-border divide-y divide-border">
               {CAPS[form.type].stealth && (
                 <div className="flex items-center justify-between px-3 py-2">
-                  <Label className="text-sm">Stealth 模式</Label>
+                  <Label className="text-sm">{t.stealthMode}</Label>
                   <Switch checked={form.stealth} onCheckedChange={(v) => setForm({ ...form, stealth: v })} />
                 </div>
               )}
               {CAPS[form.type].blockAds && (
                 <div className="flex items-center justify-between px-3 py-2">
-                  <Label className="text-sm">屏蔽广告</Label>
+                  <Label className="text-sm">{t.blockAdsLabel}</Label>
                   <Switch checked={form.blockAds} onCheckedChange={(v) => setForm({ ...form, blockAds: v })} />
                 </div>
               )}
               {CAPS[form.type].ignoreHttps && (
                 <div className="flex items-center justify-between px-3 py-2">
-                  <Label className="text-sm">忽略 HTTPS 错误</Label>
+                  <Label className="text-sm">{t.ignoreHttpsErrors}</Label>
                   <Switch checked={form.ignoreHttps} onCheckedChange={(v) => setForm({ ...form, ignoreHttps: v })} />
                 </div>
               )}
               {CAPS[form.type].blockWebrtc && (
                 <div className="flex items-center justify-between px-3 py-2 gap-3">
                   <div>
-                    <Label className="text-sm">屏蔽 WebRTC</Label>
-                    <p className="text-[10px] text-muted-foreground">建议开;关掉会让 WebRTC 泄露一个可能不一致的 IP</p>
+                    <Label className="text-sm">{t.blockWebrtcLabel}</Label>
+                    <p className="text-[10px] text-muted-foreground">{t.blockWebrtcHint}</p>
                   </div>
                   <Switch checked={form.blockWebrtc} onCheckedChange={(v) => setForm({ ...form, blockWebrtc: v })} />
                 </div>
@@ -316,40 +345,40 @@ export default function Providers() {
               {CAPS[form.type].humanize && (
                 <div className="flex items-center justify-between px-3 py-2 gap-3">
                   <div>
-                    <Label className="text-sm">Humanize（拟人光标）</Label>
-                    <p className="text-[10px] text-muted-foreground">更像真人但更慢(camoufox 默认关)</p>
+                    <Label className="text-sm">{t.humanizeLabel}</Label>
+                    <p className="text-[10px] text-muted-foreground">{t.humanizeHint}</p>
                   </div>
                   <Switch checked={form.humanize} onCheckedChange={(v) => setForm({ ...form, humanize: v })} />
                 </div>
               )}
               {CAPS[form.type].sessionTimeout && (
                 <div className="flex items-center justify-between px-3 py-2 gap-3">
-                  <Label className="text-sm shrink-0">会话超时（分钟）</Label>
+                  <Label className="text-sm shrink-0">{t.sessionTimeoutMinutes}</Label>
                   <Input type="number" min={1} value={form.timeoutMin} placeholder="30"
                     onChange={(e) => setForm({ ...form, timeoutMin: e.target.value })} className="w-28 text-sm" />
                 </div>
               )}
               {CAPS[form.type].viewport && (
                 <div className="flex items-center justify-between px-3 py-2 gap-3">
-                  <Label className="text-sm shrink-0">默认分辨率</Label>
-                  <Input value={form.resolution} placeholder="留空 / 1920x1080"
+                  <Label className="text-sm shrink-0">{t.defaultResolution}</Label>
+                  <Input value={form.resolution} placeholder="1920x1080"
                     onChange={(e) => setForm({ ...form, resolution: e.target.value })} className="w-36 text-sm font-mono" />
                 </div>
               )}
             </div>
             {CAPS[form.type].viewport && (
-              <p className="text-[11px] text-muted-foreground -mt-1">分辨率只是默认值;选了指纹档案时以指纹的屏幕为准。</p>
+              <p className="text-[11px] text-muted-foreground -mt-1">{t.resolutionHint}</p>
             )}
 
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
-              <Label className="text-sm">Enabled</Label>
+              <Label className="text-sm">{t.enabledLabel}</Label>
               <Switch checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>{t.cancel}</Button>
             <Button onClick={handleSubmit} disabled={submitting} className="gap-2">
-              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? "Save" : "Add"}
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? t.actionSave : t.actionAdd}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -358,12 +387,24 @@ export default function Providers() {
       <AlertDialog open={deleteId !== null} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete provider?</AlertDialogTitle>
-            <AlertDialogDescription>用到它的任务会回落到默认 provider（没有默认时用环境变量里的后端）。</AlertDialogDescription>
+            <AlertDialogTitle>{t.deleteProviderTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t.deleteProviderDesc}
+              {/* Name the tasks that will be reconfigured — the whole point of tracking usage. */}
+              {deleteTarget && deleteTarget.usedBy.length > 0 && (
+                <span className="mt-2 block text-amber-600 dark:text-amber-400">
+                  {t.deleteInUseWarning}
+                  <span className="mt-1 block font-mono text-xs">
+                    {deleteTarget.usedBy.slice(0, 8).map((x) => x.name).join(", ")}
+                    {deleteTarget.usedBy.length > 8 ? ` ${fill(t.andNMore, { n: deleteTarget.usedBy.length - 8 })}` : ""}
+                  </span>
+                </span>
+              )}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+            <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{t.actionDelete}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

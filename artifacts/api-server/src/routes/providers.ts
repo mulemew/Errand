@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import { db, providersTable, tasksTable, eq, sql } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { checkProviderHealth, refreshProviderHealth } from "../automation/providers";
+import { getPoolStatus } from "../automation/runner";
+import { loadUsageMaps } from "../lib/profileUsage";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -51,7 +53,17 @@ function paramCols(d: Record<string, unknown>): Record<string, unknown> {
 
 router.get("/providers", async (_req, res): Promise<void> => {
   const rows = await db.select().from(providersTable).orderBy(providersTable.type, providersTable.name);
-  res.json(rows);
+  const [usage, pools] = [await loadUsageMaps(), getPoolStatus()];
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      // Which tasks run on this backend — shown on the card and in the delete dialog.
+      usedBy: usage.provider.get(r.id) ?? [],
+      // This provider's own slice of the concurrency, since each provider has its own pool.
+      running: pools[`p${r.id}`]?.running ?? 0,
+      queued: pools[`p${r.id}`]?.queued ?? 0,
+    })),
+  );
 });
 
 router.post("/providers", async (req, res): Promise<void> => {

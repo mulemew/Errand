@@ -352,6 +352,51 @@ export interface Translations {
       importJson: string;
       clearAll: string;
       noStepsAdded: string;
+      // ── Shared: profile / provider usage ──────────────────────────────────
+      inUseByTasks: string;
+      notInUse: string;
+      deleteInUseWarning: string;
+      andNMore: string;
+      // ── Providers page ───────────────────────────────────────────────────
+      providersIntro: string;
+      addProvider: string;
+      editProvider: string;
+      noProvidersYet: string;
+      checkAll: string;
+      checkOne: string;
+      healthCheckFailed: string;
+      concurrencyLimit: string;
+      concurrencyShort: string;
+      liveRunningQueued: string;
+      setAsDefault: string;
+      defaultBadge: string;
+      defaultProviderHint: string;
+      urlHintCdp: string;
+      urlHintSidecar: string;
+      blockAdsLabel: string;
+      ignoreHttpsErrors: string;
+      blockWebrtcLabel: string;
+      blockWebrtcHint: string;
+      humanizeLabel: string;
+      humanizeHint: string;
+      sessionTimeoutMinutes: string;
+      defaultResolution: string;
+      resolutionHint: string;
+      enabledLabel: string;
+      disabledSuffix: string;
+      deleteProviderTitle: string;
+      deleteProviderDesc: string;
+      providerSaved: string;
+      providerUpdated: string;
+      providerDeleted: string;
+      tasksFellBackToDefault: string;
+      nameAndUrlRequired: string;
+      // ── Generic UI atoms ─────────────────────────────────────────────────
+      fieldName: string;
+      fieldType: string;
+      actionSave: string;
+      actionAdd: string;
+      actionDelete: string;
   }
 
   export const zh: Translations = {
@@ -685,6 +730,49 @@ export interface Translations {
       importJson: "导入 JSON",
       clearAll: "清空全部",
       noStepsAdded: "尚未添加步骤",
+      inUseByTasks: "{n} 个任务在用",
+      notInUse: "未被任务使用",
+      deleteInUseWarning: "以下任务正在使用它，删除后这些任务会回落到默认设置：",
+      andNMore: "等 {n} 个",
+      providersIntro:
+        "具名浏览器后端。建好后在任务里下拉选择用哪个跑。每个后端有自己的并发上限，各管各的。任务选「默认」时用这里标记为默认的那个。",
+      addProvider: "添加后端",
+      editProvider: "编辑后端",
+      noProvidersYet: "还没有后端，先添加一个。",
+      checkAll: "检测全部",
+      checkOne: "检测",
+      healthCheckFailed: "检测失败",
+      concurrencyLimit: "并发上限",
+      concurrencyShort: "并发",
+      liveRunningQueued: "运行中 {r} · 排队 {q}",
+      setAsDefault: "设为默认",
+      defaultBadge: "默认",
+      defaultProviderHint: "任务里选「默认」时使用这个后端",
+      urlHintCdp: "CDP WebSocket 端点（ws:// 或 wss://）",
+      urlHintSidecar: "sidecar HTTP 地址（http:// 或 https://），健康检查 GET /health",
+      blockAdsLabel: "屏蔽广告",
+      ignoreHttpsErrors: "忽略 HTTPS 错误",
+      blockWebrtcLabel: "屏蔽 WebRTC",
+      blockWebrtcHint: "建议开启；关掉会让 WebRTC 泄露一个可能与代理不一致的 IP",
+      humanizeLabel: "Humanize（拟人光标）",
+      humanizeHint: "更像真人但更慢（Camoufox 原生默认关闭）",
+      sessionTimeoutMinutes: "会话超时（分钟）",
+      defaultResolution: "默认分辨率",
+      resolutionHint: "分辨率只是默认值；选了指纹档案时以指纹自带的屏幕为准。",
+      enabledLabel: "启用",
+      disabledSuffix: "已停用",
+      deleteProviderTitle: "删除这个后端？",
+      deleteProviderDesc: "使用它的任务会回落到默认后端。",
+      providerSaved: "后端已保存",
+      providerUpdated: "后端已更新",
+      providerDeleted: "后端已删除",
+      tasksFellBackToDefault: "{n} 个任务已回落到默认后端",
+      nameAndUrlRequired: "名称和 URL 不能为空",
+      fieldName: "名称",
+      fieldType: "类型",
+      actionSave: "保存",
+      actionAdd: "添加",
+      actionDelete: "删除",
   };
 
   export const en: Translations = {
@@ -1017,5 +1105,48 @@ export interface Translations {
       importJson: "Import JSON",
       clearAll: "Clear all",
       noStepsAdded: "No steps added yet",
+      inUseByTasks: "Used by {n} task(s)",
+      notInUse: "Not used by any task",
+      deleteInUseWarning: "These tasks are using it and will fall back to their defaults:",
+      andNMore: "and {n} more",
+      providersIntro:
+        "Named browser backends. Pick one per task from a dropdown. Each backend has its own concurrency limit, independent of the others. Tasks set to \"Default\" use whichever one is marked default here.",
+      addProvider: "Add provider",
+      editProvider: "Edit provider",
+      noProvidersYet: "No providers yet — add one to get started.",
+      checkAll: "Check all",
+      checkOne: "Check",
+      healthCheckFailed: "Health check failed",
+      concurrencyLimit: "Concurrency limit",
+      concurrencyShort: "conc.",
+      liveRunningQueued: "{r} running · {q} queued",
+      setAsDefault: "Set as default",
+      defaultBadge: "Default",
+      defaultProviderHint: "Used by tasks set to \"Default\"",
+      urlHintCdp: "CDP WebSocket endpoint (ws:// or wss://)",
+      urlHintSidecar: "Sidecar HTTP address (http:// or https://), health-checked with GET /health",
+      blockAdsLabel: "Block ads",
+      ignoreHttpsErrors: "Ignore HTTPS errors",
+      blockWebrtcLabel: "Block WebRTC",
+      blockWebrtcHint: "Recommended. Leaving it off lets WebRTC leak an IP that may not match the proxy.",
+      humanizeLabel: "Humanize (human-like cursor)",
+      humanizeHint: "More human, but slower (Camoufox's own default is off)",
+      sessionTimeoutMinutes: "Session timeout (minutes)",
+      defaultResolution: "Default resolution",
+      resolutionHint: "Only a default — when a fingerprint profile is selected, its own screen wins.",
+      enabledLabel: "Enabled",
+      disabledSuffix: "disabled",
+      deleteProviderTitle: "Delete this provider?",
+      deleteProviderDesc: "Tasks using it fall back to the default backend.",
+      providerSaved: "Provider saved",
+      providerUpdated: "Provider updated",
+      providerDeleted: "Provider deleted",
+      tasksFellBackToDefault: "{n} task(s) fell back to the default backend",
+      nameAndUrlRequired: "Name and URL are required",
+      fieldName: "Name",
+      fieldType: "Type",
+      actionSave: "Save",
+      actionAdd: "Add",
+      actionDelete: "Delete",
   };
   
