@@ -291,6 +291,40 @@ function NextRunBadge({ nextRunAt }: { nextRunAt: string | null }) {
   const VALID_FILTERS = ["running", "queued", "success", "failed", "needs_attention"] as const;
 type FilterValue = typeof VALID_FILTERS[number];
 
+/**
+ * One reorderable row. Each item needs its own useDragControls (hooks cannot run in a
+ * loop), and dragListener={false} means only the grip starts a drag.
+ *
+ * Declared at MODULE level on purpose. Defined inside Home it was a new component type on
+ * every render — React compares element types by identity, so each of the list's polls
+ * (last-runs every 5 s, the task list, next-runs, recent-runs) unmounted and remounted
+ * every row. That is the flicker: the DOM was being replaced under the pointer, taking the
+ * hover state and any running animation with it.
+ */
+function DraggableTaskRow({
+  id,
+  enabled,
+  children,
+}: {
+  id: number;
+  enabled: boolean;
+  children: (startDrag: (e: React.PointerEvent) => void) => React.ReactNode;
+}) {
+  const controls = useDragControls();
+  return (
+    <Reorder.Item
+      value={id}
+      dragListener={false}
+      dragControls={controls}
+      transition={{ type: "spring", stiffness: 600, damping: 40 }}
+      whileDrag={{ scale: 1.01, zIndex: 30, boxShadow: "0 8px 24px rgba(0,0,0,0.28)" }}
+      className="relative"
+    >
+      {children((e) => { if (enabled) controls.start(e); })}
+    </Reorder.Item>
+  );
+}
+
 export default function Home() {
   const { t } = useLang();
   const [pollingInterval] = usePollingInterval();
@@ -717,32 +751,6 @@ export default function Home() {
       toast({ title: t.failedToDelete, variant: "destructive" });
     }
   };
-
-  /** One reorderable row. Each item needs its own useDragControls (hooks cannot run in a
-   *  loop), and dragListener={false} means only the grip starts a drag. */
-  function DraggableTaskRow({
-    id,
-    enabled,
-    children,
-  }: {
-    id: number;
-    enabled: boolean;
-    children: (startDrag: (e: React.PointerEvent) => void) => React.ReactNode;
-  }) {
-    const controls = useDragControls();
-    return (
-      <Reorder.Item
-        value={id}
-        dragListener={false}
-        dragControls={controls}
-        transition={{ type: "spring", stiffness: 600, damping: 40 }}
-        whileDrag={{ scale: 1.01, zIndex: 30, boxShadow: "0 8px 24px rgba(0,0,0,0.28)" }}
-        className="relative"
-      >
-        {children((e) => { if (enabled) controls.start(e); })}
-      </Reorder.Item>
-    );
-  }
 
   /** One task row. Extracted from the list so grouped sections can render the exact
    *  same card — the markup below is unchanged from the flat list it replaced. */
