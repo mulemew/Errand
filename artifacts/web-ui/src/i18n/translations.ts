@@ -447,6 +447,9 @@ export interface Translations {
       screenLabel: string;
       platformLabel: string;
       cpuCoresLabel: string;
+      // ── Dashboard run squares ────────────────────────────────────────────
+      runDurationSuffix: string;
+      last24hOnly: string;
   }
 
   export const zh: Translations = {
@@ -872,6 +875,8 @@ export interface Translations {
       screenLabel: "屏幕",
       platformLabel: "平台",
       cpuCoresLabel: "CPU 核心",
+      runDurationSuffix: "耗时",
+      last24hOnly: "仅显示 24 小时内",
   };
 
   export const en: Translations = {
@@ -1298,5 +1303,7 @@ export interface Translations {
       screenLabel: "Screen",
       platformLabel: "Platform",
       cpuCoresLabel: "CPU cores",
+      runDurationSuffix: "took",
+      last24hOnly: "last 24h only",
   };
   

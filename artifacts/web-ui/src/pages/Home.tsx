@@ -143,27 +143,40 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
    * identical to "10 passes". These make a one-off failure obvious without opening
    * the task; hover gives the timestamp and duration.
    */
-  function RunSquares({ runs }: { runs: RecentRun[] }) {
+  function RunSquares({ runs, dimOutside }: { runs: RecentRun[]; dimOutside?: (r: RecentRun) => boolean }) {
+    const { t } = useLang();
     if (!runs.length) return null;
-    const failed = runs.filter((r) => !r.success).length;
     return (
-      <TooltipProvider delayDuration={100}>
-        <span className="flex items-center gap-[3px]" title={`最近 ${runs.length} 次：${runs.length - failed} 成功 / ${failed} 失败`}>
-          {runs.map((r, i) => (
-            <Tooltip key={i}>
-              <TooltipTrigger asChild>
-                <span
-                  className={`inline-block h-3 w-[6px] rounded-[1px] ${r.success ? "bg-green-500/70" : "bg-destructive"}`}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                <p className="text-xs font-mono">
-                  {r.success ? "✓ 成功" : "✗ 失败"} · {format(new Date(r.runAt), "MM-dd HH:mm")}
-                  {r.durationMs != null && ` · ${(r.durationMs / 1000).toFixed(1)}s`}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-          ))}
+      // skipDelayDuration keeps the tooltip following the pointer from one square to the
+      // next: without it every square re-serves its own open delay, so sliding along the
+      // row showed nothing. The wrapper's native `title` is gone for the same reason — a
+      // browser tooltip on the parent competes with (and wins against) these.
+      <TooltipProvider delayDuration={120} skipDelayDuration={600}>
+        <span className="flex items-center gap-[3px]">
+          {runs.map((r, i) => {
+            const dimmed = dimOutside?.(r) ?? false;
+            return (
+              <Tooltip key={`${r.runAt}-${i}`}>
+                <TooltipTrigger asChild>
+                  <span
+                    className={
+                      "inline-block h-3 w-[6px] rounded-[1px] cursor-default origin-bottom " +
+                      "transition-transform duration-100 hover:scale-y-[1.35] hover:scale-x-[1.6] " +
+                      (r.success ? "bg-green-500/70 hover:bg-green-500 " : "bg-destructive hover:brightness-125 ") +
+                      (dimmed ? "opacity-25" : "")
+                    }
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {/* Outcome is the colour — spelling it out again added nothing. */}
+                  <p className="text-xs font-mono">
+                    {format(new Date(r.runAt), "MM-dd HH:mm")}
+                    {r.durationMs != null && ` · ${t.runDurationSuffix} ${(r.durationMs / 1000).toFixed(1)}s`}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
         </span>
       </TooltipProvider>
     );
@@ -417,10 +430,21 @@ export default function Home() {
         return next;
       });
     }, [tasks]);
+  // The success / failure cards count RUNS IN THE LAST 24 HOURS, so clicking them has to
+  // filter by the same thing. Filtering on the task's CURRENT status instead (what this
+  // did before) answered a different question entirely: a task that failed this morning
+  // and succeeded since is exactly the one you are looking for, and it was hidden.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const isLast24h = (r: RecentRun) => Date.now() - new Date(r.runAt).getTime() <= DAY_MS;
+  const ranInLast24h = (taskId: number, success: boolean) =>
+    (recentRunMap.get(taskId) ?? []).some((r) => isLast24h(r) && r.success === success);
+  const is24hFilter = activeFilter === "success" || activeFilter === "failed";
+
   const statusFiltered = activeFilter
-    ? (tasks ?? []).filter((t) => {
-        if (activeFilter === "failed") return t.status === "failed" || t.status === "needs_attention";
-        return t.status === activeFilter;
+    ? (tasks ?? []).filter((tk) => {
+        if (activeFilter === "success") return ranInLast24h(tk.id, true);
+        if (activeFilter === "failed") return ranInLast24h(tk.id, false) || tk.status === "needs_attention";
+        return tk.status === activeFilter;
       })
     : (tasks ?? []);
   // Search matches the name AND the target URL — with many tasks on the same panel,
@@ -752,9 +776,14 @@ export default function Home() {
                       </span>
                       {(() => {
                         const runs = recentRunMap.get(task.id);
+                        // With a 24h card active, fade everything that is not what you
+                        // clicked, so the row shows the matching runs at a glance.
+                        const dimOutside = is24hFilter
+                          ? (r: RecentRun) => !isLast24h(r) || r.success !== (activeFilter === "success")
+                          : undefined;
                         return runs?.length ? (
                           <span className="flex items-center border-l border-border pl-3">
-                            <RunSquares runs={runs} />
+                            <RunSquares runs={runs} dimOutside={dimOutside} />
                           </span>
                         ) : null;
                       })()}
