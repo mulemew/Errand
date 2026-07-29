@@ -86,15 +86,15 @@ import { useLang } from "@/contexts/lang-context";
             </Link>
             <Link href="/fingerprints" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <Fingerprint className="h-4 w-4" />
-              Fingerprints
+              {t.navFingerprints}
             </Link>
             <Link href="/proxies" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <Network className="h-4 w-4" />
-              Proxies
+              {t.navProxies}
             </Link>
             <Link href="/providers" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <Server className="h-4 w-4" />
-              Providers
+              {t.navProviders}
             </Link>
             <Link href="/status" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
               <HeartPulse className="h-4 w-4" />

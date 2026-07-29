@@ -476,7 +476,7 @@ export default function TaskDetail() {
       <div className="text-center py-20">
         <h2 className="text-xl font-bold">{t.taskNotFound}</h2>
         <Link href="/">
-          <Button variant="link" className="mt-4">Return to Dashboard</Button>
+          <Button variant="link" className="mt-4">{t.returnToDashboard}</Button>
         </Link>
       </div>
     );
@@ -517,12 +517,12 @@ export default function TaskDetail() {
             className="gap-2 font-semibold text-muted-foreground hover:text-foreground"
             onClick={() => void handleDryRun()}
             disabled={task.status === "running" || isDryRunning || runTask.isPending || task.enabled === false}
-            title="Test run — executes the full workflow without updating the task status or last run time"
+            title={t.testRunHint}
           >
             {isDryRunning ? (
-              <><RefreshCw className="h-4 w-4 animate-spin" /> Testing…</>
+              <><RefreshCw className="h-4 w-4 animate-spin" /> {t.testRunning}</>
             ) : (
-              <><FlaskConical className="h-4 w-4" /> Test Run</>
+              <><FlaskConical className="h-4 w-4" /> {t.testRun}</>
             )}
           </Button>
           {isRunning ? (
@@ -534,18 +534,16 @@ export default function TaskDetail() {
                   disabled={isStopping}
                 >
                   {isStopping ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" /> Stopping…</>
+                    <><Loader2 className="h-4 w-4 animate-spin" /> {t.stoppingTask}</>
                   ) : (
-                    <><Square className="h-4 w-4 fill-destructive" /> Stop Task</>
+                    <><Square className="h-4 w-4 fill-destructive" /> {t.stopTask}</>
                   )}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent className="border-border">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Stop this task?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    The task will finish its current step and then stop. You can re-run it manually at any time.
-                  </AlertDialogDescription>
+                  <AlertDialogTitle>{t.stopTaskConfirm}</AlertDialogTitle>
+                  <AlertDialogDescription>{t.stopTaskConfirmDesc}</AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>{t.keepRunning}</AlertDialogCancel>
@@ -553,7 +551,7 @@ export default function TaskDetail() {
                     onClick={() => void handleStop()}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    Stop Task
+                    {t.stopTask}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -566,36 +564,33 @@ export default function TaskDetail() {
               disabled={isDryRunning || runTask.isPending}
             >
               {needsAttention ? (
-                <><RefreshCw className="h-4 w-4" /> Retry Mission</>
+                <><RefreshCw className="h-4 w-4" /> {t.retryMission}</>
               ) : (
-                <><Play className="h-4 w-4" /> Run Mission</>
+                <><Play className="h-4 w-4" /> {t.runMission}</>
               )}
             </Button>
           )}
           <Link href={`/tasks/${taskId}/edit`}>
             <Button variant="outline" className="gap-2">
-              <Edit className="h-4 w-4" /> Edit
+              <Edit className="h-4 w-4" /> {t.actionEdit}
             </Button>
           </Link>
           
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" className="gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive border-border">
-                <Trash2 className="h-4 w-4" /> Delete
+                <Trash2 className="h-4 w-4" /> {t.actionDelete}
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent className="border-border">
               <AlertDialogHeader>
-                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This action cannot be undone. This will permanently delete the automation job
-                  and all of its execution logs.
-                </AlertDialogDescription>
+                <AlertDialogTitle>{t.deleteTaskConfirm}</AlertDialogTitle>
+                <AlertDialogDescription>{t.deleteTaskConfirmDesc}</AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogCancel>{t.actionCancel}</AlertDialogCancel>
                 <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                  Delete
+                  {t.actionDelete}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -611,14 +606,9 @@ export default function TaskDetail() {
             <div className="flex items-start gap-4 p-4">
               <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-amber-700 dark:text-amber-400 text-sm">Captcha Detected — Manual Action Required</p>
-                <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-1">
-                  This task was paused because a captcha was encountered and no automatic solver is configured.
-                  Open the target URL in a browser, complete the captcha manually, then click <strong>Retry Mission</strong> above.
-                </p>
-                <p className="text-xs text-amber-600/70 dark:text-amber-500/70 mt-2 font-mono">
-                  Tip: Set the <code>TWO_CAPTCHA_API_KEY</code> environment variable to enable automatic captcha solving via 2captcha.
-                </p>
+                <p className="font-semibold text-amber-700 dark:text-amber-400 text-sm">{t.captchaBannerTitle}</p>
+                <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-1">{t.captchaBannerBody}</p>
+                <p className="text-xs text-amber-600/70 dark:text-amber-500/70 mt-2 font-mono">{t.captchaBannerTip}</p>
               </div>
             </div>
             {latestScreenshotLog && (
@@ -627,7 +617,7 @@ export default function TaskDetail() {
                   <ImageIcon className="h-3 w-3" /> captcha_screenshot.png
                   <span className="ml-auto text-amber-500/50">
                     <Link href={`/tasks/${taskId}/logs/${latestScreenshotLog.id}`} className="hover:text-amber-400 transition-colors">
-                      View full log →
+                      {t.viewFullLog}
                     </Link>
                   </span>
                 </p>
@@ -668,13 +658,13 @@ export default function TaskDetail() {
           <Card className="border-border shadow-sm">
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-base flex items-center gap-2">
-                <Settings2 className="h-4 w-4 text-primary" /> Configuration Parameters
+                <Settings2 className="h-4 w-4 text-primary" /> {t.configurationParameters}
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-6">
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Target URL</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.targetUrl}</dt>
                   <dd className="text-sm font-mono break-all flex items-center gap-2">
                     <LinkIcon className="h-3 w-3 text-muted-foreground" />
                     <a href={task.targetUrl} target="_blank" rel="noreferrer" className="hover:underline hover:text-primary">
@@ -684,10 +674,10 @@ export default function TaskDetail() {
                 </div>
                 
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Login Strategy</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.loginStrategy}</dt>
                   <dd className="text-sm font-mono flex items-center gap-2">
                     <Shield className="h-3 w-3 text-muted-foreground" />
-                    {task.loginType === "github" ? "GitHub OAuth" : "Standard Form"}
+                    {task.loginType === "github" ? "GitHub OAuth" : t.standardForm}
                   </dd>
                 </div>
 
@@ -700,15 +690,15 @@ export default function TaskDetail() {
                 </div>
 
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Last Execution</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.lastExecution}</dt>
                   <dd className="text-sm font-mono flex items-center gap-2">
                     <Clock className="h-3 w-3 text-muted-foreground" />
-                    {task.lastRunAt ? format(new Date(task.lastRunAt), "MMM d, yyyy HH:mm:ss") : "Never"}
+                    {task.lastRunAt ? format(new Date(task.lastRunAt), "MMM d, yyyy HH:mm:ss") : t.neverRun}
                   </dd>
                 </div>
 
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Next Run</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.nextRun}</dt>
                   <dd className="text-sm font-mono flex items-center gap-2">
                     <Calendar className="h-3 w-3 text-muted-foreground" />
                     {scheduleInfo?.nextRunAt
@@ -718,7 +708,7 @@ export default function TaskDetail() {
                 </div>
 
                 <div className="space-y-1">
-                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Provider</dt>
+                  <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.providerField}</dt>
                   <dd className="text-sm font-mono flex items-center gap-2">
                     <Settings2 className="h-3 w-3 text-muted-foreground" />
                     {boundProvider
@@ -736,12 +726,12 @@ export default function TaskDetail() {
 
                 {scheduleInfo?.runsPerWindow != null && (
                   <div className="space-y-1 col-span-2">
-                    <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Window Progress</dt>
+                    <dt className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.windowProgress}</dt>
                     <dd className="text-sm font-mono flex items-center gap-2">
                       <Radio className="h-3 w-3 text-muted-foreground" />
-                      <span>{scheduleInfo.windowRunsCount ?? 0}/{scheduleInfo.runsPerWindow} runs this window</span>
+                      <span>{t.runsThisWindow.replace("{a}", String(scheduleInfo.windowRunsCount ?? 0)).replace("{b}", String(scheduleInfo.runsPerWindow))}</span>
                       {scheduleInfo.windowEndsAt && (
-                        <span className="text-xs text-muted-foreground">· resets {formatDistanceToNow(new Date(scheduleInfo.windowEndsAt), { addSuffix: true })}</span>
+                        <span className="text-xs text-muted-foreground">{t.windowResets.replace("{v}", formatDistanceToNow(new Date(scheduleInfo.windowEndsAt), { addSuffix: true }))}</span>
                       )}
                     </dd>
                   </div>
@@ -1094,7 +1084,7 @@ export default function TaskDetail() {
                     </div>
                   ) : (
                     <div className="p-8 text-center">
-                      <p className="text-sm text-muted-foreground">Run this task to generate logs.</p>
+                      <p className="text-sm text-muted-foreground">{t.runToGenerateLogs}</p>
                     </div>
                   )}
                 </div>
@@ -1115,20 +1105,20 @@ export default function TaskDetail() {
                   {((task as any).loginCredentials as Array<{ loginMethod: string; username: string; hasTotpSecret: boolean }>).map((cred, idx) => (
                     <div key={idx} className="space-y-2 p-3 border border-border rounded-md bg-card">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Login {((task as any).loginCredentials.length > 1) ? `#${idx + 1}` : ""} ({cred.loginMethod})</span>
+                        <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{t.loginCredential} {((task as any).loginCredentials.length > 1) ? `#${idx + 1}` : ""} ({cred.loginMethod})</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">{t.username}</span>
                         <span className="text-sm font-mono font-semibold">{cred.username}</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">Password</span>
+                        <span className="text-xs text-muted-foreground">{t.password}</span>
                         <span className="text-sm font-mono tracking-widest">••••••••</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">2FA (TOTP)</span>
+                        <span className="text-xs text-muted-foreground">{t.twoFaTotp}</span>
                         <Badge variant={cred.hasTotpSecret ? "default" : "secondary"} className="font-mono text-[10px]">
-                          {cred.hasTotpSecret ? "CONFIGURED" : "NONE"}
+                          {cred.hasTotpSecret ? t.configuredValue : t.noneUpper}
                         </Badge>
                       </div>
                     </div>
@@ -1141,18 +1131,18 @@ export default function TaskDetail() {
                     <span className="text-sm font-mono font-semibold">{task.credentials.username}</span>
                   </div>
                   <div className="flex items-center justify-between p-3 border border-border rounded-md bg-card">
-                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Password</span>
+                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{t.password}</span>
                     <span className="text-sm font-mono tracking-widest">••••••••</span>
                   </div>
                   <div className="flex items-center justify-between p-3 border border-border rounded-md bg-card">
-                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">2FA (TOTP)</span>
+                    <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{t.twoFaTotp}</span>
                     <Badge variant={task.credentials.hasTotpSecret ? "default" : "secondary"} className="font-mono text-[10px]">
-                      {task.credentials.hasTotpSecret ? "CONFIGURED" : "NONE"}
+                      {task.credentials.hasTotpSecret ? t.configuredValue : t.noneUpper}
                     </Badge>
                   </div>
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No credentials configured for this task.</p>
+                <p className="text-sm text-muted-foreground">{t.noCredentialsForTask}</p>
               )}
             </CardContent>
           </Card>
@@ -1189,13 +1179,13 @@ export default function TaskDetail() {
             <Card className="border-border shadow-sm">
               <CardHeader className="bg-muted/20 border-b border-border pb-4 flex flex-row items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-primary" /> {hasProxy ? "Proxy Exit IP" : "Exit IP"}
+                  <Globe className="h-4 w-4 text-primary" /> {hasProxy ? t.proxyExitIpTitle : t.exitIpTitle}
                 </CardTitle>
                 <button
                   type="button"
                   onClick={() => refetchGeo()}
                   disabled={isFetchingGeo}
-                  title="Re-detect exit IP"
+                  title={t.redetectExitIp}
                   className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${isFetchingGeo ? "animate-spin" : ""}`} />
@@ -1211,29 +1201,29 @@ export default function TaskDetail() {
                   <>
                     {proxyLabel && (
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Proxy</span>
+                        <span className="text-xs text-muted-foreground">{t.proxyLabel}</span>
                         <span className="text-sm font-mono font-semibold text-right">{proxyLabel}</span>
                       </div>
                     )}
                     {proxyGeo.direct && (
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Source</span>
-                        <Badge variant="secondary" className="font-mono text-[10px]">Host (no proxy)</Badge>
+                        <span className="text-xs text-muted-foreground">{t.sourceField}</span>
+                        <Badge variant="secondary" className="font-mono text-[10px]">{t.hostNoProxy}</Badge>
                       </div>
                     )}
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Exit IP</span>
+                      <span className="text-xs text-muted-foreground">{t.exitIpField}</span>
                       <span className="text-sm font-mono font-semibold break-all">{proxyGeo.exitIp}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Location</span>
+                      <span className="text-xs text-muted-foreground">{t.locationField}</span>
                       <span className="text-sm font-mono text-right">
                         {countryFlag(proxyGeo.countryCode)} {[proxyGeo.city, proxyGeo.region, proxyGeo.country].filter(Boolean).join(", ")}
                       </span>
                     </div>
                     {proxyGeo.timezone && (
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Timezone</span>
+                        <span className="text-xs text-muted-foreground">{t.timezoneField}</span>
                         <span className="text-sm font-mono">{proxyGeo.timezone}</span>
                       </div>
                     )}
@@ -1245,7 +1235,7 @@ export default function TaskDetail() {
                     )}
                     {proxyGeo.proxyType && (
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">Protocol</span>
+                        <span className="text-xs text-muted-foreground">{t.protocolField}</span>
                         <Badge variant="secondary" className="font-mono text-[10px] uppercase">{proxyGeo.proxyType}</Badge>
                       </div>
                     )}
@@ -1253,7 +1243,7 @@ export default function TaskDetail() {
                 ) : (
                   <div className="space-y-2">
                     <p className="text-xs text-destructive font-mono break-all">
-                      {proxyGeo?.error ? `Lookup failed: ${proxyGeo.error}` : !proxyGeo ? "Not resolved yet — click Re-detect." : hasProxy ? "Could not detect the exit IP through this proxy." : "Could not detect the host exit IP."}
+                      {proxyGeo?.error ? t.lookupFailed.replace("{v}", proxyGeo.error) : !proxyGeo ? t.notResolvedYet : hasProxy ? t.couldNotDetectProxyIp : t.couldNotDetectHostIp}
                     </p>
                     <button
                       type="button"
@@ -1261,7 +1251,7 @@ export default function TaskDetail() {
                       disabled={isFetchingGeo}
                       className="text-xs font-mono text-primary hover:underline disabled:opacity-40"
                     >
-                      Retry
+                      {t.retry}
                     </button>
                   </div>
                 )}
@@ -1272,7 +1262,7 @@ export default function TaskDetail() {
             <Card className="border-border shadow-sm">
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Fingerprint className="h-4 w-4 text-primary" /> Fingerprint
+                  <Fingerprint className="h-4 w-4 text-primary" /> {t.fingerprintTitle}
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-4 space-y-3 text-sm">
@@ -1299,41 +1289,41 @@ export default function TaskDetail() {
                     );
                     return (
                       <>
-                        {row("Saved profile", <span className="font-semibold">{fingerprintLabel}</span>)}
-                        {row("OS", <span className="font-semibold capitalize">{fingerprintOsResolved || boundFp?.os || "linux"}</span>)}
+                        {row(t.savedProfileField, <span className="font-semibold">{fingerprintLabel}</span>)}
+                        {row(t.osField, <span className="font-semibold capitalize">{fingerprintOsResolved || boundFp?.os || "linux"}</span>)}
                         {gpu && row("GPU", <span className="text-[11px]">{gpu}</span>)}
-                        {screen && row("Screen", screen)}
-                        {platform && row("Platform", platform)}
-                        {cores != null && row("CPU cores", String(cores))}
-                        {row("Timezone", cfg?.timezone?.trim() || t.autoFollowExitIp)}
-                        {row("Locale", cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : t.autoFollowExitIp))}
-                        {ua && row("User-Agent", <span className="text-[11px] text-muted-foreground">{ua}</span>)}
+                        {screen && row(t.screenField, screen)}
+                        {platform && row(t.platformField, platform)}
+                        {cores != null && row(t.cpuCoresField, String(cores))}
+                        {row(t.timezoneField, cfg?.timezone?.trim() || t.autoFollowExitIp)}
+                        {row(t.localeField, cfg?.locale?.trim() || (sm.languages && sm.languages.length ? sm.languages.join(", ") : t.autoFollowExitIp))}
+                        {ua && row(t.userAgentField, <span className="text-[11px] text-muted-foreground">{ua}</span>)}
                       </>
                     );
                   })()
                 ) : bcfg?.fingerprint?.os ? (
                   <>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">OS spoof</span>
+                      <span className="text-xs text-muted-foreground">{t.osSpoofField}</span>
                       <span className="text-sm font-mono font-semibold capitalize">{bcfg.fingerprint.os}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Timezone</span>
-                      <span className="text-sm font-mono">{bcfg.fingerprint.timezone?.trim() || (bcfg.fingerprint.autoGeo !== false ? "auto (from exit IP)" : "browser default")}</span>
+                      <span className="text-xs text-muted-foreground">{t.timezoneField}</span>
+                      <span className="text-sm font-mono">{bcfg.fingerprint.timezone?.trim() || (bcfg.fingerprint.autoGeo !== false ? t.autoFromExitIp : t.browserDefaultValue)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Locale</span>
-                      <span className="text-sm font-mono">{bcfg.fingerprint.locale?.trim() || (bcfg.fingerprint.autoGeo !== false ? "auto (from exit IP)" : "browser default")}</span>
+                      <span className="text-xs text-muted-foreground">{t.localeField}</span>
+                      <span className="text-sm font-mono">{bcfg.fingerprint.locale?.trim() || (bcfg.fingerprint.autoGeo !== false ? t.autoFromExitIp : t.browserDefaultValue)}</span>
                     </div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-muted-foreground">Auto geo</span>
+                      <span className="text-xs text-muted-foreground">{t.autoGeoField}</span>
                       <Badge variant={bcfg.fingerprint.autoGeo !== false ? "default" : "secondary"} className="font-mono text-[10px]">
-                        {bcfg.fingerprint.autoGeo !== false ? "ON" : "OFF"}
+                        {bcfg.fingerprint.autoGeo !== false ? t.onUpper : t.offUpper}
                       </Badge>
                     </div>
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground font-mono">No fingerprint spoofing — the browser's native fingerprint is used.</p>
+                  <p className="text-xs text-muted-foreground font-mono">{t.noFingerprintSpoof}</p>
                 )}
               </CardContent>
             </Card>

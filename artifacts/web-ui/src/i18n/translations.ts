@@ -586,6 +586,79 @@ export interface Translations {
       logLevelInfo: string;
       logLevelDebug: string;
       logLevelTrace: string;
+      navFingerprints: string;
+      navProxies: string;
+      navProviders: string;
+      testRun: string;
+      testRunning: string;
+      testRunHint: string;
+      stopTask: string;
+      stoppingTask: string;
+      stopTaskConfirm: string;
+      stopTaskConfirmDesc: string;
+      runMission: string;
+      actionEdit: string;
+      deleteTaskConfirm: string;
+      deleteTaskConfirmDesc: string;
+      actionCancel: string;
+      captchaBannerTitle: string;
+      captchaBannerBody: string;
+      captchaBannerTip: string;
+      viewFullLog: string;
+      configurationParameters: string;
+      providerField: string;
+      windowProgress: string;
+      runsThisWindow: string;
+      windowResets: string;
+      runToGenerateLogs: string;
+      loginCredential: string;
+      twoFaTotp: string;
+      configuredValue: string;
+      noneUpper: string;
+      noCredentialsForTask: string;
+      proxyExitIpTitle: string;
+      exitIpTitle: string;
+      redetectExitIp: string;
+      sourceField: string;
+      hostNoProxy: string;
+      exitIpField: string;
+      locationField: string;
+      timezoneField: string;
+      protocolField: string;
+      lookupFailed: string;
+      notResolvedYet: string;
+      couldNotDetectProxyIp: string;
+      couldNotDetectHostIp: string;
+      fingerprintTitle: string;
+      savedProfileField: string;
+      osField: string;
+      osSpoofField: string;
+      screenField: string;
+      platformField: string;
+      cpuCoresField: string;
+      localeField: string;
+      userAgentField: string;
+      autoGeoField: string;
+      autoFromExitIp: string;
+      browserDefaultValue: string;
+      onUpper: string;
+      offUpper: string;
+      noFingerprintSpoof: string;
+      captchaCardHint: string;
+      livePollingTitle: string;
+      livePollingHint: string;
+      changePasswordTitle: string;
+      changePasswordHint: string;
+      changePasswordWarn: string;
+      dataRetentionTitle: string;
+      dataRetentionHint: string;
+      aboutSystemHint: string;
+      getYourKeyAt: string;
+      keySavedPasteToReplace: string;
+      captcha2captchaDesc: string;
+      captchaCapsolverDesc: string;
+      captchaAnticaptchaDesc: string;
+      pasteApiKey: string;
   }
 
   export const zh: Translations = {
@@ -1147,6 +1220,79 @@ export interface Translations {
       logLevelInfo: "常规（默认）",
       logLevelDebug: "调试：每一步的细节，排查任务失败时用",
       logLevelTrace: "追踪：极其啰嗦，只在需要时短时间开启",
+      navFingerprints: "指纹",
+      navProxies: "代理",
+      navProviders: "浏览器后端",
+      testRun: "测试运行",
+      testRunning: "测试中…",
+      testRunHint: "测试运行：完整执行一遍流程，但不更新任务状态和上次运行时间",
+      stopTask: "停止任务",
+      stoppingTask: "停止中…",
+      stopTaskConfirm: "确定停止这个任务？",
+      stopTaskConfirmDesc: "任务会执行完当前步骤后停止，之后随时可以手动重新运行。",
+      runMission: "运行任务",
+      actionEdit: "编辑",
+      deleteTaskConfirm: "确定要删除吗？",
+      deleteTaskConfirmDesc: "此操作不可撤销，任务及其全部执行记录都会被永久删除。",
+      actionCancel: "取消",
+      captchaBannerTitle: "检测到验证码 —— 需要人工处理",
+      captchaBannerBody: "任务遇到验证码且没有配置自动破解服务，已暂停。请在浏览器里打开目标网址手动完成验证，然后点上面的「重试任务」。",
+      captchaBannerTip: "提示：在 设置 → 验证码 里配置一个破解服务，之后就能自动处理。",
+      viewFullLog: "查看完整日志 →",
+      configurationParameters: "配置参数",
+      providerField: "浏览器后端",
+      windowProgress: "窗口进度",
+      runsThisWindow: "本窗口已运行 {a}/{b} 次",
+      windowResets: "· {v} 重置",
+      runToGenerateLogs: "运行一次任务即可产生日志。",
+      loginCredential: "登录",
+      twoFaTotp: "两步验证 (TOTP)",
+      configuredValue: "已配置",
+      noneUpper: "无",
+      noCredentialsForTask: "该任务未配置登录凭据。",
+      proxyExitIpTitle: "代理出口 IP",
+      exitIpTitle: "出口 IP",
+      redetectExitIp: "重新检测出口 IP",
+      sourceField: "来源",
+      hostNoProxy: "本机（未走代理）",
+      exitIpField: "出口 IP",
+      locationField: "地理位置",
+      timezoneField: "时区",
+      protocolField: "协议",
+      lookupFailed: "查询失败：{v}",
+      notResolvedYet: "尚未检测 —— 点右上角重新检测。",
+      couldNotDetectProxyIp: "无法通过该代理检测到出口 IP。",
+      couldNotDetectHostIp: "无法检测到本机出口 IP。",
+      fingerprintTitle: "指纹",
+      savedProfileField: "已保存配置档",
+      osField: "操作系统",
+      osSpoofField: "伪装系统",
+      screenField: "分辨率",
+      platformField: "平台标识",
+      cpuCoresField: "CPU 核心数",
+      localeField: "语言",
+      userAgentField: "User-Agent",
+      autoGeoField: "自动地理对齐",
+      autoFromExitIp: "auto（跟随出口 IP）",
+      browserDefaultValue: "浏览器默认",
+      onUpper: "开",
+      offUpper: "关",
+      noFingerprintSpoof: "未做指纹伪装 —— 使用浏览器原生指纹。",
+      captchaCardHint: "配置一个验证码破解服务。任务遇到验证码时会自动调用；不配置则任务会暂停并保存一张截图等待人工处理。",
+      livePollingTitle: "实时刷新间隔",
+      livePollingHint: "任务运行时仪表盘和任务详情页的刷新频率。没有任务在跑时会自动暂停刷新。",
+      changePasswordTitle: "修改密码",
+      changePasswordHint: "修改控制台登录密码，立即生效。其他已登录的会话会被登出，当前这个标签页不受影响。",
+      changePasswordWarn: "修改密码会立刻登出其他所有活动会话（其它标签页和设备），当前会话保持登录。",
+      dataRetentionTitle: "数据保留",
+      dataRetentionHint: "日志和截图保留多久。清理任务每天 03:30 自动执行。",
+      aboutSystemHint: "本实例的运行环境信息。",
+      getYourKeyAt: "获取密钥：",
+      keySavedPasteToReplace: "已保存 —— 粘贴新值可替换",
+      captcha2captchaDesc: "真人打码。支持 reCAPTCHA、hCaptcha、Turnstile 和图片验证码。",
+      captchaCapsolverDesc: "AI 识别。对 reCAPTCHA 和 hCaptcha 快且便宜。",
+      captchaAnticaptchaDesc: "真人打码。支持 reCAPTCHA v2/v3、hCaptcha、Turnstile 和图片验证码。",
+      pasteApiKey: "粘贴 {v} 的 API Key",
   };
 
   export const en: Translations = {
@@ -1709,5 +1855,78 @@ export interface Translations {
       logLevelInfo: "Normal (default)",
       logLevelDebug: "Debug: per-step detail, for working out why a task failed",
       logLevelTrace: "Trace: extremely verbose, turn on only briefly",
+      navFingerprints: "Fingerprints",
+      navProxies: "Proxies",
+      navProviders: "Providers",
+      testRun: "Test Run",
+      testRunning: "Testing…",
+      testRunHint: "Test run — executes the full workflow without updating the task status or last run time",
+      stopTask: "Stop Task",
+      stoppingTask: "Stopping…",
+      stopTaskConfirm: "Stop this task?",
+      stopTaskConfirmDesc: "The task will finish its current step and then stop. You can re-run it manually at any time.",
+      runMission: "Run Mission",
+      actionEdit: "Edit",
+      deleteTaskConfirm: "Are you absolutely sure?",
+      deleteTaskConfirmDesc: "This action cannot be undone. This will permanently delete the automation job and all of its execution logs.",
+      actionCancel: "Cancel",
+      captchaBannerTitle: "Captcha detected — manual action required",
+      captchaBannerBody: "This task was paused because it met a captcha and no automatic solver is configured. Open the target URL in a browser, complete the captcha by hand, then use Retry Mission above.",
+      captchaBannerTip: "Tip: configure a solving service under Settings → Captcha to handle these automatically.",
+      viewFullLog: "View full log →",
+      configurationParameters: "Configuration Parameters",
+      providerField: "Provider",
+      windowProgress: "Window Progress",
+      runsThisWindow: "{a}/{b} runs this window",
+      windowResets: "· resets {v}",
+      runToGenerateLogs: "Run this task to generate logs.",
+      loginCredential: "Login",
+      twoFaTotp: "2FA (TOTP)",
+      configuredValue: "CONFIGURED",
+      noneUpper: "NONE",
+      noCredentialsForTask: "No credentials configured for this task.",
+      proxyExitIpTitle: "Proxy Exit IP",
+      exitIpTitle: "Exit IP",
+      redetectExitIp: "Re-detect exit IP",
+      sourceField: "Source",
+      hostNoProxy: "Host (no proxy)",
+      exitIpField: "Exit IP",
+      locationField: "Location",
+      timezoneField: "Timezone",
+      protocolField: "Protocol",
+      lookupFailed: "Lookup failed: {v}",
+      notResolvedYet: "Not resolved yet — use re-detect above.",
+      couldNotDetectProxyIp: "Could not detect the exit IP through this proxy.",
+      couldNotDetectHostIp: "Could not detect the host exit IP.",
+      fingerprintTitle: "Fingerprint",
+      savedProfileField: "Saved profile",
+      osField: "OS",
+      osSpoofField: "OS spoof",
+      screenField: "Screen",
+      platformField: "Platform",
+      cpuCoresField: "CPU cores",
+      localeField: "Locale",
+      userAgentField: "User-Agent",
+      autoGeoField: "Auto geo",
+      autoFromExitIp: "auto (from exit IP)",
+      browserDefaultValue: "browser default",
+      onUpper: "ON",
+      offUpper: "OFF",
+      noFingerprintSpoof: "No fingerprint spoofing — the browser's own fingerprint is used.",
+      captchaCardHint: "Configure a captcha-solving service. It is called automatically when a task meets a captcha; without one the task pauses and saves a screenshot for you to handle.",
+      livePollingTitle: "Live polling interval",
+      livePollingHint: "How often the dashboard and the task detail page refresh while a task is running. Polling pauses by itself when nothing is running.",
+      changePasswordTitle: "Change password",
+      changePasswordHint: "Change the dashboard login password. It takes effect immediately; other signed-in sessions are logged out, this tab is not.",
+      changePasswordWarn: "Changing the password immediately signs out every other active session (other tabs and devices). This one stays signed in.",
+      dataRetentionTitle: "Data retention",
+      dataRetentionHint: "How long logs and screenshots are kept. Cleanup runs automatically at 03:30 every night.",
+      aboutSystemHint: "Runtime environment details for this instance.",
+      getYourKeyAt: "Get your key at",
+      keySavedPasteToReplace: "Saved — paste a new value to replace it",
+      captcha2captchaDesc: "Human-powered solving. Supports reCAPTCHA, hCaptcha, Turnstile and image captchas.",
+      captchaCapsolverDesc: "AI-powered solver. Fast and cost-effective for reCAPTCHA and hCaptcha.",
+      captchaAnticaptchaDesc: "Human-powered solving. Supports reCAPTCHA v2/v3, hCaptcha, Turnstile and image captchas.",
+      pasteApiKey: "Paste your {v} API key",
   };
   

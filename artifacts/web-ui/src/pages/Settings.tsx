@@ -409,37 +409,38 @@ interface CaptchaConfig {
 const CAPTCHA_PROVIDER_OPTIONS: Array<{
   value: CaptchaProviderType;
   label: string;
-  description: string;
+  /** Key into the translation table — the copy itself must not live in this array. */
+  descriptionKey: "captcha2captchaDesc" | "captchaCapsolverDesc" | "captchaAnticaptchaDesc";
   keyField: keyof CaptchaConfig;
   keyLabel: string;
-  placeholder: string;
+  site: string;
   docsUrl: string;
 }> = [
   {
     value: "2captcha",
     label: "2Captcha",
-    description: "Human-powered solving. Supports reCAPTCHA, hCaptcha, Turnstile, and image captchas.",
+    descriptionKey: "captcha2captchaDesc",
     keyField: "twoCaptchaApiKey",
     keyLabel: "2Captcha API Key",
-    placeholder: "Paste your 2captcha.com API key",
+    site: "2captcha.com",
     docsUrl: "https://2captcha.com/enterpage",
   },
   {
     value: "capsolver",
     label: "Capsolver",
-    description: "AI-powered solver. Fast and cost-effective for reCAPTCHA and hCaptcha.",
+    descriptionKey: "captchaCapsolverDesc",
     keyField: "capsolverApiKey",
     keyLabel: "Capsolver API Key",
-    placeholder: "Paste your capsolver.com API key",
+    site: "capsolver.com",
     docsUrl: "https://capsolver.com",
   },
   {
     value: "anticaptcha",
     label: "Anti-Captcha",
-    description: "Human-powered solving. Supports reCAPTCHA v2/v3, hCaptcha, Turnstile, and image captchas.",
+    descriptionKey: "captchaAnticaptchaDesc",
     keyField: "anticaptchaApiKey",
     keyLabel: "Anti-Captcha API Key",
-    placeholder: "Paste your anti-captcha.com API key",
+    site: "anti-captcha.com",
     docsUrl: "https://anti-captcha.com",
   },
 ];
@@ -527,7 +528,7 @@ function CaptchaSection() {
             </div>
           </button>
 
-          {CAPTCHA_PROVIDER_OPTIONS.map(({ value, label, description }) => {
+          {CAPTCHA_PROVIDER_OPTIONS.map(({ value, label, descriptionKey }) => {
             const selected = config.provider === value;
             return (
               <button
@@ -545,7 +546,7 @@ function CaptchaSection() {
                 }`} />
                 <div className="min-w-0">
                   <p className="font-mono font-semibold text-sm">{label}</p>
-                  <p className="text-xs mt-0.5 opacity-70">{description}</p>
+                  <p className="text-xs mt-0.5 opacity-70">{t[descriptionKey]}</p>
                 </div>
               </button>
             );
@@ -564,11 +565,11 @@ function CaptchaSection() {
             onChange={(e) =>
               setConfig((c) => ({ ...c, [activeOption.keyField]: e.target.value }))
             }
-            placeholder={activeKeyIsSet ? "Key saved — paste to replace" : activeOption.placeholder}
+            placeholder={activeKeyIsSet ? t.keySavedPasteToReplace : t.pasteApiKey.replace("{v}", activeOption.site)}
             className="font-mono text-sm"
           />
           <p className="text-xs text-muted-foreground">
-            Get your key at{" "}
+            {t.getYourKeyAt}{" "}
             <a href={activeOption.docsUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
               {activeOption.docsUrl.replace("https://", "")}
             </a>
@@ -628,7 +629,7 @@ function CaptchaSection() {
       </div>
 
       <Button onClick={handleSave} disabled={saving}>
-        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : "Save"}
+        {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : t.actionSave}
       </Button>
     </div>
   );
@@ -921,9 +922,7 @@ export default function Settings() {
               {t.changePassword}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
-              <span className="block">
-                Changing your password will immediately sign out <strong>all other active sessions</strong> (other tabs and devices). This session will remain active.
-              </span>
+              <span className="block">{t.changePasswordWarn}</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -996,11 +995,7 @@ export default function Settings() {
             <CardTitle className="text-base flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-primary" /> {t.captchaSettings}
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              Configure a captcha solving service. When a task encounters a captcha, the solver
-              is called automatically. If disabled, tasks that hit a captcha will pause and log
-              a screenshot for manual review.
-            </CardDescription>
+            <CardDescription className="text-xs mt-1">{t.captchaCardHint}</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             <CaptchaSection />
@@ -1024,12 +1019,9 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <RefreshCw className="h-4 w-4 text-primary" /> Live Polling Interval
+              <RefreshCw className="h-4 w-4 text-primary" /> {t.livePollingTitle}
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              How often the dashboard and task detail page refresh while a task is running.
-              Polling pauses automatically when no tasks are active.
-            </CardDescription>
+            <CardDescription className="text-xs mt-1">{t.livePollingHint}</CardDescription>
           </CardHeader>
           <CardContent className="pt-6 space-y-3">
             {POLLING_OPTIONS.map((ms) => (
@@ -1060,12 +1052,9 @@ export default function Settings() {
         <Card className="border-border shadow-sm">
           <CardHeader className="bg-muted/20 border-b border-border pb-4">
             <CardTitle className="text-base flex items-center gap-2">
-              <KeyRound className="h-4 w-4 text-primary" /> Change Password
+              <KeyRound className="h-4 w-4 text-primary" /> {t.changePasswordTitle}
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              Update your dashboard login password. The new password will take effect immediately.
-              Other active sessions will be signed out; this tab stays logged in.
-            </CardDescription>
+            <CardDescription className="text-xs mt-1">{t.changePasswordHint}</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
             {passwordSuccess ? (
@@ -1079,13 +1068,13 @@ export default function Settings() {
             ) : (
               <form onSubmit={handlePasswordSubmit} className="space-y-4 max-w-sm">
                 <div className="space-y-2">
-                  <Label htmlFor="currentPassword">Current Password</Label>
+                  <Label htmlFor="currentPassword">{t.currentPassword}</Label>
                   <Input
                     id="currentPassword"
                     type="password"
                     value={currentPassword}
                     onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="Enter current password"
+                    placeholder={t.currentPassword}
                     disabled={passwordLoading}
                     required
                     autoComplete="current-password"
@@ -1093,13 +1082,13 @@ export default function Settings() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="newPassword">New Password</Label>
+                  <Label htmlFor="newPassword">{t.newPassword}</Label>
                   <Input
                     id="newPassword"
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Min. 8 characters"
+                    placeholder={t.newPassword}
                     disabled={passwordLoading}
                     required
                     autoComplete="new-password"
@@ -1107,13 +1096,13 @@ export default function Settings() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                  <Label htmlFor="confirmPassword">{t.repeatPassword}</Label>
                   <Input
                     id="confirmPassword"
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Re-enter new password"
+                    placeholder={t.repeatPasswordPlaceholder}
                     disabled={passwordLoading}
                     required
                     autoComplete="new-password"
@@ -1146,11 +1135,9 @@ export default function Settings() {
           <Card className="border-border shadow-sm">
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-base flex items-center gap-2">
-                <Archive className="h-4 w-4 text-primary" /> Data Retention
+                <Archive className="h-4 w-4 text-primary" /> {t.dataRetentionTitle}
               </CardTitle>
-              <CardDescription className="text-xs mt-1">
-                How long logs and screenshots are kept. Cleanup runs automatically at 03:30 each night.
-              </CardDescription>
+              <CardDescription className="text-xs mt-1">{t.dataRetentionHint}</CardDescription>
             </CardHeader>
             <CardContent className="pt-4">
               <RetentionSection />
@@ -1163,9 +1150,7 @@ export default function Settings() {
             <CardTitle className="text-base flex items-center gap-2">
               <Info className="h-4 w-4 text-primary" /> {t.aboutSystem}
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              Runtime environment details for this Errand instance.
-            </CardDescription>
+            <CardDescription className="text-xs mt-1">{t.aboutSystemHint}</CardDescription>
           </CardHeader>
           <CardContent className="pt-4">
             <AboutSection />
