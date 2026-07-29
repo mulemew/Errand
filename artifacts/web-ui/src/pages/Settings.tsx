@@ -999,7 +999,7 @@ export default function Settings() {
               <Info className="h-4 w-4 text-primary" /> {t.aboutSystem}
             </CardTitle>
             <CardDescription className="text-xs mt-1">
-              Runtime environment details for this AutoOps instance.
+              Runtime environment details for this Errand instance.
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-4">

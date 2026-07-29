@@ -159,8 +159,8 @@ export async function seedProvidersFromSettings(): Promise<void> {
     // Resolve each type's backend URL: sb/camoufox behind their sidecar env URLs;
     // playwright/puppeteer use the Settings wsEndpoint (or BROWSERLESS_URL).
     const urlFor = (type: string): string => {
-      if (type === "seleniumbase") return (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
-      if (type === "camoufox") return (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+      if (type === "seleniumbase") return (process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317").replace(/\/$/, "");
+      if (type === "camoufox") return (process.env.CAMOUFOX_URL ?? "http://provider-camoufox:7318").replace(/\/$/, "");
       return ((cfg.wsEndpoint || process.env.BROWSERLESS_URL) ?? "").replace(/\/$/, "");
     };
     const conc = Math.max(1, (await loadConcurrencyConfig()).maxConcurrent);

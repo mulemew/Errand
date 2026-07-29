@@ -68,7 +68,7 @@ import net from "net";
     // Mirror the provider's resolution: CF_PROXY_URL is primary; wsEndpoint is
     // honored only when it is an http(s) URL that responds like cf-proxy.
     if (config.provider === "seleniumbase") {
-      const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317").replace(/\/$/, "");
       const endpoint = config.wsEndpoint?.trim();
       const override =
         endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;
@@ -164,7 +164,7 @@ import net from "net";
     try {
       const config = await loadBrowserConfig();
       if (config.provider === "seleniumbase") {
-        const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+        const envBaseUrl = (process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317").replace(/\/$/, "");
         const endpoint = config.wsEndpoint?.trim();
         const override =
           endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;

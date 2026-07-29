@@ -1,4 +1,4 @@
-# AutoOps
+# Errand
 
 A self-hosted web automation platform — schedule form logins, OTP handling, CAPTCHA solving, and Cloudflare bypass at scale.
 
@@ -24,8 +24,8 @@ A self-hosted web automation platform — schedule form logins, OTP handling, CA
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/mulemew/webauto.git
-cd webauto
+git clone https://github.com/mulemew/errand.git
+cd errand
 ```
 
 ### 2. Configure environment
@@ -66,7 +66,7 @@ A single Docker image contains everything:
 
 ```
 ┌─────────────────────────────────┐
-│  AutoOps container              │
+│  Errand container              │
 │                                 │
 │  Node.js (Express)              │
 │  ├── GET /api/*  → API routes   │
@@ -87,7 +87,7 @@ A single Docker image contains everything:
 The image is published to GHCR on every push to `main`:
 
 ```
-ghcr.io/mulemew/webauto:latest
+ghcr.io/mulemew/errand:latest
 ```
 
 ---
@@ -124,7 +124,7 @@ Migrations run automatically on startup against whatever `DATABASE_URL` points a
 | `ANTICAPTCHA_API_KEY` | Anti-Captcha | API key |
 | `PORT` | No | Host port (default `80`) |
 | `WARP_CONFIG_PATH` | WARP proxy only | Path to a sing-box WireGuard outbound JSON (generate with `wgcf`/warp-reg) used when a task's proxy type is `warp` |
-| `SINGBOX_PROXY_PUBLIC_HOST` | No | Host/IP the **browser** dials to reach the on-demand sing-box SOCKS5 (VLESS/VMess/Trojan/Hysteria2/WARP). Only relevant when the browser runs in a **separate container** (browserless / cf-proxy / remote CDP). Auto-detected from the app container's non-loopback IP when unset; set it explicitly (e.g. the app's compose service name `app`, or the host IP in host-network mode) if auto-detection picks the wrong interface. |
+| `SINGBOX_PROXY_PUBLIC_HOST` | No | Host/IP the **browser** dials to reach the on-demand sing-box SOCKS5 (VLESS/VMess/Trojan/Hysteria2/WARP). Only relevant when the browser runs in a **separate container** (browserless / provider-seleniumbase / remote CDP). Auto-detected from the app container's non-loopback IP when unset; set it explicitly (e.g. the app's compose service name `app`, or the host IP in host-network mode) if auto-detection picks the wrong interface. |
 | `SINGBOX_PROXY_LISTEN_HOST` | No | Interface the sing-box SOCKS5 inbound binds to. Defaults to `0.0.0.0` so sibling containers can reach it; set to `127.0.0.1` to restrict it to the local container only (safe only when the browser is the bundled `local` provider). |
 
 > **Backing up secrets**: `SESSION_SECRET` and `ENCRYPTION_KEY` are saved to `data/secrets.json` inside the Docker volume (`autoops_data`). Back up this file if you want to restore credentials after migrating to a new server.
@@ -137,9 +137,9 @@ Each task has a **浏览器后端 (Browser Backend)** panel (collapsed by defaul
 
 - **Proxy type + address** — choose one of:
   - `HTTP/HTTPS` / `SOCKS5` — paste a normal proxy URL (`http://user:pass@host:8080`, `socks5://host:1080`). Chromium connects to it directly.
-  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` / `TUIC` / `Shadowsocks` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`, `tuic://…`, `ss://…`). A per-run **sing-box** helper is started that dials the node and exposes a SOCKS5 the browser uses. Requires the `sing-box` binary (bundled in the Docker image). When the task's browser backend runs in a **separate container** (browserless / cf-proxy / remote CDP), the app binds sing-box to all interfaces (`0.0.0.0`) and advertises a cross-container-reachable address to the browser instead of `127.0.0.1` — auto-detected, or set `SINGBOX_PROXY_PUBLIC_HOST` to override. For the bundled `local` backend it stays on `127.0.0.1`.
+  - `VLESS` / `VMess` / `Trojan` / `Hysteria2` / `TUIC` / `Shadowsocks` — paste the node share link (`vless://…`, `vmess://…`, `trojan://…`, `hysteria2://…`, `tuic://…`, `ss://…`). A per-run **sing-box** helper is started that dials the node and exposes a SOCKS5 the browser uses. Requires the `sing-box` binary (bundled in the Docker image). When the task's browser backend runs in a **separate container** (browserless / provider-seleniumbase / remote CDP), the app binds sing-box to all interfaces (`0.0.0.0`) and advertises a cross-container-reachable address to the browser instead of `127.0.0.1` — auto-detected, or set `SINGBOX_PROXY_PUBLIC_HOST` to override. For the bundled `local` backend it stays on `127.0.0.1`.
   - `Cloudflare WARP` — set `WARP_CONFIG_PATH` to a sing-box WireGuard outbound JSON; leave the address blank.
-- **Headed mode (有头模式)** — run the task with a visible browser window (rendered on the container's Xvfb display) instead of headless, which is useful for troubleshooting. The `seleniumbase` (cf-proxy) backend is always headed.
+- **Headed mode (有头模式)** — run the task with a visible browser window (rendered on the container's Xvfb display) instead of headless, which is useful for troubleshooting. The `seleniumbase` (provider-seleniumbase) backend is always headed.
 
 ### Session / cookie mode
 
@@ -159,8 +159,8 @@ On any **Login** step you can enable **会话保持 / Cookie 模式 (Cookie mode
 # Install Docker
 curl -fsSL https://get.docker.com | sh
 
-git clone https://github.com/mulemew/webauto.git
-cd webauto && cp .env.example .env
+git clone https://github.com/mulemew/errand.git
+cd errand && cp .env.example .env
 # edit .env — set DASHBOARD_PASSWORD and POSTGRES_PASSWORD
 docker compose up -d
 ```
@@ -170,19 +170,19 @@ Add Caddy or Traefik in front for HTTPS/TLS termination.
 ### Pull prebuilt image
 
 ```bash
-docker pull ghcr.io/mulemew/webauto:latest
+docker pull ghcr.io/mulemew/errand:latest
 
 docker run -d \
   -p 80:8080 \
   -v autoops_data:/app/data \
   -e DATABASE_URL=postgresql://... \
   -e DASHBOARD_PASSWORD=... \
-  ghcr.io/mulemew/webauto:latest
+  ghcr.io/mulemew/errand:latest
 ```
 
 ### Kubernetes / Coolify / Portainer
 
-Use the image `ghcr.io/mulemew/webauto:latest`. The container:
+Use the image `ghcr.io/mulemew/errand:latest`. The container:
 - Listens on port `8080`
 - Requires a PostgreSQL database
 - Needs a persistent volume mounted at `/app/data` (stores secrets and screenshots)
@@ -202,8 +202,8 @@ This app runs cron jobs internally and maintains a persistent Chromium instance.
 Requires: [VS Code](https://code.visualstudio.com) + [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) + Docker
 
 ```bash
-git clone https://github.com/mulemew/webauto.git
-code webauto
+git clone https://github.com/mulemew/errand.git
+code errand
 # VS Code prompt: "Reopen in Container" → click it
 ```
 

@@ -705,7 +705,7 @@ class PlaywrightCDPProvider implements BrowserProvider {
 // A SEPARATE provider. Does not touch the SeleniumBase cf-proxy path. The sidecar
 // launches a Camoufox Playwright server per session with the requested fingerprint/
 // proxy; here we just firefox.connect() to it and drive it with the existing adapter.
-const CAMOUFOX_URL = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+const CAMOUFOX_URL = (process.env.CAMOUFOX_URL ?? "http://provider-camoufox:7318").replace(/\/$/, "");
 
 /** launchServer reports its ws endpoint with a LOOPBACK host (ws://[::1]:PORT,
  *  127.0.0.1, or 0.0.0.0) that is only valid inside the camoufox-proxy container. This
@@ -990,7 +990,7 @@ class CamoufoxProvider implements BrowserProvider {
       // batch with "fetch failed".
       // A registered sb instance (auto-distributed) wins over the env default so
       // concurrent tasks fan out across separate cf-proxy containers.
-      const envBaseUrl = (config.instanceUrl?.trim().replace(/\/$/, "")) || (process.env.CF_PROXY_URL ?? "http://cf-proxy:7317").replace(/\/$/, "");
+      const envBaseUrl = (config.instanceUrl?.trim().replace(/\/$/, "")) || (process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317").replace(/\/$/, "");
       const endpoint = config.wsEndpoint?.trim();
       const overrideCandidate =
         endpoint && /^https?:\/\//i.test(endpoint) ? endpoint.replace(/\/$/, "") : undefined;

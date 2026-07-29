@@ -21,7 +21,7 @@
  */
 import { logger } from "../lib/logger";
 
-const DEFAULT_CF_PROXY_URL = process.env.CF_PROXY_URL ?? "http://cf-proxy:7317";
+const DEFAULT_CF_PROXY_URL = process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317";
 
 function engineOrder(): string[] {
   const raw = process.env.RECAPTCHA_STT_ORDER;

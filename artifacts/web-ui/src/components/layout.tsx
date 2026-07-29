@@ -60,7 +60,7 @@ import { useLang } from "@/contexts/lang-context";
           <div className="h-16 flex items-center px-6 border-b border-border">
             <div className="flex items-center gap-2 text-primary">
               <Terminal className="h-6 w-6 stroke-[2.5px]" />
-              <span className="font-bold tracking-tight text-lg uppercase">AutoOps</span>
+              <span className="font-bold tracking-tight text-lg uppercase">Errand</span>
             </div>
           </div>
 

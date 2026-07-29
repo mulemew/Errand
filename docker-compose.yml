@@ -33,12 +33,12 @@ services:
         start_period: 30s
       restart: unless-stopped
 
-    # ── CF Proxy (SeleniumBase UC — Cloudflare bypass) ────────────
+    # ── SeleniumBase provider (undetected-chromedriver — Cloudflare bypass) ──
     # Runs Chrome in headed mode (Xvfb virtual display) via undetected-chromedriver.
     # Exposes a REST API on port 7317 for the app to create/manage browser sessions
     # that transparently bypass Cloudflare JS challenges and Turnstile.
     # Usage: set BROWSER_PROVIDER=seleniumbase in the app environment (or via Settings).
-    cf-proxy:
+    provider-seleniumbase:
       build:
         context: artifacts/cf-proxy
         dockerfile: Dockerfile
@@ -55,6 +55,13 @@ services:
         WHISPER_MODEL: "${WHISPER_MODEL:-small}"
         STT_ENGINE: "${STT_ENGINE:-whisper}"
       shm_size: 2g
+      networks:
+        default:
+          # Old service name kept as an alias: providers saved in the database store an
+          # instance URL, and existing rows still say http://cf-proxy:7317. Without this
+          # the rename would silently break every task using a saved SeleniumBase provider.
+          aliases:
+            - cf-proxy
       healthcheck:
         test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
         interval: 15s
@@ -63,9 +70,9 @@ services:
         start_period: 60s
       restart: unless-stopped
 
-    # ── Camoufox (anti-detect Firefox) — separate provider, does not touch cf-proxy.
+    # ── Camoufox provider (anti-detect Firefox) — independent of the SeleniumBase one.
     # Select the "camoufox" browser provider (or set BROWSER_PROVIDER=camoufox) to use it.
-    camoufox-proxy:
+    provider-camoufox:
       build:
         context: artifacts/camoufox-proxy
         dockerfile: Dockerfile
@@ -74,6 +81,11 @@ services:
         # 有头(默认,渲染在容器 Xvfb :99);true=无头。launch_server 的 headless 只收 bool。
         CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
       shm_size: 2g
+      networks:
+        default:
+          # See the alias note on provider-seleniumbase — saved providers point at the old name.
+          aliases:
+            - camoufox-proxy
       healthcheck:
         test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:7318/health')\" || exit 1"]
         interval: 15s
@@ -87,7 +99,7 @@ services:
     # Switching databases? Just update DATABASE_URL and restart — tables are
     # created on first connect, no separate migration step needed.
     app:
-      image: ghcr.io/mulemew/webauto:latest
+      image: ghcr.io/mulemew/errand:latest
       build:
         context: .
         dockerfile: Dockerfile
@@ -101,8 +113,8 @@ services:
         DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
         BROWSERLESS_URL: "ws://browserless:3000"
         BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
-        CF_PROXY_URL: "http://cf-proxy:7317"
-        CAMOUFOX_URL: "http://camoufox-proxy:7318"
+        CF_PROXY_URL: "http://provider-seleniumbase:7317"
+        CAMOUFOX_URL: "http://provider-camoufox:7318"
         LOG_LEVEL: "${LOG_LEVEL:-info}"
         WIT_AI_TOKEN: "${WIT_AI_TOKEN:-}"
         RECAPTCHA_STT_ORDER: "${RECAPTCHA_STT_ORDER:-}"
@@ -115,7 +127,7 @@ services:
           condition: service_healthy
         browserless:
           condition: service_healthy
-        cf-proxy:
+        provider-seleniumbase:
           condition: service_healthy
       restart: unless-stopped
 

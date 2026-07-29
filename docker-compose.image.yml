@@ -1,5 +1,5 @@
 # =============================================================
-  # AutoOps — 拉取预构建镜像部署（无需克隆代码）
+  # Errand — 拉取预构建镜像部署（无需克隆代码）
   #
   # 使用方法：
   #   1. 下载此文件
@@ -7,8 +7,8 @@
   #      DASHBOARD_PASSWORD 可不填，首次访问会在浏览器里设置密码
   #   3. docker compose -f docker-compose.image.yml up -d
   #
-  # 如需使用 Cloudflare 绕过功能（SeleniumBase），cf-proxy 已包含在内，
-  # 无需额外操作，启动后在设置页选择"SeleniumBase UC (cf-proxy)"即可。
+  # 如需使用 Cloudflare 绕过功能（SeleniumBase），provider-seleniumbase 已包含在内，
+  # 无需额外操作，启动后在设置页选择 SeleniumBase 提供商即可。
   # =============================================================
 
   services:
@@ -42,11 +42,11 @@
         start_period: 30s
       restart: unless-stopped
 
-    # ── CF Proxy（SeleniumBase UC — Cloudflare 绕过）────────────────────────────
+    # ── SeleniumBase 提供商（undetected-chromedriver — Cloudflare 绕过）──────────
     # 通过 undetected-chromedriver 运行 Chrome，绕过 Cloudflare JS 挑战和 Turnstile。
-    # 启动后在设置页将浏览器提供商切换为"SeleniumBase UC (cf-proxy)"即可使用。
-    cf-proxy:
-      image: ghcr.io/mulemew/webauto-cf-proxy:latest
+    # 启动后在设置页将浏览器提供商切换为 SeleniumBase 即可使用。
+    provider-seleniumbase:
+      image: ghcr.io/mulemew/provider-seleniumbase:latest
       environment:
         PORT: "7317"
         CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
@@ -61,6 +61,12 @@
         WHISPER_MODEL: "${WHISPER_MODEL:-small}"
         STT_ENGINE: "${STT_ENGINE:-whisper}"
       shm_size: 2g
+      networks:
+        default:
+          # 保留旧服务名作为别名：数据库里已保存的提供商记录仍指向 http://cf-proxy:7317，
+          # 没有这个别名，改名会让所有用到已保存 SeleniumBase 提供商的任务直接失败。
+          aliases:
+            - cf-proxy
       healthcheck:
         test: ["CMD-SHELL", "wget -qO- http://localhost:7317/health || exit 1"]
         interval: 15s
@@ -69,16 +75,21 @@
         start_period: 60s
       restart: unless-stopped
 
-    # Camoufox（反检测 Firefox）—— 独立 provider，不影响 cf-proxy。
+    # Camoufox（反检测 Firefox）—— 独立 provider，与 SeleniumBase 互不影响。
     # 在设置页或任务里把浏览器提供商选 "Camoufox" 即可使用。
-    camoufox-proxy:
-      image: ghcr.io/mulemew/webauto-camoufox-proxy:latest
+    provider-camoufox:
+      image: ghcr.io/mulemew/provider-camoufox:latest
       environment:
         PORT: "7318"
         # 有头(默认,渲染在容器自带的 Xvfb :99 上); true=无头(可检测)。
         # 注意 launch_server 的 headless 只收 bool,别再用 "virtual" 字符串。
         CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
       shm_size: 2g
+      networks:
+        default:
+          # 同上：已保存的提供商记录指向旧名字。
+          aliases:
+            - camoufox-proxy
       healthcheck:
         test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:7318/health')\" || exit 1"]
         interval: 15s
@@ -88,7 +99,7 @@
       restart: unless-stopped
 
     app:
-      image: ghcr.io/mulemew/webauto:latest
+      image: ghcr.io/mulemew/errand:latest
       environment:
         DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@db:5432/autoops}
         PORT: "8080"
@@ -99,8 +110,8 @@
         DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
         BROWSERLESS_URL: "ws://browserless:3000"
         BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
-        CF_PROXY_URL: "http://cf-proxy:7317"
-        CAMOUFOX_URL: "http://camoufox-proxy:7318"
+        CF_PROXY_URL: "http://provider-seleniumbase:7317"
+        CAMOUFOX_URL: "http://provider-camoufox:7318"
         LOG_LEVEL: "${LOG_LEVEL:-info}"
         WIT_AI_TOKEN: "${WIT_AI_TOKEN:-}"
         RECAPTCHA_STT_ORDER: "${RECAPTCHA_STT_ORDER:-}"
@@ -113,7 +124,7 @@
           condition: service_healthy
         browserless:
           condition: service_healthy
-        cf-proxy:
+        provider-seleniumbase:
           condition: service_healthy
       restart: unless-stopped
 

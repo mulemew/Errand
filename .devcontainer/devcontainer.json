@@ -1,5 +1,5 @@
 {
-  "name": "AutoOps Dev",
+  "name": "Errand Dev",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspace",
@@ -37,7 +37,7 @@
         "typescript.tsdk": "node_modules/typescript/lib",
         "sqltools.connections": [
           {
-            "name": "AutoOps Dev DB",
+            "name": "Errand Dev DB",
             "driver": "PostgreSQL",
             "host": "localhost",
             "port": 5432,

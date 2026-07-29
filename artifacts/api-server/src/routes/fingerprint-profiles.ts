@@ -31,7 +31,7 @@ router.get("/fingerprint-profiles", async (_req, res): Promise<void> => {
 router.get("/fingerprint-profiles/generate", async (req, res): Promise<void> => {
   const os = String(req.query.os ?? "windows");
   const source = String(req.query.source ?? "browserforge");
-  const base = (process.env.CAMOUFOX_URL ?? "http://camoufox-proxy:7318").replace(/\/$/, "");
+  const base = (process.env.CAMOUFOX_URL ?? "http://provider-camoufox:7318").replace(/\/$/, "");
   try {
     const r = await fetch(`${base}/generate?os=${encodeURIComponent(os)}&source=${encodeURIComponent(source)}`);
     const data = await r.json().catch(() => ({}));

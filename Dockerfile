@@ -1,5 +1,5 @@
 # =============================================================
-# AutoOps — single container (API + Web UI + bundled Chromium)
+# Errand — single container (API + Web UI + bundled Chromium)
 # Includes Patchright's patched Chromium for the "local" browser provider.
 # Also works with remote CDP services (browserless, etc.) via the
 # "playwright" or "puppeteer" provider settings.
@@ -93,7 +93,7 @@ WORKDIR /app
 COPY artifacts/api-server/package.json ./package-src.json
 RUN node -e "\
   const p = JSON.parse(require('fs').readFileSync('./package-src.json', 'utf-8'));\
-  const out = { name: 'autoops', version: '1.0.0', type: 'module',\
+  const out = { name: 'errand', version: '1.0.0', type: 'module',\
     dependencies: {\
       puppeteer: p.dependencies.puppeteer,\
       'playwright-core': p.dependencies['playwright-core']\

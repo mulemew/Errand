@@ -910,7 +910,7 @@ router.get("/tasks/backup/export", async (req, res): Promise<void> => {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="webauto-${template ? "templates" : "tasks"}-${new Date().toISOString().slice(0, 10)}.json"`,
+    `attachment; filename="errand-${template ? "templates" : "tasks"}-${new Date().toISOString().slice(0, 10)}.json"`,
   );
   res.json({ version: 1, kind: template ? "template" : "backup", exportedAt: new Date().toISOString(), tasks });
 });

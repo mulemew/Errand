@@ -1,7 +1,8 @@
 /**
    * SeleniumBasePageAdapter — PageAdapter backed by the Python cf-proxy sidecar.
    *
-   * All browser operations are delegated to cf-proxy (http://cf-proxy:7317) which
+   * All browser operations are delegated to the SeleniumBase provider sidecar
+   * (http://provider-seleniumbase:7317) which
    * runs SeleniumBase in UC (undetected Chrome) mode.  Every goto() call uses
    * uc_open_with_reconnect(), which temporarily disconnects CDP so Cloudflare sees
    * a real browser during the challenge window, then reconnects after it passes.
@@ -21,7 +22,7 @@
   import type { BrowserProvider, BrowserProviderConfig } from "./browser-provider";
   import { startLocalProxy, type ResolvedProxy } from "./proxy-manager";
 
-  const DEFAULT_CF_PROXY_URL = "http://cf-proxy:7317";
+  const DEFAULT_CF_PROXY_URL = "http://provider-seleniumbase:7317";
 
   // ── HTTP helpers ─────────────────────────────────────────────────────────────
 
