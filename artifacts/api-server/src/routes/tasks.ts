@@ -22,7 +22,18 @@ import { encrypt, decrypt } from "../lib/encryption";
 import { normalizeTotpSecret } from "../lib/totp";
 import { startLocalProxy, resolveProxyType } from "../automation/proxy-manager";
 import { runTask, isTaskRunning, requestCancelTask } from "../automation/runner";
-import { getTaskEmitter, getTaskEventBuffer, type TaskStreamEvent } from "../lib/taskEvents";
+import {
+  getTaskEmitter,
+  getTaskEventBuffer,
+  getTaskDebugEmitter,
+  getTaskDebugBuffer,
+  addDebugWatcher,
+  removeDebugWatcher,
+  hasDebugWatchers,
+  type TaskStreamEvent,
+  type TaskDebugLine,
+} from "../lib/taskEvents";
+import { beginLiveDebug, endLiveDebug, configuredLevel } from "../lib/logger";
 import { rescheduleTask, unscheduleTask } from "../scheduler";
 import { Cron } from "croner";
 
@@ -1142,6 +1153,73 @@ router.get("/tasks/:id/logs/stream", async (req, res): Promise<void> => {
   };
 
   emitter.on("event", onEvent);
+
+  req.on("close", cleanup);
+  res.on("error", cleanup);
+});
+
+/**
+ * Live server log for one task — SSE, in-memory only, nothing is persisted.
+ *
+ * Separate from /logs/stream on purpose: that one carries the run's progress events and is
+ * replayed into the timeline, and a chatty run would push those out of its 200-event
+ * window. This one exists only while a browser tab is watching, and while at least one tab
+ * is watching the process log level is temporarily lowered to `debug` so there is actually
+ * something to see (restored when the last watcher disconnects).
+ */
+router.get("/tasks/:id/debug-stream", async (req, res): Promise<void> => {
+  const taskId = parseInt(req.params.id ?? "", 10);
+  if (isNaN(taskId)) {
+    res.status(400).json({ error: "Invalid task id" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (data: object) => {
+    try {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (typeof (res as any).flush === "function") (res as any).flush();
+    } catch {
+      /* client went away between the emit and the write */
+    }
+  };
+
+  addDebugWatcher(taskId);
+  beginLiveDebug();
+
+  // Tell the client what it is looking at, then replay whatever this run has produced so
+  // far so opening the panel mid-run is not a blank box.
+  send({ type: "meta", configuredLevel: configuredLevel(), streamingAt: "debug" });
+  for (const line of getTaskDebugBuffer(taskId)) send({ type: "line", ...line });
+
+  const emitter = getTaskDebugEmitter(taskId);
+  const onLine = (line: TaskDebugLine) => send({ type: "line", ...line });
+  emitter.on("line", onLine);
+
+  // A proxy that buffers or an idle run would otherwise let the connection lapse.
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(": keep-alive\n\n");
+    } catch {
+      /* ignore */
+    }
+  }, 25_000);
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(keepAlive);
+    emitter.off("line", onLine);
+    removeDebugWatcher(taskId);
+    // Restore the configured level once nobody anywhere is watching.
+    if (!hasDebugWatchers()) endLiveDebug();
+  };
 
   req.on("close", cleanup);
   res.on("error", cleanup);

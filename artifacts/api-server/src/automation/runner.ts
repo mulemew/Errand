@@ -9,6 +9,7 @@ import path from "path";
   import { createCaptchaSolverFromConfig } from "./captcha-solver";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
+  import { runWithTaskContext } from "../lib/taskContext";
   import { executeWorkflowSteps, CaptchaBlockedError, type WorkflowStep, type StepResult } from "./step-executor";
   import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode } from "../lib/browserSessionStore";
 
@@ -277,7 +278,21 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
     if (cancelRequested.has(taskId)) throw new Error("Task cancelled by user");
   }
 
-  export async function runTask(
+  /**
+   * Public entry point. The body is wrapped in the task's async context so that every
+   * `logger.*` call made anywhere beneath it can be attributed to this run and mirrored to
+   * the live debug stream. `AsyncLocalStorage.run` returns whatever the callback returns —
+   * here the same promise as before — so control flow, errors and timing are untouched.
+   */
+  export function runTask(
+    taskId: number,
+    dryRun = false,
+    triggeredBy: "manual" | "cron" | "dry_run" | "webhook" | "retry" = "manual",
+  ): Promise<void> {
+    return runWithTaskContext(taskId, () => _runTask(taskId, dryRun, triggeredBy));
+  }
+
+  async function _runTask(
     taskId: number,
     dryRun = false,
     triggeredBy: "manual" | "cron" | "dry_run" | "webhook" | "retry" = "manual",

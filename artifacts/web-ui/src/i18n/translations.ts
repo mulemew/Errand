@@ -720,6 +720,10 @@ export interface Translations {
       clickToViewScreenshot: string;
       proxyNameExample: string;
       typeTextThenEnter: string;
+      liveLogTitle: string;
+      liveLogHint: string;
+      liveLogWaiting: string;
+      liveLogLevelNote: string;
   }
 
   export const zh: Translations = {
@@ -1415,6 +1419,10 @@ export interface Translations {
       clickToViewScreenshot: "点击查看截图",
       proxyNameExample: "美国住宅 #1",
       typeTextThenEnter: "输入文字后按回车…",
+      liveLogTitle: "详细日志",
+      liveLogHint: "实时显示服务端这次运行的日志。不保存，关掉这个面板就停止。",
+      liveLogWaiting: "等待日志输出…",
+      liveLogLevelNote: "配置的级别是 {v}，观看期间临时降到 debug",
   };
 
   export const en: Translations = {
@@ -2111,5 +2119,9 @@ export interface Translations {
       clickToViewScreenshot: "Click to view screenshot",
       proxyNameExample: "US residential #1",
       typeTextThenEnter: "Type text then Enter…",
+      liveLogTitle: "Verbose log",
+      liveLogHint: "Streams the server's own log for this run. Nothing is stored; closing this panel stops it.",
+      liveLogWaiting: "Waiting for output…",
+      liveLogLevelNote: "Configured level is {v}; temporarily lowered to debug while you watch",
   };
   

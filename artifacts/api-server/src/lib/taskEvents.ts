@@ -24,6 +24,17 @@ import { EventEmitter } from "events";
         emitters.delete(taskId);
         emitterCreatedAt.delete(taskId);
         eventBuffers.delete(taskId);
+        debugBuffers.delete(taskId);
+        debugEmitters.delete(taskId);
+      }
+    }
+    // Debug lines can also arrive AFTER a run finishes — a child process or a listener
+    // registered during the run still carries its async context — which re-creates a
+    // buffer for a task nobody will ever read. Anything without a live emitter is dead.
+    for (const taskId of debugBuffers.keys()) {
+      if (!emitterCreatedAt.has(taskId)) {
+        debugBuffers.delete(taskId);
+        debugEmitters.delete(taskId);
       }
     }
   }, 30 * 60 * 1000).unref();
@@ -57,6 +68,7 @@ import { EventEmitter } from "events";
   /** Clear the replay buffer — call at the start of every new run to discard stale events. */
   export function clearTaskEventBuffer(taskId: number): void {
     eventBuffers.delete(taskId);
+    debugBuffers.delete(taskId);
   }
 
   export function emitTaskProgress(taskId: number, message: string): void {
@@ -74,6 +86,88 @@ import { EventEmitter } from "events";
       emitters.delete(taskId);
       emitterCreatedAt.delete(taskId);
       eventBuffers.delete(taskId);
+      debugBuffers.delete(taskId);
+      debugEmitters.delete(taskId);
     }, 60_000);
   }
-  
+
+  // ── Live debug log ────────────────────────────────────────────────────────────
+  //
+  // A SEPARATE channel from the progress events above, on purpose. Progress events are
+  // the run's story (they are replayed into the timeline and capped at 200); debug lines
+  // are the server's own log for that run, and there can be hundreds of them. Sharing one
+  // buffer would let a chatty run push the actual progress events out of the replay window.
+  //
+  // Nothing here is persisted: lines live in a small ring buffer and die with the run.
+
+  export interface TaskDebugLine {
+    /** ms since epoch */
+    t: number;
+    /** pino level name: trace | debug | info | warn | error | fatal */
+    level: string;
+    msg: string;
+  }
+
+  const MAX_DEBUG_LINES = 400;
+  const debugBuffers = new Map<number, TaskDebugLine[]>();
+  const debugEmitters = new Map<number, EventEmitter>();
+
+  /** Number of SSE clients currently watching each task's debug stream. */
+  const debugWatchers = new Map<number, number>();
+
+  export function getTaskDebugEmitter(taskId: number): EventEmitter {
+    let em = debugEmitters.get(taskId);
+    if (!em) {
+      em = new EventEmitter();
+      em.setMaxListeners(30);
+      debugEmitters.set(taskId, em);
+    }
+    return em;
+  }
+
+  export function getTaskDebugBuffer(taskId: number): TaskDebugLine[] {
+    return debugBuffers.get(taskId) ?? [];
+  }
+
+  /**
+   * Record one log line for a task. Called from the logger's hook, so it must never throw
+   * and must stay cheap — it runs on every log call inside a run.
+   */
+  export function emitTaskDebug(taskId: number, level: string, msg: string): void {
+    try {
+      const line: TaskDebugLine = { t: Date.now(), level, msg };
+      let buf = debugBuffers.get(taskId);
+      if (!buf) {
+        buf = [];
+        debugBuffers.set(taskId, buf);
+      }
+      buf.push(line);
+      if (buf.length > MAX_DEBUG_LINES) buf.shift();
+      const em = debugEmitters.get(taskId);
+      if (em) em.emit("line", line);
+    } catch {
+      /* logging must never be able to break a run */
+    }
+  }
+
+  /** True while at least one client is watching any task's debug stream. */
+  export function hasDebugWatchers(): boolean {
+    for (const n of debugWatchers.values()) if (n > 0) return true;
+    return false;
+  }
+
+  export function addDebugWatcher(taskId: number): void {
+    debugWatchers.set(taskId, (debugWatchers.get(taskId) ?? 0) + 1);
+  }
+
+  export function removeDebugWatcher(taskId: number): void {
+    const n = (debugWatchers.get(taskId) ?? 1) - 1;
+    if (n <= 0) debugWatchers.delete(taskId);
+    else debugWatchers.set(taskId, n);
+  }
+
+  /** Drop a finished run's lines. Called alongside the progress buffer cleanup. */
+  export function clearTaskDebugBuffer(taskId: number): void {
+    debugBuffers.delete(taskId);
+    debugEmitters.delete(taskId);
+  }

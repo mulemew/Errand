@@ -20,9 +20,71 @@ import { usePollingInterval } from "@/hooks/use-polling-interval";
 import { usePollPaused } from "@/contexts/poll-paused-context";
 import { useTimeSince } from "@/hooks/use-time-since";
 import { useTaskLogStream, type StreamEntry } from "@/hooks/use-task-log-stream";
+import { useTaskDebugStream } from "@/hooks/use-task-debug-stream";
 
 import TaskHistoryChart from "@/components/TaskHistoryChart";
 import { stepTypeLabel } from "@/components/StepEditor";
+
+/**
+ * The server's own log for this run, live.
+ *
+ * Mounted only while the toggle is on: the SSE connection IS the signal that somebody is
+ * watching, and the server lowers its log level for exactly as long as it is open. Lines
+ * are never written anywhere — they live in this component and in a small ring buffer on
+ * the server, and both die with the run.
+ */
+function LiveLogPanel({ taskId }: { taskId: number }) {
+  const { t } = useLang();
+  const { lines, connected, configuredLevel } = useTaskDebugStream(taskId, true);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
+
+  // Follow the tail, but stop fighting the user the moment they scroll up to read.
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [lines.length]);
+
+  const levelColor = (level: string) =>
+    level === "error" || level === "fatal" ? "text-destructive"
+      : level === "warn" ? "text-amber-500"
+      : level === "debug" || level === "trace" ? "text-muted-foreground"
+      : "text-foreground";
+
+  return (
+    <div className="border-t border-border bg-muted/10">
+      <div className="flex items-center gap-2 px-4 py-1.5 text-[10px] font-mono text-muted-foreground">
+        <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+        <span>{t.liveLogHint}</span>
+        {configuredLevel && (
+          <span className="ml-auto shrink-0">{t.liveLogLevelNote.replace("{v}", configuredLevel)}</span>
+        )}
+      </div>
+      <div
+        ref={boxRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        className="max-h-72 overflow-y-auto px-4 pb-3 font-mono text-[11px] leading-relaxed"
+      >
+        {lines.length === 0 ? (
+          <p className="text-muted-foreground py-2">{t.liveLogWaiting}</p>
+        ) : (
+          lines.map((l, i) => (
+            <div key={`${l.t}-${i}`} className="flex gap-2 break-all">
+              <span className="text-muted-foreground/60 shrink-0">
+                {new Date(l.t).toLocaleTimeString(undefined, { hour12: false })}
+              </span>
+              <span className={`shrink-0 w-10 ${levelColor(l.level)}`}>{l.level}</span>
+              <span className={levelColor(l.level)}>{l.msg}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
 
 function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number }) {
   const { t } = useLang();
@@ -322,6 +384,9 @@ export default function TaskDetail() {
     const deleteTask = useDeleteTask();
   const runTask = useRunTask();
   const [isDryRunning, setIsDryRunning] = useState(false);
+  // Live server log. OFF by default — the open connection is what tells the server to
+  // stream, so nothing happens until you ask for it.
+  const [verbose, setVerbose] = useState(false);
     const [isStopping, setIsStopping] = useState(false);
 
     const handleStop = async () => {
@@ -807,9 +872,23 @@ export default function TaskDetail() {
                       </span>
                     )}
                   </CardTitle>
-                  <span className="text-[10px] font-mono text-muted-foreground">
-                    {isRunning && !isDone ? "live" : isDone ? (displayEntries.find(e => e.type === "done")?.success ? "✓ completed" : "✗ failed") : "last run"}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVerbose((v) => !v)}
+                      title={t.liveLogHint}
+                      className={`text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                        verbose
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+                      }`}
+                    >
+                      {t.liveLogTitle}
+                    </button>
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      {isRunning && !isDone ? "live" : isDone ? (displayEntries.find(e => e.type === "done")?.success ? "✓ completed" : "✗ failed") : "last run"}
+                    </span>
+                  </div>
                 </CardHeader>
                 <CardContent className="p-0">
                   {/* Vertical Step Timeline */}
@@ -985,6 +1064,7 @@ export default function TaskDetail() {
                         </div>
                       );
                     })()}
+                  {verbose && <LiveLogPanel taskId={taskId} />}
                 </CardContent>
               </Card>
             )}

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
   import { db, sql } from "@workspace/db";
-  import { logger } from "../lib/logger";
+  import { logger, configuredLevel, setConfiguredLevel } from "../lib/logger";
   import {
     loadBrowserConfig, saveBrowserConfig,
     loadCaptchaConfig, saveCaptchaConfig,
@@ -200,6 +200,8 @@ import { Router, type IRouter } from "express";
       res.json({
         level: config.level,
         levels: LOG_LEVELS,
+        // What pino is actually at right now — a live-log watcher temporarily lowers it.
+        effectiveLevel: logger.level,
         // What the container was started with. Shown so it is clear the UI value wins.
         envLevel: (process.env.LOG_LEVEL ?? "").trim().toLowerCase(),
       });
@@ -219,8 +221,8 @@ import { Router, type IRouter } from "express";
       await saveLogConfig({ level: level as (typeof LOG_LEVELS)[number] });
       // Applies immediately — pino's level is writable, so there is no reason to make
       // anyone restart a container to see debug output.
-      const previous = logger.level;
-      logger.level = level;
+      const previous = configuredLevel();
+      setConfiguredLevel(level);
       logger.info({ from: previous, to: level }, "Log level changed from the Settings page");
       res.json({ ok: true });
     } catch (err) {

@@ -3,7 +3,7 @@
   ensureSecrets();
 
   import app from "./app";
-  import { logger } from "./lib/logger";
+  import { logger, setConfiguredLevel } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
   import { startProviderHealthPolling, seedProvidersFromSettings, autoBindTasksToProviders, ensureDefaultProvider, releaseOrphanCamoufoxSessions } from "./automation/providers";
@@ -53,7 +53,7 @@
     const { level } = await loadLogConfig();
     if (level !== logger.level) {
       logger.info({ from: logger.level, to: level }, "Applying saved log level");
-      logger.level = level;
+      setConfiguredLevel(level);
     }
   } catch (err) {
     logger.warn({ err }, "Could not load the saved log level — keeping the environment's");
