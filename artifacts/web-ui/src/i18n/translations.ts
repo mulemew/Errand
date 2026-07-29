@@ -577,6 +577,15 @@ export interface Translations {
       savedInEnv: string;
       envTokenPresent: string;
       valueSaved: string;
+      logLevelTitle: string;
+      logLevelCardHint: string;
+      logLevelSaved: string;
+      logLevelFromEnv: string;
+      logLevelError: string;
+      logLevelWarn: string;
+      logLevelInfo: string;
+      logLevelDebug: string;
+      logLevelTrace: string;
   }
 
   export const zh: Translations = {
@@ -1129,6 +1138,15 @@ export interface Translations {
       savedInEnv: "当前由环境变量提供：{v}",
       envTokenPresent: "已设置",
       valueSaved: "已保存",
+      logLevelTitle: "日志级别",
+      logLevelCardHint: "服务端日志的详细程度。保存后立即生效，不需要重启容器。",
+      logLevelSaved: "日志级别已保存",
+      logLevelFromEnv: "容器启动时的 LOG_LEVEL：{v}（这里保存的值优先）",
+      logLevelError: "只记录错误",
+      logLevelWarn: "警告及以上",
+      logLevelInfo: "常规（默认）",
+      logLevelDebug: "调试：每一步的细节，排查任务失败时用",
+      logLevelTrace: "追踪：极其啰嗦，只在需要时短时间开启",
   };
 
   export const en: Translations = {
@@ -1682,5 +1700,14 @@ export interface Translations {
       savedInEnv: "Currently supplied by the environment: {v}",
       envTokenPresent: "set",
       valueSaved: "Saved",
+      logLevelTitle: "Log level",
+      logLevelCardHint: "How much detail the server writes to its log. Takes effect immediately — no container restart.",
+      logLevelSaved: "Log level saved",
+      logLevelFromEnv: "The container started with LOG_LEVEL={v}; the value saved here takes precedence.",
+      logLevelError: "Errors only",
+      logLevelWarn: "Warnings and above",
+      logLevelInfo: "Normal (default)",
+      logLevelDebug: "Debug: per-step detail, for working out why a task failed",
+      logLevelTrace: "Trace: extremely verbose, turn on only briefly",
   };
   

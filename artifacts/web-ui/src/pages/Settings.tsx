@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, FormEvent } from "react";
 import {
   RefreshCw, KeyRound, Loader2, CheckCircle2, AlertTriangle, Archive,
   Globe, Wifi, WifiOff, ShieldCheck, Timer, Info, Server,
-  Database, Cpu,
+  Database, Cpu, FileText,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -634,6 +634,101 @@ function CaptchaSection() {
   );
 }
 
+// ── Log Level Section ───────────────────────────────────────────────────────────
+
+type LogLevelValue = "error" | "warn" | "info" | "debug" | "trace";
+
+function LogLevelSection() {
+  const { t } = useLang();
+  const { toast } = useToast();
+  const [level, setLevel] = useState<LogLevelValue>("info");
+  const [envLevel, setEnvLevel] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`${BASE}/api/settings/logging`, { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((d: { level?: LogLevelValue; envLevel?: string }) => {
+        if (d.level) setLevel(d.level);
+        setEnvLevel(d.envLevel ?? "");
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async (next: LogLevelValue) => {
+    const previous = level;
+    setLevel(next);
+    setSaving(true);
+    try {
+      const res = await fetch(`${BASE}/api/settings/logging`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level: next }),
+      });
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setLevel(previous);
+        toast({ title: t.saveFailed, description: data.error, variant: "destructive" });
+        return;
+      }
+      toast({ title: t.logLevelSaved, variant: "success" });
+    } catch {
+      setLevel(previous);
+      toast({ title: "Network error", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-6 text-muted-foreground text-sm">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+      </div>
+    );
+  }
+
+  const OPTIONS: Array<{ value: LogLevelValue; hint: string }> = [
+    { value: "error", hint: t.logLevelError },
+    { value: "warn", hint: t.logLevelWarn },
+    { value: "info", hint: t.logLevelInfo },
+    { value: "debug", hint: t.logLevelDebug },
+    { value: "trace", hint: t.logLevelTrace },
+  ];
+
+  return (
+    <div className="space-y-3">
+      {OPTIONS.map(({ value, hint }) => (
+        <button
+          key={value}
+          type="button"
+          disabled={saving}
+          onClick={() => value !== level && save(value)}
+          className={`w-full flex items-center gap-3 p-3 rounded-md border text-left transition-all duration-150 ${
+            level === value
+              ? "border-primary bg-primary/5 text-foreground"
+              : "border-border bg-card hover:bg-accent/40 text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <div className={`flex-shrink-0 h-3 w-3 rounded-full border-2 ${
+            level === value ? "border-primary bg-primary" : "border-muted-foreground"
+          }`} />
+          <div className="min-w-0">
+            <p className="font-mono font-semibold text-sm">{value}</p>
+            <p className="text-xs mt-0.5 opacity-70">{hint}</p>
+          </div>
+        </button>
+      ))}
+      {envLevel && envLevel !== level && (
+        <p className="text-xs text-muted-foreground">{t.logLevelFromEnv.replace("{v}", envLevel)}</p>
+      )}
+    </div>
+  );
+}
+
 // ── Concurrency Section ─────────────────────────────────────────────────────────
 
 interface ConcurrencyState {
@@ -909,6 +1004,19 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="pt-6">
             <CaptchaSection />
+          </CardContent>
+        </Card>
+
+        {/* ── Log level ── */}
+        <Card className="border-border shadow-sm">
+          <CardHeader className="bg-muted/20 border-b border-border pb-4">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" /> {t.logLevelTitle}
+            </CardTitle>
+            <CardDescription className="text-xs mt-1">{t.logLevelCardHint}</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <LogLevelSection />
           </CardContent>
         </Card>
 

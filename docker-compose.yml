@@ -37,7 +37,7 @@ services:
     # Runs Chrome in headed mode (Xvfb virtual display) via undetected-chromedriver.
     # Exposes a REST API on port 7317 for the app to create/manage browser sessions
     # that transparently bypass Cloudflare JS challenges and Turnstile.
-    # Usage: set BROWSER_PROVIDER=seleniumbase in the app environment (or via Settings).
+    # Usage: add it on the Providers page (or mark it the default there) and tasks use it.
     provider-seleniumbase:
       build:
         context: artifacts/cf-proxy
@@ -45,13 +45,8 @@ services:
       environment:
         PORT: "7317"
         CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
-        SESSION_TIMEOUT_S: "1800"
+        SESSION_TIMEOUT_S: "${SESSION_TIMEOUT_S:-1800}"
         POOL_SIZE: "${POOL_SIZE:-1}"
-        FINGERPRINT_OS: "${FINGERPRINT_OS:-}"
-        FINGERPRINT_TZ: "${FINGERPRINT_TZ:-}"
-        FINGERPRINT_LOCALE: "${FINGERPRINT_LOCALE:-}"
-        FINGERPRINT_LANGS: "${FINGERPRINT_LANGS:-}"
-        FINGERPRINT_AUTOGEO: "${FINGERPRINT_AUTOGEO:-1}"
         WHISPER_MODEL: "${WHISPER_MODEL:-small}"
         STT_ENGINE: "${STT_ENGINE:-whisper}"
       shm_size: 2g
@@ -71,7 +66,7 @@ services:
       restart: unless-stopped
 
     # ── Camoufox provider (anti-detect Firefox) — independent of the SeleniumBase one.
-    # Select the "camoufox" browser provider (or set BROWSER_PROVIDER=camoufox) to use it.
+    # Pick the Camoufox provider on the Providers page (or in a task) to use it.
     provider-camoufox:
       build:
         context: artifacts/camoufox-proxy
@@ -111,11 +106,15 @@ services:
         SESSION_SECRET: ${SESSION_SECRET:-}
         ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
         DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
-        BROWSERLESS_URL: "ws://browserless:3000"
-        BROWSER_PROVIDER: "${BROWSER_PROVIDER:-playwright}"
-        CF_PROXY_URL: "http://provider-seleniumbase:7317"
-        CAMOUFOX_URL: "http://provider-camoufox:7318"
+        # Sidecar addresses. Only needed if you move a sidecar elsewhere — the browser
+        # backend a task actually uses comes from the Providers page, not from here.
+        BROWSERLESS_URL: "${BROWSERLESS_URL:-ws://browserless:3000}"
+        CF_PROXY_URL: "${CF_PROXY_URL:-http://provider-seleniumbase:7317}"
+        CAMOUFOX_URL: "${CAMOUFOX_URL:-http://provider-camoufox:7318}"
+        # Starting level only; Settings -> Log level changes it live and takes precedence.
         LOG_LEVEL: "${LOG_LEVEL:-info}"
+        # Optional fallbacks for the reCAPTCHA audio solver. Normally set in Settings ->
+        # Captcha instead; a value there wins over these.
         WIT_AI_TOKEN: "${WIT_AI_TOKEN:-}"
         RECAPTCHA_STT_ORDER: "${RECAPTCHA_STT_ORDER:-}"
       ports:

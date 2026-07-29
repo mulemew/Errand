@@ -116,13 +116,14 @@ Migrations run automatically on startup against whatever `DATABASE_URL` points a
 | `ENCRYPTION_KEY` | No | Auto-generated on first run — **never change after first run or saved credentials become unreadable** |
 | `DATABASE_URL` | External DB only | PostgreSQL connection string |
 | `CORS_ORIGINS` | No | Comma-separated allowed origins (not needed for same-origin) |
-| `BROWSER_PROVIDER` | No | `local` (default), `browserless`, or `remote` |
 | `BROWSERLESS_URL` | Browserless only | WebSocket endpoint (`wss://...`) |
+| `CF_PROXY_URL` / `CAMOUFOX_URL` | No | Only when a sidecar runs somewhere other than the bundled compose service |
 | `CAPTCHA_PROVIDER` | No | `2captcha`, `capsolver`, or `anticaptcha` |
 | `TWO_CAPTCHA_API_KEY` | 2captcha | API key |
 | `CAPSOLVER_API_KEY` | Capsolver | API key |
 | `ANTICAPTCHA_API_KEY` | Anti-Captcha | API key |
 | `PORT` | No | Host port (default `80`) |
+| `LOG_LEVEL` | No | Starting log level. Settings → Log level changes it live and takes precedence |
 | `WARP_CONFIG_PATH` | WARP proxy only | Path to a sing-box WireGuard outbound JSON (generate with `wgcf`/warp-reg) used when a task's proxy type is `warp` |
 | `SINGBOX_PROXY_PUBLIC_HOST` | No | Host/IP the **browser** dials to reach the on-demand sing-box SOCKS5 (VLESS/VMess/Trojan/Hysteria2/WARP). Only relevant when the browser runs in a **separate container** (browserless / provider-seleniumbase / remote CDP). Auto-detected from the app container's non-loopback IP when unset; set it explicitly (e.g. the app's compose service name `app`, or the host IP in host-network mode) if auto-detection picks the wrong interface. |
 | `SINGBOX_PROXY_LISTEN_HOST` | No | Interface the sing-box SOCKS5 inbound binds to. Defaults to `0.0.0.0` so sibling containers can reach it; set to `127.0.0.1` to restrict it to the local container only (safe only when the browser is the bundled `local` provider). |

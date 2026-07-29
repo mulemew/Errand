@@ -10,6 +10,7 @@
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
+  import { loadLogConfig } from "./lib/appSettings";
   import { pool } from "@workspace/db";
 
   const rawPort = process.env["PORT"];
@@ -44,6 +45,18 @@
     logger.info("Schema column migrations applied");
   } catch (err) {
     logger.warn({ err }, "Schema column migration warning (non-fatal)");
+  }
+
+  // The logger boots at LOG_LEVEL (or info) because it exists long before the database
+  // does; now that migrations have run, adopt whatever the Settings page saved.
+  try {
+    const { level } = await loadLogConfig();
+    if (level !== logger.level) {
+      logger.info({ from: logger.level, to: level }, "Applying saved log level");
+      logger.level = level;
+    }
+  } catch (err) {
+    logger.warn({ err }, "Could not load the saved log level — keeping the environment's");
   }
 
   const envPassword = process.env.DASHBOARD_PASSWORD;

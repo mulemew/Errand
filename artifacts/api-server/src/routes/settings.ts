@@ -7,8 +7,7 @@ import { Router, type IRouter } from "express";
     loadTaskTimeoutConfig, saveTaskTimeoutConfig,
     loadRetentionConfig, saveRetentionConfig,
     loadConcurrencyConfig, saveConcurrencyConfig,
-    type RetentionConfig,
-  } from "../lib/appSettings";
+    type RetentionConfig, loadLogConfig, saveLogConfig, LOG_LEVELS } from "../lib/appSettings";
   import type { CaptchaConfig, CaptchaProvider, TaskTimeoutConfig, ConcurrencyConfig } from "../lib/appSettings";
   import { createBrowserProvider } from "../automation/browser-provider";
   import type { BrowserProviderConfig, BrowserProviderType } from "../automation/browser-provider";
@@ -190,6 +189,43 @@ import { Router, type IRouter } from "express";
     } catch (err) {
       logger.error({ err }, "Failed to save captcha config");
       res.status(500).json({ error: "Failed to save captcha configuration" });
+    }
+  });
+
+  // ── Log level ────────────────────────────────────────────────────────────────
+
+  router.get("/settings/logging", async (_req, res): Promise<void> => {
+    try {
+      const config = await loadLogConfig();
+      res.json({
+        level: config.level,
+        levels: LOG_LEVELS,
+        // What the container was started with. Shown so it is clear the UI value wins.
+        envLevel: (process.env.LOG_LEVEL ?? "").trim().toLowerCase(),
+      });
+    } catch (err) {
+      logger.error({ err }, "Failed to load log config");
+      res.status(500).json({ error: "Failed to load log configuration" });
+    }
+  });
+
+  router.put("/settings/logging", async (req, res): Promise<void> => {
+    const level = String((req.body as { level?: string })?.level ?? "").trim().toLowerCase();
+    if (!(LOG_LEVELS as readonly string[]).includes(level)) {
+      res.status(400).json({ error: `level must be one of: ${LOG_LEVELS.join(", ")}` });
+      return;
+    }
+    try {
+      await saveLogConfig({ level: level as (typeof LOG_LEVELS)[number] });
+      // Applies immediately — pino's level is writable, so there is no reason to make
+      // anyone restart a container to see debug output.
+      const previous = logger.level;
+      logger.level = level;
+      logger.info({ from: previous, to: level }, "Log level changed from the Settings page");
+      res.json({ ok: true });
+    } catch (err) {
+      logger.error({ err }, "Failed to save log config");
+      res.status(500).json({ error: "Failed to save log configuration" });
     }
   });
 

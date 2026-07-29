@@ -5,6 +5,7 @@ import { db, settingsTable, eq } from "@workspace/db";
   const CAPTCHA_CONFIG_KEY = "captchaConfig";
   const TASK_TIMEOUT_KEY = "taskTimeoutConfig";
   const RETENTION_CONFIG_KEY = "retentionConfig";
+  const LOG_CONFIG_KEY = "logConfig";
 
   const DEFAULT_WS_ENDPOINT = process.env.BROWSERLESS_URL ?? "ws://browserless:3000";
 
@@ -157,4 +158,38 @@ import { db, settingsTable, eq } from "@workspace/db";
       await db.insert(settingsTable).values({ key: CONCURRENCY_CONFIG_KEY, value: JSON.stringify(config) })
         .onConflictDoUpdate({ target: settingsTable.key, set: { value: JSON.stringify(config) } });
     }
-  
+
+  // ── Log level ─────────────────────────────────────────────────────────────────
+
+  /** pino levels, quietest first. "trace" logs every browser probe — useful when a task
+   *  misbehaves, far too noisy to leave on. */
+  export const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
+  export type LogLevel = (typeof LOG_LEVELS)[number];
+
+  export interface LogConfig {
+    level: LogLevel;
+  }
+
+  function envLogLevel(): LogLevel {
+    const raw = (process.env.LOG_LEVEL ?? "").trim().toLowerCase() as LogLevel;
+    return (LOG_LEVELS as readonly string[]).includes(raw) ? raw : "info";
+  }
+
+  /** Saved level, else LOG_LEVEL from the environment, else info. */
+  export async function loadLogConfig(): Promise<LogConfig> {
+    try {
+      const [row] = await db.select().from(settingsTable).where(eq(settingsTable.key, LOG_CONFIG_KEY));
+      if (row) {
+        const parsed = JSON.parse(row.value) as Partial<LogConfig>;
+        if (parsed.level && (LOG_LEVELS as readonly string[]).includes(parsed.level)) {
+          return { level: parsed.level };
+        }
+      }
+    } catch { /* fall through to the environment */ }
+    return { level: envLogLevel() };
+  }
+
+  export async function saveLogConfig(config: LogConfig): Promise<void> {
+    await db.insert(settingsTable).values({ key: LOG_CONFIG_KEY, value: JSON.stringify(config) })
+      .onConflictDoUpdate({ target: settingsTable.key, set: { value: JSON.stringify(config) } });
+  }
