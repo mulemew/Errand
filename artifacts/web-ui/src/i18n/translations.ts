@@ -568,6 +568,15 @@ export interface Translations {
       cookieSeedOptionalTitle: string;
       cookieReuseExplain: string;
       cookieCriterionRecommended: string;
+      audioSolverTitle: string;
+      audioSolverHint: string;
+      sttOrderLabel: string;
+      sttOrderHint: string;
+      witAiTokenLabel: string;
+      witAiTokenHint: string;
+      savedInEnv: string;
+      envTokenPresent: string;
+      valueSaved: string;
   }
 
   export const zh: Translations = {
@@ -1111,6 +1120,15 @@ export interface Translations {
       cookieSeedOptionalTitle: "手动粘贴 cookie（可选，几乎用不到）",
       cookieReuseExplain: "不需要手动填 cookie：第一次登录成功后，会话（cookies + localStorage）会自动加密保存，之后每次运行先用它，有效就跳过登录。只有当你想连第一次登录都跳过时，才需要在下面粘一条现成的 cookie 当种子。",
       cookieCriterionRecommended: "建议填上面的「登录成功判据」：有判据才能可靠判断保存的会话是否还有效；没有的话只能从页面上猜，猜不出来就会每次都重新登录（不会出错，只是白跑一遍）。",
+      audioSolverTitle: "语音识别（reCAPTCHA 音频挑战）",
+      audioSolverHint: "reCAPTCHA 的音频挑战会下载音频并转成文字后填入，和上面的付费服务商互不影响，不填也能用。",
+      sttOrderLabel: "识别引擎顺序",
+      sttOrderHint: "逗号分隔，按顺序尝试，第一个出结果就停。可用：whisper（本地，无需密钥）、witai、google。留空即使用默认顺序。",
+      witAiTokenLabel: "wit.ai Token",
+      witAiTokenHint: "可选。wit.ai 免费额度足够日常使用，不填则跳过该引擎。",
+      savedInEnv: "当前由环境变量提供：{v}",
+      envTokenPresent: "已设置",
+      valueSaved: "已保存",
   };
 
   export const en: Translations = {
@@ -1655,5 +1673,14 @@ export interface Translations {
       cookieSeedOptionalTitle: "Paste a cookie manually (optional, rarely needed)",
       cookieReuseExplain: "You do not need to paste anything: after the first successful login the session (cookies + localStorage) is saved encrypted, and every later run restores it and skips the login while it stays valid. Pasting a cookie below is only for skipping that very first login.",
       cookieCriterionRecommended: "Filling in a success criterion above is recommended: it is what tells a still-valid saved session from an expired one. Without it the check falls back to reading the page, and when that is inconclusive the task simply logs in again every run — correct, just wasteful.",
+      audioSolverTitle: "Audio solving (reCAPTCHA audio challenge)",
+      audioSolverHint: "The reCAPTCHA audio challenge is answered by downloading the clip and transcribing it. This is independent of the paid provider above, and works with both fields left empty.",
+      sttOrderLabel: "Engine order",
+      sttOrderHint: "Comma-separated, tried in order until one returns text. Available: whisper (local, no key needed), witai, google. Empty uses the default order.",
+      witAiTokenLabel: "wit.ai token",
+      witAiTokenHint: "Optional. wit.ai's free tier is enough for normal use; leave empty to skip that engine.",
+      savedInEnv: "Currently supplied by the environment: {v}",
+      envTokenPresent: "set",
+      valueSaved: "Saved",
   };
   

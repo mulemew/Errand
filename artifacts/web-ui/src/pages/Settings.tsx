@@ -391,6 +391,13 @@ type CaptchaProviderType = "none" | "2captcha" | "capsolver" | "anticaptcha";
 
 interface CaptchaConfig {
   provider: CaptchaProviderType;
+  /** reCAPTCHA audio solver — independent of the paid provider above. */
+  sttOrder?: string;
+  witAiToken?: string;
+  witAiTokenSet?: boolean;
+  /** Read-only: what the environment supplies when the fields above are empty. */
+  sttOrderEnv?: string;
+  witAiTokenFromEnv?: boolean;
   twoCaptchaApiKey: string;
   capsolverApiKey: string;
   anticaptchaApiKey: string;
@@ -442,6 +449,8 @@ function CaptchaSection() {
   const { toast } = useToast();
   const [config, setConfig] = useState<CaptchaConfig>({
     provider: "none",
+    sttOrder: "",
+    witAiToken: "",
     twoCaptchaApiKey: "",
     capsolverApiKey: "",
     anticaptchaApiKey: "",
@@ -564,11 +573,59 @@ function CaptchaSection() {
               {activeOption.docsUrl.replace("https://", "")}
             </a>
             {activeKeyIsSet && (
-              <span className="ml-2 text-green-600 dark:text-green-400 font-medium">✓ Key saved</span>
+              <span className="ml-2 text-green-600 dark:text-green-400 font-medium">✓ {t.valueSaved}</span>
             )}
           </p>
         </div>
       )}
+
+      {/* Audio solving — deliberately OUTSIDE the provider block: the reCAPTCHA audio
+          challenge is answered locally and works whether or not a paid provider is set. */}
+      <div className="space-y-3 rounded-md border border-border p-3">
+        <div>
+          <p className="text-sm font-semibold">{t.audioSolverTitle}</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{t.audioSolverHint}</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="sttOrder">{t.sttOrderLabel}</Label>
+          <Input
+            id="sttOrder"
+            type="text"
+            value={config.sttOrder ?? ""}
+            onChange={(e) => setConfig((c) => ({ ...c, sttOrder: e.target.value }))}
+            placeholder="whisper,witai,google"
+            className="font-mono text-sm"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t.sttOrderHint}
+            {!config.sttOrder?.trim() && config.sttOrderEnv && (
+              <span className="ml-1">{t.savedInEnv.replace("{v}", config.sttOrderEnv)}</span>
+            )}
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="witAiToken">{t.witAiTokenLabel}</Label>
+          <Input
+            id="witAiToken"
+            type="text"
+            value={config.witAiToken ?? ""}
+            onChange={(e) => setConfig((c) => ({ ...c, witAiToken: e.target.value }))}
+            placeholder={config.witAiTokenSet ? t.leaveEmptyToKeep : "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+            className="font-mono text-sm"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t.witAiTokenHint}
+            {config.witAiTokenSet && (
+              <span className="ml-2 text-green-600 dark:text-green-400 font-medium">✓ {t.valueSaved}</span>
+            )}
+            {!config.witAiTokenSet && config.witAiTokenFromEnv && (
+              <span className="ml-1">{t.savedInEnv.replace("{v}", t.envTokenPresent)}</span>
+            )}
+          </p>
+        </div>
+      </div>
 
       <Button onClick={handleSave} disabled={saving}>
         {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{t.saving}</> : "Save"}

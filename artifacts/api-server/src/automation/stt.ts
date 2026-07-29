@@ -20,15 +20,32 @@
  * through cf-proxy too when available and otherwise skip (documented below).
  */
 import { logger } from "../lib/logger";
+import { loadCaptchaConfig } from "../lib/appSettings";
 
 const DEFAULT_CF_PROXY_URL = process.env.CF_PROXY_URL ?? "http://provider-seleniumbase:7317";
 
-function engineOrder(): string[] {
-  const raw = process.env.RECAPTCHA_STT_ORDER;
-  if (raw && raw.trim()) {
-    return raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+/**
+ * Engine order and the wit.ai token, from the Settings page first and the environment
+ * second.
+ *
+ * These used to be env-only, which meant changing an engine order required editing compose
+ * and recreating the container — for two values that are pure app configuration. The env
+ * variables still win over nothing at all, so deployments that set them keep working
+ * untouched; a value entered in the UI simply takes precedence.
+ */
+async function sttSettings(): Promise<{ order: string[]; witAiToken: string }> {
+  let saved = { sttOrder: "", witAiToken: "" };
+  try {
+    const cfg = await loadCaptchaConfig();
+    saved = { sttOrder: cfg.sttOrder ?? "", witAiToken: cfg.witAiToken ?? "" };
+  } catch {
+    // Settings unreadable (DB hiccup) — fall through to the environment.
   }
-  return ["whisper", "witai", "google"];
+  const rawOrder = saved.sttOrder.trim() || (process.env.RECAPTCHA_STT_ORDER ?? "").trim();
+  const order = rawOrder
+    ? rawOrder.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+    : ["whisper", "witai", "google"];
+  return { order, witAiToken: saved.witAiToken.trim() || (process.env.WIT_AI_TOKEN ?? "").trim() };
 }
 
 /** Normalise a raw transcript to the shape reCAPTCHA expects (lowercase words). */
@@ -93,9 +110,8 @@ async function transcribeViaWhisper(audio: Buffer): Promise<EngineResult> {
 
 // ── wit.ai ───────────────────────────────────────────────────────────────────
 
-async function transcribeViaWitAi(audio: Buffer): Promise<EngineResult> {
-  const token = process.env.WIT_AI_TOKEN;
-  if (!token) return { text: null, reason: "WIT_AI_TOKEN not set — skipped" };
+async function transcribeViaWitAi(audio: Buffer, token: string): Promise<EngineResult> {
+  if (!token) return { text: null, reason: "no wit.ai token configured — skipped" };
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
@@ -181,14 +197,15 @@ async function transcribeViaGoogle(audio: Buffer): Promise<EngineResult> {
  */
 export async function transcribeAudio(audio: Buffer): Promise<SttResult> {
   const attempts: SttAttempt[] = [];
-  for (const engine of engineOrder()) {
+  const { order, witAiToken } = await sttSettings();
+  for (const engine of order) {
     const started = Date.now();
     let out: EngineResult;
     if (engine === "whisper") out = await transcribeViaWhisper(audio);
-    else if (engine === "witai") out = await transcribeViaWitAi(audio);
+    else if (engine === "witai") out = await transcribeViaWitAi(audio, witAiToken);
     else if (engine === "google") out = await transcribeViaGoogle(audio);
     else {
-      logger.warn({ engine }, "Unknown STT engine in RECAPTCHA_STT_ORDER — skipping");
+      logger.warn({ engine }, "Unknown STT engine in the transcription order — skipping");
       attempts.push({ engine, ms: 0, reason: "unknown engine" });
       continue;
     }

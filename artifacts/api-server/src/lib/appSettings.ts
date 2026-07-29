@@ -55,6 +55,10 @@ import { db, settingsTable, eq } from "@workspace/db";
     twoCaptchaApiKey: string;
     capsolverApiKey: string;
     anticaptchaApiKey: string;
+    /** reCAPTCHA audio solver: engine order, comma-separated. "" = built-in default. */
+    sttOrder: string;
+    /** reCAPTCHA audio solver: wit.ai server token. "" = engine unavailable. */
+    witAiToken: string;
   }
 
   const DEFAULT_CAPTCHA_CONFIG: CaptchaConfig = {
@@ -62,12 +66,17 @@ import { db, settingsTable, eq } from "@workspace/db";
     twoCaptchaApiKey: "",
     capsolverApiKey: "",
     anticaptchaApiKey: "",
+    sttOrder: "",
+    witAiToken: "",
   };
 
   export async function loadCaptchaConfig(): Promise<CaptchaConfig> {
     try {
       const [row] = await db.select().from(settingsTable).where(eq(settingsTable.key, CAPTCHA_CONFIG_KEY));
-      if (row) return JSON.parse(row.value) as CaptchaConfig;
+      // Merge over the defaults: rows written before a field existed simply lack it, and
+      // returning `undefined` for those would strip the audio-solver settings on the next
+      // save. This is the only reason the spread is here.
+      if (row) return { ...DEFAULT_CAPTCHA_CONFIG, ...(JSON.parse(row.value) as Partial<CaptchaConfig>) };
     } catch { /* fall through */ }
     return DEFAULT_CAPTCHA_CONFIG;
   }

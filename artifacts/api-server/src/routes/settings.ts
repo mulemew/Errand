@@ -150,6 +150,14 @@ import { Router, type IRouter } from "express";
         twoCaptchaKeySet: !!config.twoCaptchaApiKey,
         capsolverKeySet: !!config.capsolverApiKey,
         anticaptchaKeySet: !!config.anticaptchaApiKey,
+        sttOrder: config.sttOrder,
+        witAiToken: config.witAiToken ? "***" : "",
+        witAiTokenSet: !!config.witAiToken,
+        // What the server would use RIGHT NOW if these fields stay empty — the env
+        // variables are still honoured as a fallback, and a settings page that hides that
+        // makes an env-configured deployment look unconfigured.
+        sttOrderEnv: (process.env.RECAPTCHA_STT_ORDER ?? "").trim(),
+        witAiTokenFromEnv: !!(process.env.WIT_AI_TOKEN ?? "").trim(),
       });
     } catch (err) {
       logger.error({ err }, "Failed to load captcha config");
@@ -164,13 +172,16 @@ import { Router, type IRouter } from "express";
     const provider: CaptchaProvider = body.provider && VALID_CAPTCHA_PROVIDERS.includes(body.provider) ? body.provider : "none";
     let existing: CaptchaConfig;
     try { existing = await loadCaptchaConfig(); }
-    catch { existing = { provider: "none", twoCaptchaApiKey: "", capsolverApiKey: "", anticaptchaApiKey: "" }; }
+    catch { existing = { provider: "none", twoCaptchaApiKey: "", capsolverApiKey: "", anticaptchaApiKey: "", sttOrder: "", witAiToken: "" }; }
     const resolve = (incoming: string | undefined, current: string): string => (!incoming || incoming === "***") ? current : incoming.trim();
     const config: CaptchaConfig = {
       provider,
       twoCaptchaApiKey: resolve(body.twoCaptchaApiKey, existing.twoCaptchaApiKey),
       capsolverApiKey: resolve(body.capsolverApiKey, existing.capsolverApiKey),
       anticaptchaApiKey: resolve(body.anticaptchaApiKey, existing.anticaptchaApiKey),
+      // Order is not a secret, so it is sent back verbatim and can be cleared to "".
+      sttOrder: (body.sttOrder ?? existing.sttOrder ?? "").trim(),
+      witAiToken: resolve(body.witAiToken, existing.witAiToken),
     };
     try {
       await saveCaptchaConfig(config);
