@@ -207,7 +207,7 @@ export default function Providers() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Server className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-semibold">Providers</h1>
+          <h1 className="text-lg font-semibold">{t.navProviders}</h1>
         </div>
         <div className="flex items-center gap-2">
           {rows.length > 0 && (
@@ -290,7 +290,7 @@ export default function Providers() {
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v as PType })} disabled={!!editingId}>
                   <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="seleniumbase">SeleniumBase (cf-proxy)</SelectItem>
+                    <SelectItem value="seleniumbase">SeleniumBase</SelectItem>
                     <SelectItem value="camoufox">Camoufox</SelectItem>
                     <SelectItem value="playwright">Playwright (CDP)</SelectItem>
                     <SelectItem value="puppeteer">Puppeteer (CDP)</SelectItem>

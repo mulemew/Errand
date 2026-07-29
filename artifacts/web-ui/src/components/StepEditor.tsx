@@ -184,10 +184,10 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
         </SelectContent>
       </Select>
       {a.type === "continue" && (
-        <p className="text-xs text-muted-foreground font-mono">Do nothing — continue to the next step.</p>
+        <p className="text-xs text-muted-foreground font-mono">{t.doNothingContinue}</p>
       )}
       {(a.type === "exitSuccess" || a.type === "exitFailure") && (
-        <Input className="font-mono text-xs h-8" placeholder="Optional note for the log"
+        <Input className="font-mono text-xs h-8" placeholder={t.optionalLogNote}
           value={a.message ?? ""} onChange={(e) => patch({ message: e.target.value })} />
       )}
       {a.type === "click" && (
@@ -204,15 +204,15 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
               </div>
             ))}
           </RadioGroup>
-          <Input className="font-mono text-xs h-8" placeholder="Selector or text"
+          <Input className="font-mono text-xs h-8" placeholder={t.selectorOrText}
             value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
         </div>
       )}
       {a.type === "fill" && (
         <div className="space-y-2">
-          <Input className="font-mono text-xs h-8" placeholder="CSS Selector"
+          <Input className="font-mono text-xs h-8" placeholder={t.cssSelectorLabel}
             value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
-          <Input className="font-mono text-xs h-8" placeholder="Value to type"
+          <Input className="font-mono text-xs h-8" placeholder={t.valueToType}
             value={a.value ?? ""} onChange={(e) => patch({ value: e.target.value })} />
         </div>
       )}
@@ -225,7 +225,7 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
           value={a.ms ?? 1000} onChange={(e) => patch({ ms: parseInt(e.target.value, 10) || 0 })} />
       )}
       {a.type === "keypress" && (
-        <Input className="font-mono text-xs h-8" placeholder="Enter, Tab, Escape…"
+        <Input className="font-mono text-xs h-8" placeholder={t.keyPlaceholder}
           value={a.key ?? ""} onChange={(e) => patch({ key: e.target.value })} />
       )}
       {a.type === "scroll" && (
@@ -243,7 +243,7 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
         </div>
       )}
       {a.type === "screenshot" && (
-        <p className="text-xs text-muted-foreground font-mono">Captures the page.</p>
+        <p className="text-xs text-muted-foreground font-mono">{t.capturesPageShort}</p>
       )}
     </div>
   );
@@ -387,11 +387,11 @@ function StepCard({
                     </Select>
                   ) : (
                     <div className="space-y-2">
-                      <Input className="font-mono text-xs h-8" placeholder="Username / Email" autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+                      <Input className="font-mono text-xs h-8" placeholder={t.usernameOrEmail} autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                         value={step.inlineUsername ?? ""} onChange={(e) => set({ inlineUsername: e.target.value })} />
-                      <Input type="password" className="font-mono text-xs h-8" placeholder="Password" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
+                      <Input type="password" className="font-mono text-xs h-8" placeholder={t.password} autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
                         value={step.inlinePassword ?? ""} onChange={(e) => set({ inlinePassword: e.target.value })} />
-                      <Input type="password" className="font-mono text-xs h-8" placeholder="TOTP secret (optional)" autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+                      <Input type="password" className="font-mono text-xs h-8" placeholder={t.totpSecretOptional} autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                         value={step.inlineTotp ?? ""} onChange={(e) => set({ inlineTotp: e.target.value })} />
                     </div>
                   )}
@@ -399,11 +399,11 @@ function StepCard({
               ) : (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">{t.noSavedCredentials} <span className="font-medium text-foreground">{t.credentials}</span>.</p>
-                  <Input className="font-mono text-xs h-8" placeholder="Username / Email" autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+                  <Input className="font-mono text-xs h-8" placeholder={t.usernameOrEmail} autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                     value={step.inlineUsername ?? ""} onChange={(e) => set({ inlineUsername: e.target.value })} />
-                  <Input type="password" className="font-mono text-xs h-8" placeholder="Password" autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
+                  <Input type="password" className="font-mono text-xs h-8" placeholder={t.password} autoComplete="new-password" data-lpignore="true" data-1p-ignore="true"
                     value={step.inlinePassword ?? ""} onChange={(e) => set({ inlinePassword: e.target.value })} />
-                  <Input type="password" className="font-mono text-xs h-8" placeholder="TOTP secret (optional)" autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+                  <Input type="password" className="font-mono text-xs h-8" placeholder={t.totpSecretOptional} autoComplete="off" data-lpignore="true" data-1p-ignore="true"
                     value={step.inlineTotp ?? ""} onChange={(e) => set({ inlineTotp: e.target.value })} />
                 </div>
               )}
@@ -581,10 +581,10 @@ function StepCard({
           </div>
           {(step.conditionType === "element_visible" || step.conditionType === "element_not_visible") && (
             <div className="space-y-1">
-              <Label className="text-xs">Alternate selector (optional)</Label>
+              <Label className="text-xs">{t.altSelector}</Label>
               <Input
                 className="font-mono text-xs h-8"
-                placeholder="Leave empty to use match value as selector"
+                placeholder={t.altSelectorHint}
                 value={step.conditionSelector ?? ""}
                 onChange={(e) => set({ conditionSelector: e.target.value })}
               />
@@ -638,7 +638,7 @@ function StepCard({
           {step.type === "click" && (
             <>
               <div className="space-y-2">
-                <Label className="text-xs">Selector Type</Label>
+                <Label className="text-xs">{t.selectorTypeLabel}</Label>
                 <RadioGroup
                   value={step.selectorType ?? "text"}
                   onValueChange={(v) => set({ selectorType: v as "text" | "css" | "xpath" })}
@@ -654,8 +654,8 @@ function StepCard({
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">
-                  {step.selectorType === "text" ? "Button / link text or aria-label" :
-                   step.selectorType === "css"  ? "CSS selector" : "XPath expression"}
+                  {step.selectorType === "text" ? t.buttonLinkText :
+                   step.selectorType === "css"  ? t.cssSelectorPlain : t.xpathExpression}
                 </Label>
                 <Input
                   className="font-mono text-xs h-8"
@@ -674,12 +674,12 @@ function StepCard({
           {step.type === "fill" && (
             <>
               <div className="space-y-1">
-                <Label className="text-xs">CSS Selector (input field)</Label>
+                <Label className="text-xs">{t.cssSelectorInputField}</Label>
                 <Input className="font-mono text-xs h-8" placeholder="#search-input  or  input[name='query']"
                   value={step.selector ?? ""} onChange={(e) => set({ selector: e.target.value })} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Value to type</Label>
+                <Label className="text-xs">{t.valueToType}</Label>
                 <Input className="font-mono text-xs h-8" placeholder="text to enter"
                   value={step.value ?? ""} onChange={(e) => set({ value: e.target.value })} />
               </div>
@@ -689,13 +689,13 @@ function StepCard({
           {step.type === "select" && (
             <>
               <div className="space-y-1">
-                <Label className="text-xs">CSS Selector (select element)</Label>
+                <Label className="text-xs">{t.cssSelectorSelectElement}</Label>
                 <Input className="font-mono text-xs h-8" placeholder="select#country  or  select[name='region']"
                   value={step.selector ?? ""} onChange={(e) => set({ selector: e.target.value })} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Option value to select</Label>
-                <Input className="font-mono text-xs h-8" placeholder="CN  or  option text"
+                <Label className="text-xs">{t.optionValueToSelect}</Label>
+                <Input className="font-mono text-xs h-8" placeholder={t.optionValueHint}
                   value={step.value ?? ""} onChange={(e) => set({ value: e.target.value })} />
               </div>
             </>
@@ -704,7 +704,7 @@ function StepCard({
           {step.type === "hover" && (
             <>
               <div className="space-y-2">
-                <Label className="text-xs">Selector Type</Label>
+                <Label className="text-xs">{t.selectorTypeLabel}</Label>
                 <RadioGroup value={step.selectorType ?? "css"} onValueChange={(v) => set({ selectorType: v as "css" | "xpath" })} className="flex gap-4">
                   {(["css", "xpath"] as const).map((t) => (
                     <div key={t} className="flex items-center gap-1.5">
@@ -715,7 +715,7 @@ function StepCard({
                 </RadioGroup>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">{step.selectorType === "xpath" ? "XPath expression" : "CSS selector"}</Label>
+                <Label className="text-xs">{step.selectorType === "xpath" ? t.xpathExpression : t.cssSelectorPlain}</Label>
                 <Input className="font-mono text-xs h-8"
                   placeholder={step.selectorType === "xpath" ? "//nav//button[@aria-haspopup]" : ".nav-menu-trigger  or  #dropdown-btn"}
                   value={step.selector ?? ""} onChange={(e) => set({ selector: e.target.value })} />
@@ -726,8 +726,8 @@ function StepCard({
           {step.type === "scroll" && (
             <>
               <div className="space-y-1">
-                <Label className="text-xs">Scroll element into view (optional CSS selector)</Label>
-                <Input className="font-mono text-xs h-8" placeholder="Leave empty to scroll by x/y offset"
+                <Label className="text-xs">{t.scrollIntoViewLabel}</Label>
+                <Input className="font-mono text-xs h-8" placeholder={t.scrollIntoViewHint}
                   value={step.selector ?? ""} onChange={(e) => set({ selector: e.target.value })} />
               </div>
               {!step.selector && (
@@ -749,7 +749,7 @@ function StepCard({
 
           {step.type === "wait" && (
             <div className="space-y-1">
-              <Label className="text-xs">Duration (milliseconds)</Label>
+              <Label className="text-xs">{t.durationMs}</Label>
               <Input type="number" className="font-mono text-xs h-8 w-36" min={100} max={3600000}
                 value={step.ms ?? 1000} onChange={(e) => set({ ms: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
             </div>
@@ -758,7 +758,7 @@ function StepCard({
           {step.type === "waitFor" && (
             <>
               <div className="space-y-2">
-                <Label className="text-xs">Wait for</Label>
+                <Label className="text-xs">{t.waitForLabel}</Label>
                 <RadioGroup
                   value={step.selectorType === "text" ? "text" : "css"}
                   onValueChange={(v) => set({ selectorType: v as "css" | "text", selector: "" })}
@@ -766,17 +766,17 @@ function StepCard({
                 >
                   <div className="flex items-center gap-1.5">
                     <RadioGroupItem value="css" id={`waitfor-css-${index}`} />
-                    <Label htmlFor={`waitfor-css-${index}`} className="text-xs cursor-pointer">CSS selector</Label>
+                    <Label htmlFor={`waitfor-css-${index}`} className="text-xs cursor-pointer">{t.cssSelectorPlain}</Label>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <RadioGroupItem value="text" id={`waitfor-text-${index}`} />
-                    <Label htmlFor={`waitfor-text-${index}`} className="text-xs cursor-pointer">Text on page</Label>
+                    <Label htmlFor={`waitfor-text-${index}`} className="text-xs cursor-pointer">{t.textOnPage}</Label>
                   </div>
                 </RadioGroup>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">
-                  {step.selectorType === "text" ? "Text to wait for" : "CSS selector"}
+                  {step.selectorType === "text" ? t.textToWaitFor : t.cssSelectorPlain}
                 </Label>
                 <Input
                   className="font-mono text-xs h-8"
@@ -785,11 +785,11 @@ function StepCard({
                   onChange={(e) => set({ selector: e.target.value })}
                 />
                 {step.selectorType === "text" && (
-                  <p className="text-[10px] text-muted-foreground leading-snug">Waits until this text appears anywhere on the page.</p>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{t.waitTextHint}</p>
                 )}
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Timeout (ms)</Label>
+                <Label className="text-xs">{t.timeoutMsLabel}</Label>
                 <Input type="number" className="font-mono text-xs h-8 w-36" min={1000} max={3600000}
                   value={step.timeout ?? 10000} onChange={(e) => set({ timeout: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
               </div>
@@ -799,7 +799,7 @@ function StepCard({
           {step.type === "keypress" && (
             <>
               <div className="space-y-2">
-                <Label className="text-xs">Quick-pick</Label>
+                <Label className="text-xs">{t.quickPick}</Label>
                 <div className="flex flex-wrap gap-1.5">
                   {PRESET_KEYS.map(({ label, key }) => (
                     <button key={key} type="button" onClick={() => set({ key })}
@@ -812,8 +812,8 @@ function StepCard({
                 </div>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Key (custom)</Label>
-                <Input className="font-mono text-xs h-8" placeholder="Enter, Tab, Escape, Control+c …"
+                <Label className="text-xs">{t.keyCustomLabel}</Label>
+                <Input className="font-mono text-xs h-8" placeholder={t.keyCustomPlaceholder}
                   value={step.key ?? ""} onChange={(e) => set({ key: e.target.value })} />
               </div>
             </>
@@ -822,7 +822,7 @@ function StepCard({
       )}
 
       {step.type === "screenshot" && (
-        <div className="px-3 py-2 text-xs text-muted-foreground font-mono">Captures the current page state to a file.</div>
+        <div className="px-3 py-2 text-xs text-muted-foreground font-mono">{t.capturesPageLong}</div>
       )}
 
       {step.type === "dismissPopups" && (
@@ -848,7 +848,7 @@ function StepCard({
       {step.type === "switchToNewPage" && (
         <div className="p-3 space-y-3">
           <div className="space-y-1">
-            <Label className="text-xs">Timeout (ms)</Label>
+            <Label className="text-xs">{t.timeoutMsLabel}</Label>
             <Input type="number" className="font-mono text-xs h-8 w-36" min={1000} max={3600000}
               value={step.timeout ?? 30000} onChange={(e) => set({ timeout: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
           </div>

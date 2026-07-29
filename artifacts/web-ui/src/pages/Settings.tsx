@@ -319,7 +319,7 @@ function TaskTimeoutSection() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-6 text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t.loading}
       </div>
     );
   }
@@ -492,7 +492,7 @@ function CaptchaSection() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-6 text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t.loading}
       </div>
     );
   }
@@ -687,7 +687,7 @@ function LogLevelSection() {
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-6 text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t.loading}
       </div>
     );
   }
@@ -1061,8 +1061,8 @@ export default function Settings() {
               <div className="flex items-center gap-3 rounded-md border border-green-200 bg-green-50 px-4 py-3 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
                 <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
                 <div>
-                  <p className="text-sm font-medium">Password changed successfully</p>
-                  <p className="text-xs mt-0.5 opacity-80">You are still logged in. Other active sessions have been signed out.</p>
+                  <p className="text-sm font-medium">{t.passwordChanged}</p>
+                  <p className="text-xs mt-0.5 opacity-80">{t.passwordChangedDetail}</p>
                 </div>
               </div>
             ) : (

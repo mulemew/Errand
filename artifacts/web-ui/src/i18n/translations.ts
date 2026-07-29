@@ -659,6 +659,67 @@ export interface Translations {
       captchaCapsolverDesc: string;
       captchaAnticaptchaDesc: string;
       pasteApiKey: string;
+      roleOperator: string;
+      roleAdmin: string;
+      pendingRun: string;
+      noTasksConfigured: string;
+      noTasksHint: string;
+      createFirstTask: string;
+      executionLogs: string;
+      recordsSuffix: string;
+      runHistory30d: string;
+      successFailurePerDay: string;
+      executionLogTitle: string;
+      runTimeline: string;
+      filtersTitle: string;
+      triggerLabel: string;
+      triggerManual: string;
+      triggerScheduled: string;
+      triggerWebhook: string;
+      recorderSubtitle: string;
+      recorderHint1: string;
+      recorderHint2: string;
+      recorderHint3: string;
+      recorderHint4: string;
+      authorizationLabel: string;
+      saveChanges: string;
+      createTaskAction: string;
+      passwordChangedDetail: string;
+      optionalLogNote: string;
+      selectorOrText: string;
+      cssSelectorLabel: string;
+      valueToType: string;
+      keyPlaceholder: string;
+      keyCustomPlaceholder: string;
+      usernameOrEmail: string;
+      totpSecretOptional: string;
+      altSelector: string;
+      altSelectorHint: string;
+      selectorTypeLabel: string;
+      cssSelectorInputField: string;
+      cssSelectorSelectElement: string;
+      optionValueToSelect: string;
+      optionValueHint: string;
+      scrollIntoViewLabel: string;
+      scrollIntoViewHint: string;
+      durationMs: string;
+      waitForLabel: string;
+      cssSelectorPlain: string;
+      textOnPage: string;
+      waitTextHint: string;
+      quickPick: string;
+      keyCustomLabel: string;
+      capturesPageShort: string;
+      capturesPageLong: string;
+      doNothingContinue: string;
+      buttonLinkText: string;
+      xpathExpression: string;
+      textToWaitFor: string;
+      toggleTheme: string;
+      switchLanguage: string;
+      clickToViewScreenshot: string;
+      proxyNameExample: string;
+      typeTextThenEnter: string;
   }
 
   export const zh: Translations = {
@@ -1293,6 +1354,67 @@ export interface Translations {
       captchaCapsolverDesc: "AI 识别。对 reCAPTCHA 和 hCaptcha 快且便宜。",
       captchaAnticaptchaDesc: "真人打码。支持 reCAPTCHA v2/v3、hCaptcha、Turnstile 和图片验证码。",
       pasteApiKey: "粘贴 {v} 的 API Key",
+      roleOperator: "操作员",
+      roleAdmin: "管理员",
+      pendingRun: "待运行",
+      noTasksConfigured: "还没有任务",
+      noTasksHint: "创建一个任务，让它替你去跑浏览器流程。",
+      createFirstTask: "创建第一个任务",
+      executionLogs: "执行日志",
+      recordsSuffix: "条记录",
+      runHistory30d: "运行历史（30 天）",
+      successFailurePerDay: "每天的成功/失败次数",
+      executionLogTitle: "执行日志",
+      runTimeline: "运行时间线",
+      filtersTitle: "筛选",
+      triggerLabel: "触发方式",
+      triggerManual: "手动",
+      triggerScheduled: "定时",
+      triggerWebhook: "Webhook",
+      recorderSubtitle: "操作真实浏览器，自动把你的动作录成工作流步骤。",
+      recorderHint1: "在截图上任意位置点击，生成一个 click 步骤",
+      recorderHint2: "先点中输入框，再用 Type 工具栏生成 fill 步骤",
+      recorderHint3: "录制过程中可以用 Navigate 跳转到任意网址",
+      recorderHint4: "停止录制后可把步骤列表导出成一个新任务",
+      authorizationLabel: "鉴权头",
+      saveChanges: "保存修改",
+      createTaskAction: "创建任务",
+      passwordChangedDetail: "当前会话仍保持登录，其他会话已被登出。",
+      optionalLogNote: "可选备注，写进日志",
+      selectorOrText: "选择器或页面文字",
+      cssSelectorLabel: "CSS 选择器",
+      valueToType: "要输入的内容",
+      keyPlaceholder: "Enter、Tab、Escape…",
+      keyCustomPlaceholder: "Enter、Tab、Escape、Control+c …",
+      usernameOrEmail: "用户名 / 邮箱",
+      totpSecretOptional: "TOTP 密钥（可选）",
+      altSelector: "备用选择器（可选）",
+      altSelectorHint: "留空则直接把匹配值当选择器用",
+      selectorTypeLabel: "选择器类型",
+      cssSelectorInputField: "CSS 选择器（输入框）",
+      cssSelectorSelectElement: "CSS 选择器（下拉框）",
+      optionValueToSelect: "要选中的选项值",
+      optionValueHint: "CN  或  选项文字",
+      scrollIntoViewLabel: "滚动到该元素（可选 CSS 选择器）",
+      scrollIntoViewHint: "留空则按下面的 x/y 偏移滚动",
+      durationMs: "时长（毫秒）",
+      waitForLabel: "等待条件",
+      cssSelectorPlain: "CSS 选择器",
+      textOnPage: "页面上的文字",
+      waitTextHint: "等到页面上任意位置出现这段文字为止。",
+      quickPick: "快捷选择",
+      keyCustomLabel: "按键（自定义）",
+      capturesPageShort: "把当前页面存成文件。",
+      capturesPageLong: "把当前页面状态存成文件。",
+      doNothingContinue: "什么都不做，继续下一步。",
+      buttonLinkText: "按钮 / 链接文字或 aria-label",
+      xpathExpression: "XPath 表达式",
+      textToWaitFor: "要等待出现的文字",
+      toggleTheme: "切换深色/浅色主题",
+      switchLanguage: "切换语言",
+      clickToViewScreenshot: "点击查看截图",
+      proxyNameExample: "美国住宅 #1",
+      typeTextThenEnter: "输入文字后按回车…",
   };
 
   export const en: Translations = {
@@ -1928,5 +2050,66 @@ export interface Translations {
       captchaCapsolverDesc: "AI-powered solver. Fast and cost-effective for reCAPTCHA and hCaptcha.",
       captchaAnticaptchaDesc: "Human-powered solving. Supports reCAPTCHA v2/v3, hCaptcha, Turnstile and image captchas.",
       pasteApiKey: "Paste your {v} API key",
+      roleOperator: "Operator",
+      roleAdmin: "Admin",
+      pendingRun: "Pending",
+      noTasksConfigured: "No tasks configured",
+      noTasksHint: "Create a job and let it drive a browser for you.",
+      createFirstTask: "Create First Task",
+      executionLogs: "Execution Logs",
+      recordsSuffix: "Records",
+      runHistory30d: "Run History (30d)",
+      successFailurePerDay: "Success/failure per day",
+      executionLogTitle: "Execution Log",
+      runTimeline: "Run Timeline",
+      filtersTitle: "Filters",
+      triggerLabel: "Trigger",
+      triggerManual: "Manual",
+      triggerScheduled: "Scheduled",
+      triggerWebhook: "Webhook",
+      recorderSubtitle: "Drive a real browser and have your actions captured as workflow steps.",
+      recorderHint1: "Click anywhere on the screenshot to generate a click step",
+      recorderHint2: "Click a field first, then use the Type toolbar to generate a fill step",
+      recorderHint3: "Use Navigate to jump to any URL mid-recording",
+      recorderHint4: "Stop recording to export the step list to a new task",
+      authorizationLabel: "Authorization",
+      saveChanges: "Save Changes",
+      createTaskAction: "Create Task",
+      passwordChangedDetail: "You are still signed in here. Other sessions have been signed out.",
+      optionalLogNote: "Optional note for the log",
+      selectorOrText: "Selector or text",
+      cssSelectorLabel: "CSS Selector",
+      valueToType: "Value to type",
+      keyPlaceholder: "Enter, Tab, Escape…",
+      keyCustomPlaceholder: "Enter, Tab, Escape, Control+c …",
+      usernameOrEmail: "Username / Email",
+      totpSecretOptional: "TOTP secret (optional)",
+      altSelector: "Alternate selector (optional)",
+      altSelectorHint: "Leave empty to use the match value as the selector",
+      selectorTypeLabel: "Selector Type",
+      cssSelectorInputField: "CSS Selector (input field)",
+      cssSelectorSelectElement: "CSS Selector (select element)",
+      optionValueToSelect: "Option value to select",
+      optionValueHint: "CN  or  option text",
+      scrollIntoViewLabel: "Scroll element into view (optional CSS selector)",
+      scrollIntoViewHint: "Leave empty to scroll by the x/y offset",
+      durationMs: "Duration (milliseconds)",
+      waitForLabel: "Wait for",
+      cssSelectorPlain: "CSS selector",
+      textOnPage: "Text on page",
+      waitTextHint: "Waits until this text appears anywhere on the page.",
+      quickPick: "Quick-pick",
+      keyCustomLabel: "Key (custom)",
+      capturesPageShort: "Captures the page to a file.",
+      capturesPageLong: "Captures the current page state to a file.",
+      doNothingContinue: "Do nothing — continue to the next step.",
+      buttonLinkText: "Button / link text or aria-label",
+      xpathExpression: "XPath expression",
+      textToWaitFor: "Text to wait for",
+      toggleTheme: "Toggle dark/light theme",
+      switchLanguage: "Switch language",
+      clickToViewScreenshot: "Click to view screenshot",
+      proxyNameExample: "US residential #1",
+      typeTextThenEnter: "Type text then Enter…",
   };
   

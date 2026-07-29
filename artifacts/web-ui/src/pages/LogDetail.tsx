@@ -138,7 +138,7 @@ export default function LogDetail() {
         </Link>
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Execution Log</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">{t.executionLogTitle}</h1>
             {log.success ? (
               <Badge className="bg-green-500/10 text-green-600 hover:bg-green-500/20 border-green-500/20 font-mono">SUCCESS</Badge>
             ) : (
@@ -202,7 +202,7 @@ export default function LogDetail() {
       <Card className="border-border shadow-sm overflow-hidden">
           <CardHeader className="bg-muted/20 border-b border-border pb-3 py-3 px-4 flex flex-row items-center justify-between">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-primary" /> Run Timeline
+              <Terminal className="h-4 w-4 text-primary" /> {t.runTimeline}
             </CardTitle>
             {log.hasScreenshot && (() => {
               const stepLogs = ((log as any).stepLogs ?? []) as Array<{ type: string; screenshotPath?: string }>;
@@ -212,7 +212,7 @@ export default function LogDetail() {
               <Dialog>
                 <DialogTrigger asChild>
                   <Button variant="ghost" size="sm" className="h-6 text-xs gap-1.5 text-muted-foreground hover:text-foreground">
-                    <ImageIcon className="h-3 w-3" /> Final Screenshot
+                    <ImageIcon className="h-3 w-3" /> {t.finalScreenshot}
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-5xl w-full p-1 bg-zinc-950 border-zinc-800">

@@ -102,7 +102,7 @@ import { useState } from "react";
         <Card className="border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Filter className="h-4 w-4" /> Filters
+              <Filter className="h-4 w-4" /> {t.filtersTitle}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -135,18 +135,18 @@ import { useState } from "react";
                 </Select>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-muted-foreground font-medium">Trigger</label>
+                <label className="text-xs text-muted-foreground font-medium">{t.triggerLabel}</label>
                 <Select value={triggeredByFilter} onValueChange={(v) => { setTriggeredByFilter(v); resetPage(); }}>
                   <SelectTrigger className="w-36 h-8 text-sm">
                     <SelectValue placeholder={t.allStatuses} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t.allStatuses}</SelectItem>
-                    <SelectItem value="manual">Manual</SelectItem>
-                    <SelectItem value="cron">Scheduled</SelectItem>
-                    <SelectItem value="webhook">Webhook</SelectItem>
-                    <SelectItem value="retry">Retry</SelectItem>
-                    <SelectItem value="dry_run">Dry Run</SelectItem>
+                    <SelectItem value="manual">{t.triggerManual}</SelectItem>
+                    <SelectItem value="cron">{t.triggerScheduled}</SelectItem>
+                    <SelectItem value="webhook">{t.triggerWebhook}</SelectItem>
+                    <SelectItem value="retry">{t.retry}</SelectItem>
+                    <SelectItem value="dry_run">{t.dryRun}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

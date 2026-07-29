@@ -41,6 +41,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
   }
 
   function SnakeMetroMap({ totalSteps, dots }: { totalSteps: number; dots: MetroDot[] }) {
+    const { t } = useLang();
     const dotMap = new Map(dots.map(d => [d.stepIndex, d]));
     const rows: number[][] = [];
     for (let i = 0; i < totalSteps; i += METRO_DOTS_PER_ROW) {
@@ -88,8 +89,8 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
                           <TooltipContent side="top" className="max-w-xs">
                             <p className="text-xs font-mono font-semibold">{tooltipLabel}</p>
                             {dot?.message && <p className="text-xs text-muted-foreground mt-0.5 break-all">{dot.message.slice(0, 120)}</p>}
-                            {!dot && <p className="text-xs text-muted-foreground italic">Pending</p>}
-                            {status === "running" && <p className="text-xs text-blue-400 font-semibold">Running</p>}
+                            {!dot && <p className="text-xs text-muted-foreground italic">{t.pendingRun}</p>}
+                            {status === "running" && <p className="text-xs text-blue-400 font-semibold">{t.runningNow}</p>}
                           </TooltipContent>
                         </Tooltip>
                         {!isLastDotInRow && (
@@ -866,7 +867,7 @@ export default function Home() {
                         className="gap-2 text-xs font-medium text-destructive border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => handleStop(task.id)}
                       >
-                        <X className="h-3 w-3" /> Cancel
+                        <X className="h-3 w-3" /> {t.cancel}
                       </Button>
                     ) : (
                       <Button 
@@ -1141,10 +1142,10 @@ export default function Home() {
         ) : (
           <div className="flex flex-col items-center justify-center py-16 text-center border border-dashed border-border rounded-md bg-muted/20">
             <Activity className="h-10 w-10 text-muted-foreground mb-4 opacity-50" />
-            <h3 className="text-lg font-semibold text-foreground">No tasks configured</h3>
-            <p className="text-sm text-muted-foreground max-w-sm mt-1 mb-6">Create an automation job to start orchestrating headless browser sessions.</p>
+            <h3 className="text-lg font-semibold text-foreground">{t.noTasksConfigured}</h3>
+            <p className="text-sm text-muted-foreground max-w-sm mt-1 mb-6">{t.noTasksHint}</p>
             <Link href="/tasks/new">
-              <Button><Plus className="h-4 w-4 mr-2" /> Create First Task</Button>
+              <Button><Plus className="h-4 w-4 mr-2" /> {t.createFirstTask}</Button>
             </Link>
           </div>
         )}

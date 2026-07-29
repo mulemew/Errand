@@ -37,7 +37,7 @@ function LogScreenshotCell({ taskId, logId }: { taskId: number; logId: number })
             <button
               type="button"
               aria-label="Preview screenshot"
-              title="Click to view screenshot"
+              title={t.clickToViewScreenshot}
               className="cursor-zoom-in p-0 border-0 bg-transparent leading-none"
               onClick={(e) => e.stopPropagation()}
             >
@@ -995,9 +995,9 @@ export default function TaskDetail() {
               <Card className="border-border shadow-sm overflow-hidden">
                 <CardHeader className="bg-muted/20 border-b border-border pb-4 shrink-0 flex flex-row items-center justify-between">
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Terminal className="h-4 w-4 text-primary" /> Execution Logs
+                    <Terminal className="h-4 w-4 text-primary" /> {t.executionLogs}
                   </CardTitle>
-                  <Badge variant="secondary" className="font-mono">{logs?.length || 0} Records</Badge>
+                  <Badge variant="secondary" className="font-mono">{logs?.length || 0} {t.recordsSuffix}</Badge>
                 </CardHeader>
                 <div className="p-0">
                   {isLoadingLogs ? (
@@ -1153,11 +1153,9 @@ export default function TaskDetail() {
               <Card className="border-border shadow-sm">
                 <CardHeader className="bg-muted/20 border-b border-border pb-4">
                   <CardTitle className="text-base flex items-center gap-2">
-                    <Radio className="h-4 w-4 text-primary" /> Run History (30d)
+                    <Radio className="h-4 w-4 text-primary" /> {t.runHistory30d}
                   </CardTitle>
-                  <CardDescription className="text-xs font-mono mt-1">
-                    Success/failure per day
-                  </CardDescription>
+                  <CardDescription className="text-xs font-mono mt-1">{t.successFailurePerDay}</CardDescription>
                 </CardHeader>
                 <CardContent className="pt-4 pb-2">
                   <TaskHistoryChart runHistory={runHistory} />

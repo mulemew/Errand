@@ -251,7 +251,7 @@ export default function ProxyProfiles() {
           <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>{t.fieldName}</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="US residential #1" />
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t.proxyNameExample} />
             </div>
             <div className="space-y-1.5">
               <Label>{t.proxyUrlLabel}</Label>

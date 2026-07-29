@@ -742,10 +742,10 @@ export default function TaskForm() {
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Task Name</FormLabel>
+                    <FormLabel>{t.taskName}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g. Daily Check-in"
+                        placeholder={t.taskNamePlaceholder}
                         {...field}
                         className="font-mono text-sm"
                       />
@@ -761,7 +761,7 @@ export default function TaskForm() {
                   name="targetUrl"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Starting URL</FormLabel>
+                      <FormLabel>{t.startingUrl}</FormLabel>
                       <FormControl>
                         <Input
                           placeholder="https://example.com"
@@ -967,7 +967,7 @@ export default function TaskForm() {
                 {webhookEnabled && (
                   <div className="space-y-2 pt-1">
                     <div className="space-y-1">
-                      <label className="block text-xs font-medium">Authorization</label>
+                      <label className="block text-xs font-medium">{t.authorizationLabel}</label>
                       <div className="flex items-center gap-2">
                         <Input
                           className="font-mono text-xs h-9"
@@ -1043,7 +1043,7 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                     {/* Backend = a provider, always. Engine/URL/stealth/… all live on the
                         Providers page; "Default" follows whichever provider is flagged there. */}
                     <div className="space-y-1.5">
-                      <label className="text-sm font-medium">Provider</label>
+                      <label className="text-sm font-medium">{t.providerField}</label>
                       <Select
                         value={browserConfig.providerId != null ? String(browserConfig.providerId) : "default"}
                         onValueChange={(v) =>
@@ -1232,11 +1232,11 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
             >
               {isEditMode ? (
                 <>
-                  <Save className="mr-2 h-4 w-4" /> Save Changes
+                  <Save className="mr-2 h-4 w-4" /> {t.saveChanges}
                 </>
               ) : (
                 <>
-                  <Plus className="mr-2 h-4 w-4" /> Create Task
+                  <Plus className="mr-2 h-4 w-4" /> {t.createTaskAction}
                 </>
               )}
             </Button>

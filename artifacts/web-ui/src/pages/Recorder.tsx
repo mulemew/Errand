@@ -218,10 +218,8 @@ export default function Recorder() {
     return (
       <div className="space-y-8 animate-in fade-in duration-500 max-w-2xl">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Step Recorder</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">
-            Navigate a live browser and capture your actions as workflow steps automatically.
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{t.stepRecorder}</h1>
+          <p className="text-muted-foreground mt-1 font-mono text-sm">{t.recorderSubtitle}</p>
         </div>
 
         <Card className="border-border shadow-sm">
@@ -266,10 +264,10 @@ export default function Recorder() {
         <div className="rounded-md border border-border bg-muted/20 p-4 space-y-2">
           <p className="text-sm font-medium">{t.howItWorks}</p>
           <ul className="text-xs text-muted-foreground space-y-1.5 list-none">
-            <li className="flex items-start gap-2"><MousePointer2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Click anywhere on the screenshot to generate a <code className="font-mono bg-muted px-1 rounded">click</code> step</span></li>
-            <li className="flex items-start gap-2"><Type className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Click a field first, then use the Type toolbar to generate a <code className="font-mono bg-muted px-1 rounded">fill</code> step</span></li>
-            <li className="flex items-start gap-2"><Navigation className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Use Navigate to jump to any URL mid-recording</span></li>
-            <li className="flex items-start gap-2"><StopCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>Stop recording to export the step list to a new task</span></li>
+            <li className="flex items-start gap-2"><MousePointer2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>{t.recorderHint1}</span></li>
+            <li className="flex items-start gap-2"><Type className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>{t.recorderHint2}</span></li>
+            <li className="flex items-start gap-2"><Navigation className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>{t.recorderHint3}</span></li>
+            <li className="flex items-start gap-2"><StopCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-primary" /><span>{t.recorderHint4}</span></li>
           </ul>
         </div>
       </div>
@@ -383,7 +381,7 @@ export default function Recorder() {
               </div>
             ))}
             {steps.length === 0 && (
-              <p className="text-xs text-muted-foreground text-center py-4">No steps yet</p>
+              <p className="text-xs text-muted-foreground text-center py-4">{t.noStepsYet}</p>
             )}
           </div>
 
@@ -459,7 +457,7 @@ export default function Recorder() {
                         setTypeText("");
                       }
                     }}
-                    placeholder="Type text then Enter…"
+                    placeholder={t.typeTextThenEnter}
                     className="h-7 text-xs font-mono"
                     disabled={busy}
                   />
