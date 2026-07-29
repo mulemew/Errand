@@ -106,7 +106,7 @@ import type { PageAdapter } from "./page-adapter";
         }
       }
       if (!el) {
-        // Icon-only providers with no text/href/onclick attribute — e.g. wispbyte
+        // Icon-only providers with no text/href/onclick attribute — some panels
         // renders <div class="continue-via"><i class="fa-brands fa-github"></i></div>
         // and wires the click via a JS listener. Locate the GitHub icon, then click
         // its nearest clickable ancestor (its own provider container), which scopes
@@ -136,7 +136,7 @@ import type { PageAdapter } from "./page-adapter";
     // .click() on a plain <a href> often does NOT start a navigation (verified:
     // the flow stayed on /login and never reached github.com). If we're still on
     // the same URL shortly after, navigate to the captured OAuth href directly.
-    // bot-hosting's /login/github mints the OAuth state server-side, so a direct
+    // Some panels mint the OAuth state server-side at /login/github, so a direct
     // nav loses nothing the click would have set up.
     if (info.href) {
       await sleep(1500);
@@ -305,7 +305,7 @@ import type { PageAdapter } from "./page-adapter";
 
         if (!clicked) {
           // Before assuming "already logged in", make SURE this isn't a login page.
-          // A URL check alone is not enough: wispbyte serves its login screen at
+          // A URL check alone is not enough: some panels serve the login screen at
           // /client with the title "Log In" — no login/signin/auth keyword anywhere
           // in the URL — so the old URL-only heuristic falsely reported success and
           // the next steps ran unauthenticated. Detect login affordances directly.
@@ -386,7 +386,7 @@ import type { PageAdapter } from "./page-adapter";
               );
 
             if (!isLoginPage) {
-              // The URL shape is not proof. wispbyte serves its login screen at /client —
+              // The URL shape is not proof. Some panels serve the login screen at /client —
               // no login/signin keyword anywhere — so a click that never navigated (or that
               // opened GitHub in a popup) landed here on tick 1 and was reported as a
               // successful login while the page had not moved at all.

@@ -529,7 +529,7 @@ async function executeStep(
       //   • Cloudflare "Verifying you are human" / Turnstile interstitials, and
       //   • Embedded widget captchas (ALTCHA, reCAPTCHA/hCaptcha/Turnstile,
       //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
-      //     ikuuu renew dialog, which is NOT a Cloudflare challenge.
+      //     an in-app confirm dialog, which is NOT a Cloudflare challenge.
 
       // `url` used to be ONLY the reload target handed to clearCloudflareInterstitial
       // — the step never navigated, so configuring it and expecting the step to go
@@ -542,8 +542,8 @@ async function executeStep(
       }
 
       // Give a slow-loading widget time to render before we look for it. Modals
-      // (e.g. host2play's "Verify that you're not a robot" dialog opened by a
-      // Renew click) inject the reCAPTCHA a moment after opening — checking once,
+      // (a "Verify that you're not a robot" dialog opened by an action button)
+      // inject the reCAPTCHA a moment after opening — checking once,
       // too early, found nothing and the step silently did nothing.
       const appeared = await waitForCaptchaWidget(page, 15000);
       if (appeared) {
@@ -615,7 +615,7 @@ async function executeStep(
             // NOT fall through to clearCloudflareInterstitial + detectAndHandleCaptcha
             // (those would re-click the SAME Turnstile and mash it into "Verification
             // failed"). Crucially, FAIL the step instead of returning success: an
-            // unsolved Turnstile means the gate is still up, so a later "Renew"/submit
+            // unsolved Turnstile means the gate is still up, so a later submit
             // step would run against a blocked page. Surface it as a captcha block
             // (task → needs_attention), the same way login treats an unsolved gate.
             logger.warn("cfVerify — native clickTurnstile did not solve the Turnstile; failing the step (gate still up). Likely an IP/fingerprint wall.");
@@ -1013,8 +1013,8 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
  *
  * Only an EXPLICIT signal counts. The old fallback tested the body against
  * /logout|sign out|dashboard|account|profile|welcome/ when nothing was configured —
- * but those words are all over ordinary LOGIN pages too (wispbyte's literally says
- * "WELCOME TO Wispbyte"), so it answered "authenticated" while sitting on the login
+ * but those words are all over ordinary LOGIN pages too (one panel's login page
+ * literally says "WELCOME TO <app>"), so it answered "authenticated" while on the login
  * form and the step happily reported "session restored — login skipped", leaving
  * every later step running logged-out. Guessing wrong here is worse than not
  * guessing: without a success signal we log in, which costs a login but is correct.
@@ -1091,7 +1091,7 @@ async function clearCloudflareIfPresent(page: PageAdapter): Promise<boolean> {
 
 /**
  * waitForSelector that transparently clears a Cloudflare challenge/Turnstile if
- * the selector does not appear in time. Some flows (e.g. a renew/check-in
+ * the selector does not appear in time. Some flows (a confirm-and-continue
  * button) only become clickable after a CF interstitial or Turnstile widget is
  * passed. If the first wait times out, we attempt to clear the challenge and
  * wait once more before surfacing the original error.

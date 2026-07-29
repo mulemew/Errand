@@ -82,7 +82,7 @@ async function withGuiLockBounded<T>(fn: () => Promise<T>, waitMs: number, label
 }
 
 // ── Turnstile iframe expansion script ───────────────────────────────────────
-// Ported from the JustRunMy.App reference project.
+// Ported from a known-good reference implementation.
 // Forcefully expands hidden/overflow:hidden containers around the Turnstile
 // widget so that the checkbox is visible and clickable.
 
@@ -123,7 +123,7 @@ const EXPAND_TURNSTILE_JS = `
     if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
       el.style.overflow = 'visible';
     // NOTE: do NOT set minWidth:'max-content' on ancestors. It forces
-    // long-text containers (e.g. the "Renew your Free plan" modal) to stop
+    // long-text containers (a modal with a full sentence in it, say) to stop
     // wrapping and stretch to the full viewport width, distorting the dialog.
   }
   // Last resort — resize the iframe itself, ONLY when it is still unusable. This is the
@@ -525,7 +525,7 @@ const CF_PROBE_FN = () => {
   // the app's form or nav. Getting this backwards routes every embedded/popup widget
   // into the full-page bypass, which never clicks them.
   // An OPEN MODAL counts as site content too. Plenty of widgets live in a dialog that an
-  // earlier step opened (a "Renew server" / "Claim" button), and those pages need not have
+  // earlier step opened (some action button), and those pages need not have
   // a nav or a form. Misreading one as a full-page interstitial sends it down the reload
   // path — and a reload destroys the dialog, which the step will not re-open, so the
   // widget is gone for the rest of the run.
@@ -799,7 +799,7 @@ async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?:
  * Returns true if a click was successfully delivered.
  *
  * Strategy order:
- *   1. Expand hidden Turnstile iframes (port from JustRunMy.App reference)
+ *   1. Expand hidden Turnstile iframes (port from a reference implementation)
  *   2. Physical OS-level click via xdotool (if available) — undetectable by CF
  *   3. CDP widget bounding box click (fallback)
  *   4. Cross-origin iframe element click (last resort)

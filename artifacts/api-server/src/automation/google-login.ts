@@ -473,7 +473,7 @@ export async function googleLogin(
       logger.info({ url: page.url() }, "Clicked the Google OAuth button — waiting for the flow to move");
       // WAIT for the click to actually go somewhere. Without this the very next check runs
       // while the browser is still on the login page and concludes "already authenticated
-      // with Google" — which is why dash.pingless.org reported success on every run while
+      // with Google" — which is why one test site reported success on every run while
       // sitting on the auth screen the whole time.
       const navDeadline = Date.now() + 20000;
       while (Date.now() < navDeadline) {

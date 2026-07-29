@@ -147,7 +147,7 @@ interface TokenDetection {
 
 async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | null> {
   // ── 0. Cloudflare Turnstile in reCAPTCHA-compatibility mode ───────────────
-  // Some sites (e.g. betadash.lunes.host) embed Cloudflare Turnstile but render
+  // Some sites embed Cloudflare Turnstile but render
   // it inside a `.g-recaptcha` container with a `g-recaptcha-response` field for
   // drop-in reCAPTCHA compatibility. Detecting `.g-recaptcha` first would
   // misclassify it as reCAPTCHA and skip the (working) Turnstile solve path,
@@ -179,7 +179,7 @@ async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | n
     // IMPORTANT: the Cloudflare challenges script (`cfScript`) is loaded
     // AMBIENTLY by many sites for CF's own bot-management / Turnstile-anywhere
     // even when there is NO interactive Turnstile widget in the page's forms
-    // (e.g. KataBump, which actually protects its dialogs with ALTCHA). Treating
+    // (some panels actually protect their dialogs with ALTCHA instead). Treating
     // that script alone as "Turnstile detected" misclassifies ALTCHA/other
     // captchas as Turnstile and then hard-fails with a bogus
     // "Turnstile detected — bypass failed" message. Only classify as Turnstile
@@ -413,8 +413,8 @@ const CLICK_CAPTCHA_PROVIDERS: ClickCaptchaDetection[] = [
   // Generic click-to-verify — covers custom captcha buttons on sites that use
   // a simple "click to verify" button within the login form that doesn't match
   // any known provider selectors above.
-  // NOTE: ikuuu.fyi is NOT handled here — it uses GeeTest v4 (initGeetest4 with
-  // nativeButton mode), which is matched by the "GeeTest v4" provider above.
+  // NOTE: sites using GeeTest v4 (initGeetest4 with nativeButton mode) are NOT
+  // handled here — they are matched by the "GeeTest v4" provider above.
   {
     name: "Generic click-to-verify",
     containerSelector: ".verify-btn, .captcha-btn, [class*='verify-btn'], [class*='captcha-btn'], [id*='captcha-btn']",
@@ -596,7 +596,7 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
           // Only re-click if the widget is STILL showing its pristine
           // "click to verify" prompt — i.e. the click genuinely did not register.
           // If the prompt is gone, the click DID land and GeeTest is verifying /
-          // has passed (many sites, incl. ikuuu.fyi, read the result via the
+          // has passed (many sites read the result via the
           // onSuccess callback and expose NO DOM token). Re-clicking a passed
           // widget re-triggers GeeTest and escalates it to the picture challenge,
           // so we stop and let the login submit carry the token the site captured.
@@ -684,8 +684,8 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
       // click cannot solve. Otherwise return solved:false WITHOUT needsAttention
       // so the caller proceeds with the login attempt — the click may have
       // registered server-side even though we could not confirm the token in
-      // time, and hard-failing here is the ikuuu.fyi false-positive we are
-      // fixing. Detected-but-unconfirmed simple click flows should never block.
+      // time, and hard-failing here is the false-positive we are fixing.
+      // Detected-but-unconfirmed simple click flows should never block.
       if (escalatedToChallenge) {
         logger.warn({ provider: provider.name }, "Click captcha escalated to complex challenge — manual/solver required");
         return { detected: true, solved: false, needsAttention: true,
@@ -836,14 +836,14 @@ export async function detectAndHandleCaptcha(
     //
     // Many sites use Turnstile in "managed" or "non-interactive" mode where the
     // widget auto-solves in the background.  The token may appear in the hidden
-    // input a few seconds after page load.  Some sites (e.g. justrunmy.app) show
+    // input a few seconds after page load.  Some sites show
     // "Verify you are human" even though the token is already populated — a single
     // click on the iframe body flips the UI to "Success!" and the form is ready.
     if (type === "Turnstile" && !solver) {
       // Turnstile writes its solved token into `cf-turnstile-response` in native
       // mode, but into `g-recaptcha-response` when embedded in reCAPTCHA-
-      // compatibility mode (a `.g-recaptcha` container — e.g. betadash.lunes.host
-      // / the "Renew your Free plan" bot-check dialog). Check BOTH so an
+      // compatibility mode (a `.g-recaptcha` container — as used by the bot-check
+      // dialog some apps show behind an action button). Check BOTH so an
       // auto-solve in compat mode isn't missed, which would otherwise leave the
       // widget stuck on "Verifying..." until we wrongly report needsAttention.
       const checkTurnstileToken = () =>
@@ -958,7 +958,7 @@ export async function detectAndHandleCaptcha(
         //   1. xdotool OS-level physical click (invisible to CF fingerprinting)
         //   2. Main-page widget bounding box click (CDP)
         //   3. Cross-origin iframe element click (CDP)
-        // This is ported from JustRunMy.App's handle_turnstile() approach.
+        // This follows the approach of a known-good reference implementation.
         logger.info("Turnstile not auto-solved after wait — attempting checkbox click (xdotool + CDP)");
 
         // Keep this at 1: the cf-proxy native clicker already does uc_gui + xdotool
@@ -1025,7 +1025,7 @@ export async function detectAndHandleCaptcha(
     // Try the audio challenge (download mp3 → speech-to-text → type answer)
     // BEFORE any paid token solver. Works on both cf-proxy (native/local
     // whisper) and Playwright backends. This is what makes cfVerify / login pass
-    // reCAPTCHA on sites like host2play.gratis without a paid solver.
+    // reCAPTCHA on the sites we test against without a paid solver.
     if (type === "reCAPTCHA") {
       const audio = await solveRecaptchaAudio(page);
 
@@ -1035,8 +1035,8 @@ export async function detectAndHandleCaptcha(
       if (audio.blocked) {
         // IP-level refusal ("automated queries"): no STT/fingerprint/mouse work fixes
         // it — only a different exit IP does. We do NOT rotate here: this function has
-        // no idea how the captcha got on screen. host2play's lives in a modal opened by
-        // an earlier click step, so rotating + reloading here destroyed the very
+        // no idea how the captcha got on screen. On one test site it lives in a modal
+        // opened by an earlier click step, so rotating + reloading destroyed the very
         // captcha we were solving ("bframe not found"). The runner owns the retry: it
         // rotates the IP and replays the whole workflow, which re-opens the modal and
         // makes the site re-issue the captcha from the new IP.

@@ -73,7 +73,7 @@ _geo_cache: dict = {}
 _geo_lock = threading.Lock()
 
 # Chrome flags shared by all sessions
-# MINIMAL — match the known-good reference (eooce/katabump-renew), which passes
+# MINIMAL — match the known-good reference implementation, which passes
 # CF with a plain SB(uc=True) and NO extra chromium args. Every flag we add can
 # conflict with SeleniumBase UC's own carefully-chosen launch flags or be a tell,
 # so keep only what the container genuinely needs:
@@ -601,7 +601,7 @@ function patchGL(proto){
   var g=proto.getParameter;
   // Plain override (known-good with CF). The Proxy-wrapped variant was reverted:
   // wrapping getParameter in a Proxy coincided with CF Turnstile no longer
-  // passing on the cf-proxy backend (wispbyte), and it only ever targeted a
+  // passing on the SeleniumBase backend, and it only ever targeted a
   // cosmetic BrowserScan "-5% WebGL exception" that JS can't truly fix anyway
   // (SwiftShader vs the spoofed renderer). Passing CF matters more.
   function getParameter(x){if(x===37445)return GLV;if(x===37446)return GLR;return g.apply(this,arguments);}
@@ -2175,7 +2175,7 @@ def _element_abs_xy(sb, css, dx=0, dy_frac=0.5, wid=None, parent=False):
 
 # Un-clip Turnstile widgets hidden inside overflow:hidden / zero-size containers
 # so uc_gui_click_captcha can actually see + click the checkbox. Ported from the
-# TS EXPAND_TURNSTILE_JS; the reference (eooce/katabump-renew) runs the same idea
+# TS EXPAND_TURNSTILE_JS; the reference implementation runs the same idea
 # 3x before clicking.
 _EXPAND_JS = r"""
 (function(){
@@ -2239,7 +2239,7 @@ def _cf_interstitial_present(sb):
     # nav/header: a full-page Cloudflare challenge is wrapped in the site's own chrome
     # and DOES carry a nav/header, so excluding on those made every framed full-page
     # challenge look like it wasn't a challenge — which is why the checkbox on
-    # hub.weirdhost.xyz never got treated as one. A login form, by contrast, only
+    # a full-page challenge never got treated as one. A login form, by contrast, only
     # exists once we're actually past the gate.
     try:
         return bool(sb.execute_script(
@@ -2330,7 +2330,7 @@ def click_turnstile(sid):
     timeout = body.get("timeout", 60)
 
     def _fn(sb):
-        # Ported line-for-line from the known-good eooce/katabump-renew
+        # Ported line-for-line from the known-good reference
         # handle_turnstile (which logs into the same CF-shielded panels with the
         # exact same SeleniumBase-UC stack). This also matches our own last
         # working 07-05 build: plain uc_gui_click_captcha, no window-raise, no
@@ -2366,7 +2366,7 @@ def click_turnstile(sid):
 
         # ── Coordinate fallback ──────────────────────────────────────────────
         # uc_gui_click_captcha finds the checkbox by an on-screen IMAGE search,
-        # which misses widgets some panels (e.g. bot-hosting's renew modal) render
+        # which misses widgets some panels render inside a modal
         # so they aren't a findable <iframe> (shadow DOM / hidden). The hidden
         # cf-turnstile-response input IS in the light DOM though, and its PARENT is
         # the rendered widget — so click its checkbox (left side, vertically
@@ -2454,7 +2454,7 @@ def click_turnstile(sid):
             # Success signal depends on WHERE the widget lives, captured up-front:
             #   • Full-page interstitial → passing REDIRECTS, so "interstitial gone" is
             #     the signal (its response input often never gets a token).
-            #   • Embedded/modal widget on the real app page (bot-hosting's renew
+            #   • Embedded/modal widget on the real app page (a confirm
             #     dialog) → the page ALWAYS has site content, so _cf_interstitial_present
             #     is already False; using "not interstitial" as success made the loop
             #     declare victory on its FIRST check without ever clicking — a false
@@ -2596,7 +2596,7 @@ def transcribe():
 def solve_recaptcha_audio(sid):
     """Solve a reCAPTCHA v2 checkbox via its audio challenge, natively in
     Selenium (cross-origin frame switching) + local Whisper. Mirrors the
-    oyz8/Host2Play approach. Returns {solved, blocked, message}."""
+    reference approach. Returns {solved, blocked, message}."""
     s = _get(sid)
     if not s:
         return _err("Session not found")

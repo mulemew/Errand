@@ -1,7 +1,7 @@
 /**
  * recaptcha-audio.ts — solve a Google reCAPTCHA v2 checkbox challenge by driving
  * its AUDIO challenge (download mp3 → speech-to-text → type answer), the same
- * technique the oyz8/Host2Play reference project uses for host2play.gratis.
+ * technique used by a known-good reference implementation.
  *
  * Two execution paths, chosen automatically by backend:
  *   • cf-proxy (SeleniumBase): the adapter exposes a native solveRecaptchaAudio()

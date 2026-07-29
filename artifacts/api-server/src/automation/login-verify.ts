@@ -45,7 +45,7 @@ export async function gotoTolerant(
  *
  * Both OAuth flows used to conclude "already authenticated" from URL shape alone — "we are
  * not on github.com / accounts.google.com and the URL does not say /login, therefore we
- * must be in". That is true of a page where nothing happened at all: wispbyte serves its
+ * must be in". That is true of a page where nothing happened at all: some panels serve their
  * login screen at /client, and an OAuth button that opens a popup (or a click that never
  * navigated) leaves us on exactly that URL. The run then reported success and every later
  * step executed logged out.
@@ -102,7 +102,7 @@ export type LoginVerdict = "logged_in" | "logged_out" | "unknown";
  * `page.$("a, b, c")` does NOT do this: it resolves to `locator(...).first()`, i.e. the
  * first match in DOCUMENT order, so a broad fallback selector at the end of the list can
  * win over the precise one at the front. That is how the Google flow clicked the app-name
- * button ("Continue to Pingless") instead of Next: `button[type='button']:not([disabled])`
+ * button ("Continue to <app>") instead of Next: `button[type='button']:not([disabled])`
  * matched it, and it sits earlier in the DOM than #identifierNext. The developer-info
  * dialog opened, nothing navigated, and the login died waiting for a password field.
  *

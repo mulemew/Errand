@@ -712,7 +712,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
                 // Only a different IP can change an "automated queries" refusal. We
                 // replay from step 1 rather than retrying the captcha in place: the
                 // captcha is often inside a modal that an earlier step opened
-                // (host2play's "Renew server" dialog), so the only way to get a fresh
+                // (a dialog opened by an action button), so the only way to get a fresh
                 // one issued to the new IP is to redo the actions that produced it.
                 // (Retrying in place left the widget bound to the old IP; reloading to
                 // force a re-issue destroyed the modal — "bframe not found".)

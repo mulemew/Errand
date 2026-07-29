@@ -290,7 +290,7 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
 
   // Is there a captcha anywhere on the page right now? If so we must NOT close
   // modals or press Escape: the widget we're supposed to solve usually LIVES in a
-  // modal (bot-hosting renew, host2play/wispbyte "Start"), and closing it is what
+  // modal (a confirm dialog, a "Start" button), and closing it is what
   // produced "the popup closed but the action never fired".
   //
   // A single point-in-time check can race a slow captcha. The usual markup
@@ -359,8 +359,8 @@ async function dismissPopupsOnce(page: PageAdapter, firstPass = true): Promise<P
       const vh = window.innerHeight;
       // Never remove captcha widgets/containers — deleting them (or their
       // wrappers) breaks login on sites that require the captcha to be present
-      // and solved before submit (e.g. GeeTest v4 on ikuuu, Turnstile/hCaptcha
-      // on renew dialogs). A captcha layer frequently overlaps the viewport as a
+      // and solved before submit (GeeTest v4 in a login form, Turnstile/hCaptcha
+      // on confirm dialogs). A captcha layer frequently overlaps the viewport as a
       // fixed/high-z element and would otherwise match the backdrop heuristic.
       const CAPTCHA_SEL =
         ".cf-turnstile, [data-sitekey], input[name='cf-turnstile-response'], " +

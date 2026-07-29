@@ -297,7 +297,7 @@ import type { PageAdapter } from "./page-adapter";
       ".cookie-banner button", ".cookie-notice button",
       "#cookie-banner button", "#cookie-notice button",
       ".gdpr-banner button",
-      // CookieYes (cky-) consent banners — used by justrunmy.app and others
+      // CookieYes (cky-) consent banners — common on the sites we test
       ".cky-btn-accept",
       "button.cky-btn-accept",
       "[data-cky-tag='accept-button']",
@@ -323,7 +323,7 @@ import type { PageAdapter } from "./page-adapter";
 
     // Fallback: find buttons by text content (works with both Playwright and
     // Puppeteer adapters). Match by SUBSTRING, not exact equality — the
-    // known-good reference (eooce/katabump-renew) just does `"Accept" in btn.text`,
+    // known-good reference implementation just does `"Accept" in btn.text`,
     // so a button labelled "Accept cookies" / "I Accept" / "Accept all cookies"
     // is dismissed too (our old exact-equality check silently missed all of them).
     try {
@@ -409,7 +409,7 @@ import type { PageAdapter } from "./page-adapter";
   // Click the real submit/login control via CSS selectors (known-good). We do
   // NOT text-match login words: matching "sign in" hit "Sign in with Google" and
   // sent back4app to an OAuth redirect. We also drop the loose `[class*='login']`
-  // that matched Wispbyte's `login-nav-theme-toggle`. When no submit control is
+  // that matched one panel's `login-nav-theme-toggle`. When no submit control is
   // found, return false so the caller presses Enter (which submits the form the
   // focused password field belongs to). As a last resort, requestSubmit() the
   // password field's own form — this fires onSubmit WITHOUT clicking any button,
@@ -523,7 +523,7 @@ import type { PageAdapter } from "./page-adapter";
 
   // Read a visible login error/alert message. Called RIGHT AFTER submit and
   // BEFORE dismissPopups — otherwise the popup cleanup clicks the alert's close
-  // button (e.g. wispbyte's auth-form-alert) and erases the real reason, leaving
+  // button (one panel's `auth-form-alert`) and erases the real reason, leaving
   // only a generic "login button still visible".
   async function readLoginError(page: PageAdapter): Promise<string> {
     try {
@@ -573,7 +573,7 @@ import type { PageAdapter } from "./page-adapter";
       await gotoTolerant(page, targetUrl, 20000);
 
       // ── 0a. Clear a full-page Cloudflare interstitial FIRST ───────────────
-      // Sites like wispbyte.com, betadash.lunes.host and dash.domain.digitalplat.org
+      // Several of the panels we test against
       // serve the login page behind a full-page CF challenge ("Just a moment…").
       // The username/password fields do not exist until the challenge clears, so
       // we must pass it *before* trying to locate the form — otherwise findSelector
@@ -592,7 +592,7 @@ import type { PageAdapter } from "./page-adapter";
           const stillBlocked = (await page
             .evaluate(() => {
               // A visible login form means the page DID load — an embedded Turnstile in
-              // that form (wispbyte) is solved before submit, it is not a full-page
+              // that form is solved before submit, it is not a full-page
               // block. Only a page that is ONLY the challenge (no form) is genuinely
               // still blocking. Keying off the widget input alone treated a loaded
               // login page as blocked and returned needs-attention without ever filling
@@ -629,7 +629,7 @@ import type { PageAdapter } from "./page-adapter";
 
       // ── 0b. Wait for the post-challenge redirect to land ───────────────────
       // Passing the interstitial does NOT mean the login form is there: sites like
-      // dash.hidencloud.com gate /auth/login behind a challenge page that, once
+      // gate /auth/login behind a challenge page that, once
       // passed, REDIRECTS to the real login page. We used to fall straight through
       // (a 500ms sleep) and hunt for inputs while the challenge page was still up,
       // so login failed with "could not find username field" even though the
@@ -711,7 +711,7 @@ import type { PageAdapter } from "./page-adapter";
       // Wait for page to fully settle (URL stops changing) — up to 15 s
       await waitForSettle(page, 8000);
       // Read any login error, but DON'T run dismissPopups here: after submit it
-      // was clicking the site's own login-result alert (e.g. wispbyte's
+      // was clicking the site's own login-result alert (one panel's
       // auth-form-alert), which erased the real reason and could reset the form /
       // Turnstile. Overlays that block the FORM/captcha are already cleared before
       // fill (dismissCookieConsent). Post-submit, we only observe — don't touch.
@@ -787,7 +787,7 @@ import type { PageAdapter } from "./page-adapter";
 
       // Precise submit selector for the "is the login button still visible?"
       // success check — deliberately WITHOUT the loose `[class*='login']` that
-      // matched Wispbyte's theme-toggle-btn (which would keep it "visible" and
+      // matched a panel's theme-toggle-btn (which would keep it "visible" and
       // report a false failure).
       const detectSubmitSel =
         "button[type='submit'], input[type='submit'], button.login-btn, " +
