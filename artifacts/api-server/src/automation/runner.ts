@@ -461,12 +461,14 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         ((cookieModeStep?.loginUrl as string | undefined) || "").trim() || task.targetUrl;
 
       if (cookieModeEnabled) {
+        logger.debug({ taskId, cookieSessionKey, cookieOriginUrl }, "Cookie mode is on for this task");
         const saved = await loadBrowserSession(taskId, cookieSessionKey);
         if (saved) {
           browserConfig.storageState = saved;
           emitTaskProgress(taskId, "Restored saved browser session (cookie mode)-¦");
           logger.info({ taskId, cookieSessionKey }, "Cookie mode — restored saved session");
         } else {
+          logger.debug({ taskId, cookieSessionKey }, "Cookie mode — no saved session for this key");
           // Nothing saved yet — seed Playwright's context from the pasted cookies.
           // (The cf-proxy path seeds the live page after newPage() instead; without
           // this branch a pasted cookie only worked on cf-proxy.)

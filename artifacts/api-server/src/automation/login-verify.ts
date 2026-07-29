@@ -211,8 +211,12 @@ export async function closeBlockingDialog(page: PageAdapter): Promise<boolean> {
 }
 
 export async function detectLoginState(page: PageAdapter): Promise<{ verdict: LoginVerdict; evidence: string }> {
+  const _logVerdict = (r: { verdict: LoginVerdict; evidence: string }) => {
+    logger.debug({ url: (() => { try { return page.url(); } catch { return "?"; } })(), ...r }, "Login state verdict");
+    return r;
+  };
   try {
-    return (await page.evaluate(() => {
+    return _logVerdict((await page.evaluate(() => {
       const visible = (el: Element): boolean => {
         const r = el.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) return false;
@@ -238,9 +242,9 @@ export async function detectLoginState(page: PageAdapter): Promise<{ verdict: Lo
       if (outBtn) return { verdict: "logged_in" as const, evidence: `account affordance: "${text(outBtn)}"` };
 
       return { verdict: "unknown" as const, evidence: "no login or account affordance found" };
-    })) as { verdict: LoginVerdict; evidence: string };
+    })) as { verdict: LoginVerdict; evidence: string });
   } catch {
-    return { verdict: "unknown", evidence: "page not readable" };
+    return _logVerdict({ verdict: "unknown", evidence: "page not readable" });
   }
 }
 

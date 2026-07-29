@@ -722,6 +722,10 @@ async function executeStep(
         try {
           await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
           await dismissPopups(page);
+          logger.debug(
+            { loginUrl, url: page.url(), hasText: !!step.successText, hasSelector: !!step.successSelector },
+            "Cookie mode — probing the restored session",
+          );
           const alreadyIn = await isSessionAuthenticated(page, step.successSelector, step.successText);
           if (alreadyIn) {
             logger.info({ taskId, stepIndex }, "Cookie mode — existing session detected, skipping login");
@@ -1040,7 +1044,11 @@ async function isSessionAuthenticated(
   if (successText) {
     try {
       const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
-      if (bodyText.includes(successText)) return true;
+      if (bodyText.includes(successText)) {
+        logger.debug({ successText }, "Session check: success TEXT found on the page");
+        return true;
+      }
+      logger.debug({ successText, chars: bodyText.length }, "Session check: success text NOT on the page");
     } catch {}
   }
   if (successSelector) {
@@ -1052,7 +1060,13 @@ async function isSessionAuthenticated(
           const rect = e.getBoundingClientRect();
           return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
         }).catch(() => false) as boolean;
-        if (visible) return true;
+        if (visible) {
+          logger.debug({ successSelector }, "Session check: success SELECTOR matched and is visible");
+          return true;
+        }
+        logger.debug({ successSelector }, "Session check: success selector matched but is not visible");
+      } else if (successSelector) {
+        logger.debug({ successSelector }, "Session check: success selector did not match");
       }
     } catch {}
   }
@@ -1066,6 +1080,9 @@ async function isSessionAuthenticated(
     logger.info({ evidence }, "Session looks authenticated (no explicit success criterion configured)");
     return true;
   }
+  // "unknown" is the common case on a site we cannot read, and it is the reason a task
+  // logs in on every run despite cookie mode being on. Say so.
+  logger.debug({ verdict, evidence, hadCriterion: !!(successText || successSelector) }, "Session check: not authenticated");
   return false;
 }
 

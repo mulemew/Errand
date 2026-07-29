@@ -617,7 +617,10 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
     probe = await evalBounded<CfPageProbe | null>(page, CF_PROBE_FN, null, 6000);
   }
 
-  if (!probe) return "none";
+  if (!probe) {
+    logger.debug("CF probe returned nothing (page busy or navigating) — treating as no challenge");
+    return "none";
+  }
   if (probe.blocked) {
     logger.warn("Cloudflare WAF block detected — IP/fingerprint is blocked");
     return "waf_blocked";
@@ -628,23 +631,37 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
     probe.title === "Attention Required! | Cloudflare" ||
     probe.title.includes("DDoS protection by Cloudflare");
 
-  if (!(probe.marker || titleMatch || probe.legacy)) return "none";
+  if (!(probe.marker || titleMatch || probe.legacy)) {
+    // The single most useful line when a site "should" have been challenged and was not:
+    // it shows WHICH signal was missing rather than just the verdict.
+    logger.debug(
+      { title: probe.title, marker: probe.marker, legacy: probe.legacy, widget: probe.visibleWidget, iframe: probe.turnstileIframe },
+      "No full-page CF challenge on this page",
+    );
+    return "none";
+  }
 
   // From here on it is a FULL-PAGE challenge (embedded/popup widgets returned "none" via
   // the site-content guard and are handled by the token path). A visible box means there
   // is something to click; otherwise it is a self-verifying challenge we can only wait on.
-  if (probe.visibleWidget) return "turnstile_click";
+  if (probe.visibleWidget) {
+    logger.debug({ title: probe.title, via: "visibleWidget" }, "CF challenge classified as turnstile_click");
+    return "turnstile_click";
+  }
 
   // Turnstile renders its iframe inside a CLOSED shadow root, so the DOM scan above can
   // miss it — Playwright's frames() sees through shadow boundaries.
   try {
     if (page.frames().some((f: { url(): string }) => CF_FRAME_PATTERNS.some((p) => f.url().includes(p)))) {
+      logger.debug({ title: probe.title, via: "frames()" }, "CF challenge classified as turnstile_click");
       return "turnstile_click";
     }
   } catch {
     // frames() may not be available on every adapter
   }
-  return probe.turnstileIframe ? "turnstile_click" : "js_challenge";
+  const _verdict = probe.turnstileIframe ? "turnstile_click" : "js_challenge";
+  logger.debug({ title: probe.title, via: probe.turnstileIframe ? "light-DOM iframe" : "no widget found" }, `CF challenge classified as ${_verdict}`);
+  return _verdict;
 }
 
 // ── Turnstile solved state check ────────────────────────────────────────────
@@ -1047,6 +1064,12 @@ export async function bypassCloudflareChallenge(
   await expandTurnstileIfClipped(page);
 
   // Quick check: Turnstile may have already been solved silently
+  // Guarded: describeTurnstileState reads a cross-origin frame and is allowed up to 5 s.
+  // Unguarded it would add that to EVERY bypass whether or not anyone is reading the log —
+  // a diagnostic must never cost a run time it did not cost before.
+  if (logger.isLevelEnabled("debug")) {
+    logger.debug({ widget: await describeTurnstileState(page) }, "Turnstile state before the bypass attempt");
+  }
   const alreadySolved = await isTurnstileSolved(page);
   if (alreadySolved) {
     logger.info("Turnstile already solved silently (token present)");
