@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { Router, type IRouter } from "express";
-import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, proxyProfilesTable, fingerprintProfilesTable, eq, desc, count, and, gte, sql } from "@workspace/db";
+import { db, tasksTable, credentialsTable, savedCredentialsTable, logsTable, proxyProfilesTable, fingerprintProfilesTable, providersTable, eq, desc, count, and, gte, sql } from "@workspace/db";
 import {
   ListTasksResponse,
   CreateTaskBody,
@@ -152,18 +152,46 @@ async function persistExitGeo(taskId: number): Promise<ExitGeo | null> {
 type ProfileMaps = {
   proxy: Map<number, { name: string; exitGeo: unknown }>;
   fingerprint: Map<number, { name: string; os: string }>;
+  /** provider id → type, plus the type of whichever provider is starred as default.
+   *  Needed to answer "what backend will this task actually use", which a task that
+   *  follows the default cannot answer from its own browserConfig. */
+  providerType: Map<number, string>;
+  defaultProviderType: string | null;
 };
 async function loadProfileMaps(): Promise<ProfileMaps> {
-  const [pp, fp] = await Promise.all([
+  const [pp, fp, pv] = await Promise.all([
     db.select({ id: proxyProfilesTable.id, name: proxyProfilesTable.name, exitGeo: proxyProfilesTable.exitGeo }).from(proxyProfilesTable),
     db.select({ id: fingerprintProfilesTable.id, name: fingerprintProfilesTable.name, os: fingerprintProfilesTable.os }).from(fingerprintProfilesTable),
+    db.select({ id: providersTable.id, type: providersTable.type, isDefault: providersTable.isDefault, enabled: providersTable.enabled }).from(providersTable),
   ]);
+  const def = pv.find((r) => r.isDefault && r.enabled !== false) ?? null;
   return {
     proxy: new Map(pp.map((r) => [r.id, { name: r.name, exitGeo: r.exitGeo }])),
     fingerprint: new Map(fp.map((r) => [r.id, { name: r.name, os: r.os }])),
+    providerType: new Map(pv.map((r) => [r.id, r.type])),
+    defaultProviderType: def?.type ?? null,
   };
 }
-type TaskBC = { proxyProfileId?: number | null; fingerprintProfileId?: number | null; fingerprint?: { os?: string | null } | null } | null | undefined;
+type TaskBC = {
+  proxyProfileId?: number | null;
+  fingerprintProfileId?: number | null;
+  fingerprint?: { os?: string | null } | null;
+  provider?: string | null;
+  providerId?: number | null;
+} | null | undefined;
+/** True when this task's fingerprint is generated fresh on every run rather than fixed.
+ *  Camoufox with no bound profile is the only such case — and the dashboard used to show
+ *  it as "Linux (default)", i.e. the exact opposite of what happens. */
+function fingerprintIsRandom(task: { browserConfig?: unknown } | undefined, maps: ProfileMaps): boolean {
+  const bc = task?.browserConfig as TaskBC;
+  if (bc?.fingerprintProfileId) return false;
+  // A task names a provider by id, or follows the starred default; `provider` is only the
+  // legacy inline field. Check all three or a task that follows the default is misreported.
+  const type = (bc?.providerId != null ? maps.providerType.get(bc.providerId) : null)
+    ?? bc?.provider
+    ?? maps.defaultProviderType;
+  return type === "camoufox";
+}
 /** A task's exit geo for display: the saved proxy profile's cached geo when the task
  *  uses one (so a profile refresh updates every task at once), else the task's own
  *  cached exit_geo (inline proxy / no proxy). */
@@ -384,6 +412,7 @@ router.get("/tasks", async (req, res): Promise<void> => {
     // The list's platform badge tooltip names the PROFILE ("Win10 主力机"), not its OS —
     // the icon already says which OS it is. Null when the task uses an inline fingerprint.
     fingerprintLabel: fingerprintLabel(tasks[i], maps),
+    fingerprintRandom: fingerprintIsRandom(tasks[i], maps),
     // Dashboard organisation — stripped by the generated response schema, so re-attached.
     groupId: tasks[i]?.groupId ?? null,
     sortOrder: tasks[i]?.sortOrder ?? null,

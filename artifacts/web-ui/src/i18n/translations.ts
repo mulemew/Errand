@@ -724,6 +724,10 @@ export interface Translations {
       liveLogHint: string;
       liveLogWaiting: string;
       liveLogLevelNote: string;
+      fingerprintNoneRandom: string;
+      fingerprintTipRandom: string;
+      osRandomLabel: string;
+      randomFingerprintEachRun: string;
   }
 
   export const zh: Translations = {
@@ -1250,7 +1254,7 @@ export interface Translations {
       warpRotationsHint: "reCAPTCHA 语音验证被拒（\"automated queries\"）时，注册新的 WARP 身份换一个出口 IP 再试，最多这么多次。换 IP 时 sing-box 在同一本地端口重启，浏览器和页面状态不受影响；每次重试也会从新 IP 重新点一次 checkbox（有机会直接通过）。填 0 关闭。",
       fingerprintFieldLabel: "浏览器指纹",
       fingerprintNoneReal: "不使用（真实指纹）",
-      fingerprintHintCamoufox: "只能选「浏览器指纹」页里保存的档案（引擎级伪装，含时区/语言）。要新的就去那一页生成一个。",
+      fingerprintHintCamoufox: "不绑定档案时，Camoufox 每次启动都现生成一份全新的、内部自洽的指纹（引擎级，不是容器的 Linux 真实指纹）——同一个任务在网站看来每次都是一台新设备。想让它每次都一样，就去「浏览器指纹」页生成一个档案并在这里选中（含时区/语言）。",
       fingerprintHintSb: "SeleniumBase 只能伪装 系统/时区/语言，用不了生成的固定指纹（browserforge / 真机预设），这类档案已从列表中隐藏。",
       concurrencyCardHint: "每个后端的并发上限在 Providers 页单独设置，各管各的。这里剩下的是全局项：队列深度和等待超时对所有后端的队列都生效；下面的「回退并发」只在任务没选后端、且没有默认后端时才会用到。",
       fallbackConcurrency: "回退并发（没有后端时）",
@@ -1423,6 +1427,10 @@ export interface Translations {
       liveLogHint: "实时显示服务端这次运行的日志。不保存，关掉这个面板就停止。",
       liveLogWaiting: "等待日志输出…",
       liveLogLevelNote: "配置的级别是 {v}，观看期间临时降到 debug",
+      fingerprintNoneRandom: "不绑定（每次运行随机生成）",
+      fingerprintTipRandom: "指纹：未绑定档案（每次运行随机生成）",
+      osRandomLabel: "随机",
+      randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
   };
 
   export const en: Translations = {
@@ -1950,7 +1958,7 @@ export interface Translations {
       warpRotationsHint: "When reCAPTCHA refuses the audio challenge (\"automated queries\"), register a fresh WARP identity for a new exit IP and try again, up to this many times. sing-box restarts on the same local port, so the browser and page state survive; each retry also re-clicks the checkbox from the new IP, which sometimes passes outright. 0 disables it.",
       fingerprintFieldLabel: "Browser fingerprint",
       fingerprintNoneReal: "None (the browser's own fingerprint)",
-      fingerprintHintCamoufox: "Only profiles saved on the Browser fingerprints page (applied at engine level, timezone and locale included). Generate a new one there.",
+      fingerprintHintCamoufox: "With no profile bound, Camoufox generates a fresh, internally consistent fingerprint at every launch (engine level — never the container\u2019s real Linux identity), so the same task looks like a new device on each run. Bind a profile from the Browser fingerprints page to keep it identical every time (timezone and locale included).",
       fingerprintHintSb: "SeleniumBase can only spoof OS / timezone / locale — it cannot apply a generated fingerprint (browserforge or a real-device preset), so those profiles are hidden from this list.",
       concurrencyCardHint: "Each backend's concurrency limit is set on the Providers page and applies only to itself. What remains here is global: queue depth and wait timeout apply to every backend's queue, and the fallback below is used only when a task has no backend selected and no default backend is set.",
       fallbackConcurrency: "Fallback concurrency (no backend)",
@@ -2123,5 +2131,9 @@ export interface Translations {
       liveLogHint: "Streams the server's own log for this run. Nothing is stored; closing this panel stops it.",
       liveLogWaiting: "Waiting for output…",
       liveLogLevelNote: "Configured level is {v}; temporarily lowered to debug while you watch",
+      fingerprintNoneRandom: "None — a fresh random one each run",
+      fingerprintTipRandom: "Fingerprint: no profile bound (a fresh random one each run)",
+      osRandomLabel: "random",
+      randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
   };
   

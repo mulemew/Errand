@@ -210,6 +210,11 @@ export default function TaskDetail() {
   }, []);
   const boundFp = bcfg?.fingerprintProfileId ? fpProfiles.find((p) => p.id === bcfg.fingerprintProfileId) : undefined;
   const boundProvider = bcfg?.providerId ? providersList.find((p) => p.id === bcfg.providerId) : undefined;
+  // Which backend this task will actually run on: the one it names, else the starred
+  // default. It decides what "no fingerprint profile" MEANS — Camoufox mints a fresh one
+  // per launch, everything else uses the browser's own identity.
+  const effectiveProviderType =
+    boundProvider?.type ?? providersList.find((p) => p.isDefault && p.enabled !== false)?.type ?? null;
   const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp" || bcfg.proxyProfileId));
 
   type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
@@ -1401,7 +1406,9 @@ export default function TaskDetail() {
                     </div>
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground font-mono">{t.noFingerprintSpoof}</p>
+                  <p className="text-xs text-muted-foreground font-mono">
+                    {effectiveProviderType === "camoufox" ? t.randomFingerprintEachRun : t.noFingerprintSpoof}
+                  </p>
                 )}
               </CardContent>
             </Card>

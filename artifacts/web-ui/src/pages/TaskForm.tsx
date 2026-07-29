@@ -1151,7 +1151,13 @@ Authorization: Bearer ${webhookToken || "<token>"}`}
                         >
                           <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none">{t.fingerprintNoneReal}</SelectItem>
+                            {/* "None" means two different things. On SeleniumBase it is the
+                                container's real Chrome-on-Linux identity; on Camoufox the engine
+                                mints a fresh consistent fingerprint per launch. Saying "real
+                                fingerprint" for both was simply wrong for one of them. */}
+                            <SelectItem value="none">
+                              {activeProviderType === "camoufox" ? t.fingerprintNoneRandom : t.fingerprintNoneReal}
+                            </SelectItem>
                             {selectableFingerprints.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.os}）</SelectItem>
                             ))}
