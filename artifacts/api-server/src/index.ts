@@ -11,6 +11,9 @@
   import { runMigrations } from "./lib/migrations";
   import { hasStoredPassword, initPassword } from "./lib/passwordStore";
   import { loadLogConfig } from "./lib/appSettings";
+  import { attachLiveViewUpgrade } from "./routes/live-view";
+  import { hasSession } from "./lib/sessions";
+  import cookieParser from "cookie-parser";
   import { pool } from "@workspace/db";
 
   const rawPort = process.env["PORT"];
@@ -69,12 +72,31 @@
     }
   }
 
-  app.listen(port, async (err) => {
+  const server = app.listen(port, async (err) => {
     if (err) {
       logger.error({ err }, "Error listening on port");
       process.exit(1);
     }
     logger.info({ port }, "Server listening");
+    // The live-view WebSocket: Express never sees an HTTP upgrade, so it is wired to the
+    // server directly. Same session cookie as every other request — an unauthenticated
+    // upgrade is closed before any socket to the sidecar is opened.
+    attachLiveViewUpgrade(server, async (cookieHeader) => {
+      try {
+        // One cookie out of a header — not worth a parser dependency, and this runs on a
+        // socket upgrade where cookie-parser's middleware form is not available.
+        const raw = (cookieHeader ?? "")
+          .split(";")
+          .map((c) => c.trim())
+          .find((c) => c.startsWith("session="))
+          ?.slice("session=".length);
+        if (!raw) return false;
+        const token = cookieParser.signedCookie(decodeURIComponent(raw), process.env.SESSION_SECRET ?? "");
+        return typeof token === "string" && (await hasSession(token));
+      } catch {
+        return false;
+      }
+    });
     // Reap sing-box/Xvfb helpers on SIGTERM/SIGINT/fatal errors — nothing killed
     // them before, so every restart left orphans behind.
     installSignalHandlers(async () => {

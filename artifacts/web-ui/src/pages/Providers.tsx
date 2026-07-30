@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle, Star, Link2 } from "lucide-react";
+import { Server, Plus, Trash2, Pencil, Loader2, RefreshCw, CheckCircle2, XCircle, HelpCircle, Star, Link2, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -167,6 +167,10 @@ export default function Providers() {
     finally { setCheckingId(null); }
   };
 
+  // Which provider's screen is being watched, if any. The iframe only exists while this is
+  // set — mounting it is what opens the WebSocket, and unmounting closes it.
+  const [liveViewId, setLiveViewId] = useState<number | null>(null);
+
   const checkAll = async () => {
     setCheckingAll(true);
     try {
@@ -267,6 +271,13 @@ export default function Providers() {
                   <Button variant="ghost" size="icon" className="h-7 w-7" title={t.checkOne} onClick={() => checkOne(p.id)} disabled={checkingId === p.id || checkingAll}>
                     <RefreshCw className={`h-4 w-4 ${checkingId === p.id ? "animate-spin" : ""}`} />
                   </Button>
+                  {/* Only camoufox renders on an Xvfb the viewer can attach to. */}
+                  {p.type === "camoufox" && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title={t.liveViewTitle}
+                      onClick={() => setLiveViewId(p.id)}>
+                      <Monitor className="h-4 w-4" />
+                    </Button>
+                  )}
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteId(p.id)}><Trash2 className="h-4 w-4" /></Button>
                 </div>
@@ -381,6 +392,22 @@ export default function Providers() {
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}{editingId ? t.actionSave : t.actionAdd}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Live view — the sidecar's real screen, proxied by this app so it works behind the
+          same reverse proxy and login as everything else. */}
+      <Dialog open={liveViewId !== null} onOpenChange={(o) => !o && setLiveViewId(null)}>
+        <DialogContent className="max-w-6xl w-full p-2">
+          <p className="text-xs text-muted-foreground px-1 pb-2">{t.liveViewHint}</p>
+          {liveViewId !== null && (
+            <iframe
+              src={`${BASE}/api/live-view/${liveViewId}/`}
+              title={t.liveViewTitle}
+              className="w-full rounded border border-border bg-black"
+              style={{ height: "70vh" }}
+            />
+          )}
         </DialogContent>
       </Dialog>
 

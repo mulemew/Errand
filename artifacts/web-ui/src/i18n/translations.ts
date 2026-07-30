@@ -728,6 +728,8 @@ export interface Translations {
       fingerprintTipRandom: string;
       osRandomLabel: string;
       randomFingerprintEachRun: string;
+      liveViewTitle: string;
+      liveViewHint: string;
   }
 
   export const zh: Translations = {
@@ -1431,6 +1433,8 @@ export interface Translations {
       fingerprintTipRandom: "指纹：未绑定档案（每次运行随机生成）",
       osRandomLabel: "随机",
       randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
+      liveViewTitle: "实时预览",
+      liveViewHint: "看到的是这个后端浏览器真实的屏幕。需要在 sidecar 上设置 VNC_ENABLE=1 和 VNC_PASSWORD 并重启；画面通过本站代理，不用额外开端口。",
   };
 
   export const en: Translations = {
@@ -2135,5 +2139,7 @@ export interface Translations {
       fingerprintTipRandom: "Fingerprint: no profile bound (a fresh random one each run)",
       osRandomLabel: "random",
       randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
+      liveViewTitle: "Live view",
+      liveViewHint: "The real screen of this backend's browser. Requires VNC_ENABLE=1 and VNC_PASSWORD on the sidecar; the stream is proxied by this app, so no extra port is exposed.",
   };
   
