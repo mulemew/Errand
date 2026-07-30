@@ -867,13 +867,30 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
         'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
       );
       const candidates: Array<[Element, string]> = [];
-      if (resp?.parentElement) candidates.push([resp.parentElement, "response-parent"]);
       for (const c of Array.from(document.querySelectorAll(".cf-turnstile, [data-sitekey], [id^='cf-chl-widget']"))) {
         candidates.push([c, "container"]);
       }
+      // LAST, not first. The response input's parent is whatever wrapper the page happened
+      // to put around it — on a full-page challenge that is a full-width block, and
+      // "30px in from its left edge" is empty space nowhere near the checkbox. It stays as
+      // a last resort because on some embedded widgets it IS the widget.
+      if (resp?.parentElement) candidates.push([resp.parentElement, "response-parent"]);
+
+      // A Turnstile widget is a fixed-size control: ~300x65, and never wider than about
+      // 500. Anything much wider is a container that merely CONTAINS it, and its left edge
+      // has no relationship to where the checkbox sits. Prefer whatever is actually
+      // widget-shaped, whichever selector found it.
+      const widgetShaped = (r: DOMRect) => r.width >= 200 && r.width <= 520 && r.height >= 40 && r.height <= 120;
       for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
-        if (usable(r)) return point(r, from);
+        if (usable(r) && widgetShaped(r)) return point(r, `${from}:widget-shaped`);
+      }
+      // Nothing was the right shape. Falling back to the old behaviour would aim into a
+      // wide container again, so say so instead of clicking somewhere meaningless — the
+      // caller logs this and the run fails honestly rather than silently missing.
+      for (const [c, from] of candidates) {
+        const r = c.getBoundingClientRect();
+        if (usable(r) && r.width <= 900) return point(r, `${from}:approx`);
       }
       return null;
     },
@@ -1315,10 +1332,24 @@ export async function clearCloudflareInterstitial(
       logger.warn({ widget }, "Turnstile judged this attempt a failure — a reload keeps the same IP/fingerprint and cannot change that verdict. Giving up so the task's retry can start from a fresh session");
       return false;
     }
+    // A reload is only worth it if there is time left to DO something with the fresh page.
+    // Otherwise it spends the remainder of the budget rendering a challenge nobody will
+    // click, and hands Cloudflare one more abandoned attempt from this IP — which is
+    // exactly what the logs showed: reload, then "exceeded its time budget" 30 s later
+    // having done nothing at all.
+    const leftMs = deadline - Date.now();
+    const reloadMinMs = Number(process.env.CF_RELOAD_MIN_MS ?? 25_000);
+    if (round < maxReloads && leftMs < reloadMinMs) {
+      logger.warn(
+        { round, leftMs: Math.max(0, Math.round(leftMs)), reloadMinMs },
+        "Not reloading: too little budget left to clear a fresh challenge — leaving it for the task retry, which gets a new session",
+      );
+      return false;
+    }
     if (round < maxReloads) {
       const reloadUrl = opts?.url || page.url();
       logger.info(
-        { round, reloadUrl, widget },
+        { round, reloadUrl, widget, leftMs: Math.round(leftMs) },
         "Turnstile reached no verdict (not rendered / never clicked) — reloading for a fresh page",
       );
       try {
