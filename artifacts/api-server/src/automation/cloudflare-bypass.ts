@@ -1148,15 +1148,35 @@ export async function bypassCloudflareChallenge(
     // the budget was only checked BETWEEN rounds, so a single round could overrun a 60 s
     // clear budget by another ~50 s, and that overrun then multiplied by every login retry.
     const remaining = () => (opts?.deadline ? opts.deadline - Date.now() : Number.POSITIVE_INFINITY);
-    if (remaining() <= 0) {
-      logger.warn("Out of Cloudflare budget before the Turnstile click");
+
+    // Either click properly or do not click at all.
+    //
+    // The verdict wait used to be carved out of whatever budget was left —
+    // min(12s, max(3s, remaining)) — so a round that started with the budget nearly spent
+    // clicked the box and then abandoned it after 3 s. Turnstile takes 1-4 s to answer a
+    // good click and sometimes longer, so that window lands OUTSIDE the normal case: the
+    // click was wasted, the run failed with the box still spinning, and Cloudflare recorded
+    // one more failed attempt from this IP. This is the "occasionally stuck spinning" tail.
+    //
+    // So: below CF_CLICK_MIN_MS of remaining budget, don't touch it — leave the widget
+    // untouched for the task-level retry, which starts a fresh session (and, with a
+    // rotating proxy, a fresh IP), the only things that actually change the outcome.
+    const clickMinMs = Number(process.env.CF_CLICK_MIN_MS ?? 8_000);
+    if (remaining() < clickMinMs) {
+      logger.warn(
+        { remainingMs: Math.max(0, Math.round(remaining())), clickMinMs },
+        "Too little Cloudflare budget left to click and wait for a verdict — not clicking, so the attempt is not wasted",
+      );
       return "failed";
     }
 
     await simulateHumanPresence(page, { widgetPresent: true });
     await sleep(600 + Math.random() * 900);
 
-    const clicked = await clickTurnstileCheckbox(page, Math.min(12_000, Math.max(3_000, remaining())));
+    // Full verdict wait, NOT clamped to the remaining budget: having clicked, the only
+    // useful thing left is to wait for the answer. Worst case this overshoots the clear
+    // budget by CF_TOKEN_WAIT_MS (12 s by default) — cheaper than throwing the click away.
+    const clicked = await clickTurnstileCheckbox(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000));
     if (clicked) {
       logger.info("Cloudflare Turnstile click challenge bypassed");
       return "passed";
