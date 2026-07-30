@@ -1,4 +1,6 @@
 import { logger } from "../lib/logger";
+import { currentTaskId } from "../lib/taskContext";
+import { setTaskView, clearTaskView } from "../lib/taskViews";
 import { SeleniumBaseProvider } from "./seleniumbase-adapter";
 import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, firefox } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
@@ -744,6 +746,8 @@ class CamoufoxProvider implements BrowserProvider {
   }
 
   private async release(id: string): Promise<void> {
+    const _tid = currentTaskId();
+    if (_tid != null) clearTaskView(_tid);
     try {
       await fetch(`${this.baseUrl}/release`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
@@ -788,8 +792,18 @@ class CamoufoxProvider implements BrowserProvider {
       if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
       throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
     }
-    const { id, ws } = (await res.json()) as { id: string; ws: string };
+    const { id, ws, viewPort } = (await res.json()) as { id: string; ws: string; viewPort?: number | null };
     const wsUrl = reachableCamoufoxWs(ws, this.baseUrl);
+
+    // Remember where THIS run can be watched. Each session has its own display now, so the
+    // task page can show just this browser instead of every concurrent one at once. The
+    // task id comes from the ambient run context — nothing down here knows about tasks.
+    const _watchTaskId = currentTaskId();
+    if (_watchTaskId != null && viewPort) {
+      try {
+        setTaskView(_watchTaskId, new URL(this.baseUrl).hostname, viewPort);
+      } catch { /* a malformed base URL is not worth failing a run over */ }
+    }
 
     let browser: import("playwright-core").Browser;
     try {

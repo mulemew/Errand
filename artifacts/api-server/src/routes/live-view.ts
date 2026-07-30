@@ -2,7 +2,8 @@ import { Router, type IRouter } from "express";
 import type { Server } from "http";
 import net from "net";
 import { logger } from "../lib/logger";
-import { db, providersTable, eq } from "@workspace/db";
+import { db, providersTable, tasksTable, eq } from "@workspace/db";
+import { getTaskView } from "../lib/taskViews";
 
 /**
  * Live view of a provider's browser, served THROUGH this app.
@@ -21,8 +22,34 @@ import { db, providersTable, eq } from "@workspace/db";
 
 const VNC_PORT = Number(process.env.CAMOUFOX_VNC_PORT ?? 7900);
 
-/** host:port of a provider's live view, or null when the provider cannot offer one. */
-async function liveViewTarget(providerId: number): Promise<{ host: string; port: number } | null> {
+/**
+ * Where to point the proxy.
+ *
+ * The id is either a provider ("7" — the container's shared display, which shows every
+ * concurrent run at once) or a task ("task-37" — that run's OWN display, which is what you
+ * almost always want). A task with no session running falls back to its provider's shared
+ * display, so the button works whether or not the task is mid-run.
+ */
+async function liveViewTarget(id: string): Promise<{ host: string; port: number } | null> {
+  const taskMatch = id.match(/^task-(\d+)$/);
+  if (taskMatch) {
+    const taskId = Number(taskMatch[1]);
+    const own = getTaskView(taskId);
+    if (own) return own;
+    // Not running (or the sidecar could not give it a display): fall back to whichever
+    // provider this task uses.
+    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+    const bc = task?.browserConfig as { providerId?: number | null } | null;
+    if (bc?.providerId) return providerTarget(bc.providerId);
+    const [def] = await db.select().from(providersTable).where(eq(providersTable.isDefault, true));
+    return def ? providerTarget(def.id) : null;
+  }
+  const providerId = parseInt(id, 10);
+  return isNaN(providerId) ? null : providerTarget(providerId);
+}
+
+/** The container-wide display of one provider's sidecar. */
+async function providerTarget(providerId: number): Promise<{ host: string; port: number } | null> {
   const [p] = await db.select().from(providersTable).where(eq(providersTable.id, providerId));
   if (!p?.url) return null;
   // Only the camoufox sidecar runs the viewer today.
@@ -42,12 +69,8 @@ const router: IRouter = Router();
  * client asks for its own assets by relative path once loaded.
  */
 router.use("/live-view/:id", async (req, res): Promise<void> => {
-  const providerId = parseInt(req.params.id ?? "", 10);
-  if (isNaN(providerId)) {
-    res.status(400).json({ error: "Invalid provider id" });
-    return;
-  }
-  const target = await liveViewTarget(providerId);
+  const viewId = req.params.id ?? "";
+  const target = await liveViewTarget(viewId);
   if (!target) {
     res.status(404).json({ error: "This provider has no live view (camoufox only)" });
     return;
@@ -57,7 +80,7 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
   // so the client connects back through this app rather than to the sidecar directly.
   let path = req.url === "/" || req.url === "" ? "/vnc.html" : req.url;
   if (path === "/vnc.html") {
-    path += `?autoconnect=1&resize=scale&path=${encodeURIComponent(`api/live-view/${providerId}/websockify`)}`;
+    path += `?autoconnect=1&resize=scale&path=${encodeURIComponent(`api/live-view/${viewId}/websockify`)}`;
   }
 
   try {
@@ -72,10 +95,10 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
     res.setHeader("Cache-Control", "no-store");
     res.send(Buffer.from(await upstream.arrayBuffer()));
   } catch (err) {
-    logger.warn({ err, providerId }, "Live view is not reachable — is VNC_ENABLE=1 on the sidecar?");
+    logger.warn({ err, viewId }, "Live view is not reachable — is the camoufox sidecar up to date?");
     res.status(502).json({
       error:
-        "The provider's live view is not answering. Set VNC_ENABLE=1 and VNC_PASSWORD on the camoufox sidecar and restart it.",
+        "The live view is not answering. The camoufox sidecar needs to be on a recent image (it serves the view itself) — pull and recreate it.",
     });
   }
 });
@@ -93,7 +116,7 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
 export function attachLiveViewUpgrade(server: Server, isAuthorised: (cookie: string) => Promise<boolean>): void {
   server.on("upgrade", (req, socket, head) => {
     const url = req.url ?? "";
-    const m = url.match(/^\/api\/live-view\/(\d+)\/websockify/);
+    const m = url.match(/^\/api\/live-view\/([^/]+)\/websockify/);
     if (!m) return; // not ours — leave it for anything else listening
 
     void (async () => {
@@ -102,7 +125,7 @@ export function attachLiveViewUpgrade(server: Server, isAuthorised: (cookie: str
           socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
           return;
         }
-        const target = await liveViewTarget(Number(m[1]));
+        const target = await liveViewTarget(decodeURIComponent(m[1] ?? ""));
         if (!target) {
           socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
           return;

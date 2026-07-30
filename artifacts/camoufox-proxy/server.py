@@ -236,12 +236,115 @@ def generate():
         return jsonify({"error": f"fingerprint generate failed ({source}): {e}\n{traceback.format_exc()}"}), 500
 
 
+# ── Per-session displays ─────────────────────────────────────────────────────
+#
+# Every session used to render onto the container's single Xvfb :99, which made "watch this
+# task" impossible: concurrent runs pile their windows onto one screen with no way to tell
+# them apart. It also meant they shared one pointer and one focus, which is its own source
+# of interference for anything that clicks.
+#
+# So each session gets its own Xvfb, its own x11vnc and its own websockify port, torn down
+# with the session. Allocation failure is NOT fatal: the session falls back to :99 and the
+# only thing lost is the ability to watch that one on its own.
+
+_DISPLAY_BASE = int(os.getenv("CAMOUFOX_DISPLAY_BASE", "100"))
+_DISPLAY_MAX = int(os.getenv("CAMOUFOX_DISPLAY_MAX", "132"))
+_VIEW_PORT_BASE = int(os.getenv("CAMOUFOX_VIEW_PORT_BASE", "7901"))
+_display_lock = threading.Lock()
+_displays_in_use: set = set()
+_VNC_DISABLED = os.getenv("VNC_DISABLE") == "1"
+
+
+def _screen_geometry() -> str:
+    return os.getenv("CAMOUFOX_SCREEN", "1920x1080x24")
+
+
+def _alloc_display():
+    """Reserve a display number, or None when they are all taken."""
+    with _display_lock:
+        for n in range(_DISPLAY_BASE, _DISPLAY_MAX):
+            if n not in _displays_in_use:
+                _displays_in_use.add(n)
+                return n
+    return None
+
+
+def _free_display(n):
+    if n is None:
+        return
+    with _display_lock:
+        _displays_in_use.discard(n)
+
+
+def _start_session_display():
+    """Xvfb + x11vnc + websockify for one session.
+
+    Returns (display_num, view_port, [procs]) — or (None, None, []) if anything failed, in
+    which case the caller uses the shared :99 and simply cannot be watched individually.
+    """
+    n = _alloc_display()
+    if n is None:
+        print("[display] none free — session will share :99", flush=True)
+        return None, None, []
+    procs = []
+    try:
+        xvfb = subprocess.Popen(
+            ["Xvfb", f":{n}", "-screen", "0", _screen_geometry(), "-ac"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        procs.append(xvfb)
+        time.sleep(1.0)
+        if xvfb.poll() is not None:
+            raise RuntimeError(f"Xvfb :{n} exited immediately")
+
+        view_port = None
+        if not _VNC_DISABLED:
+            view_port = _VIEW_PORT_BASE + (n - _DISPLAY_BASE)
+            vnc_port = 5900 + (n - _DISPLAY_BASE)
+            # -bg would daemonise out of our process tree; keep it in the foreground so the
+            # teardown below actually owns it.
+            procs.append(subprocess.Popen(
+                ["x11vnc", "-display", f":{n}", "-nopw", "-rfbport", str(vnc_port),
+                 "-forever", "-shared", "-quiet"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+            ))
+            procs.append(subprocess.Popen(
+                ["websockify", "--web", "/usr/share/novnc", str(view_port), f"localhost:{vnc_port}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+            ))
+        print(f"[display] :{n} up (view port {view_port})", flush=True)
+        return n, view_port, procs
+    except Exception as e:
+        print(f"[display] :{n} failed ({e}) — session will share :99", flush=True)
+        for pr in procs:
+            try:
+                pr.kill()
+            except Exception:
+                pass
+        _free_display(n)
+        return None, None, []
+
+
+def _stop_session_display(entry):
+    for pr in entry.get("view_procs") or []:
+        try:
+            pr.kill()
+        except Exception:
+            pass
+    _free_display(entry.get("display"))
+
+
 @app.post("/launch")
 def launch():
     body = request.get_json(silent=True) or {}
     opts = _build_options(body)
     env = dict(os.environ)
     env["CAMOUFOX_CFG"] = json.dumps(opts)
+    # This session's own screen. The launcher inherits DISPLAY, so the browser it starts
+    # renders there instead of on the shared :99.
+    _display, _view_port, _view_procs = _start_session_display()
+    if _display is not None:
+        env["DISPLAY"] = f":{_display}"
     # start_new_session puts the launcher in its OWN process group, so we can later kill
     # the WHOLE tree. This is the leak: SIGTERM to the launcher does not necessarily take
     # down the Firefox it spawned (Playwright's browser process is a grandchild), so the
@@ -275,6 +378,7 @@ def launch():
     if not ws:
         # Failed startup can still have spawned a browser — kill the group, not just python.
         _kill(proc)
+        _stop_session_display({"view_procs": _view_procs, "display": _display})
         return jsonify({"error": "Camoufox server did not report a ws endpoint\n" + "\n".join(tail)}), 500
     sid = str(uuid.uuid4())
     try:
@@ -282,11 +386,15 @@ def launch():
     except Exception:
         _pgid = None
     with _lock:
-        _servers[sid] = {"proc": proc, "ws": ws, "started": time.time(), "pgid": _pgid}
+        _servers[sid] = {
+            "proc": proc, "ws": ws, "started": time.time(), "pgid": _pgid,
+            "display": _display, "view_port": _view_port, "view_procs": _view_procs,
+        }
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
-    print(f"[camoufox] launched {sid} ws={ws} os={opts.get('os')}", flush=True)
-    return jsonify({"id": sid, "ws": ws})
+    print(f"[camoufox] launched {sid} ws={ws} os={opts.get('os')} display=:{_display}", flush=True)
+    # viewPort lets the app proxy THIS session's screen rather than the whole container's.
+    return jsonify({"id": sid, "ws": ws, "viewPort": _view_port})
 
 
 def _drain(proc):
@@ -408,12 +516,14 @@ def _reaper():
                     # crashed (or was killed by the OOM killer) leaves camoufox-bin running
                     # with nobody to reap it. Sweep the whole group before forgetting it.
                     _kill_group_of(e)
+                    _stop_session_display(e)
                     with _lock:
                         _servers.pop(sid, None)
                     print(f"[camoufox] reaped dead session {sid} (exit={proc.returncode})", flush=True)
                     continue
                 if now - e.get("started", now) > _SESSION_TTL:  # hung / orphaned
                     _kill(proc)
+                    _stop_session_display(e)
                     with _lock:
                         _servers.pop(sid, None)
                     print(f"[camoufox] killed over-age session {sid} (>{_SESSION_TTL}s)", flush=True)
@@ -427,6 +537,20 @@ def _reaper():
 threading.Thread(target=_reaper, daemon=True).start()
 
 
+@app.get("/sessions/<sid>/view")
+def session_view(sid):
+    """Where to watch this session — the websockify port of its own display.
+
+    null means it is sharing the container display (allocation failed, or the viewer is
+    disabled), in which case the caller falls back to the container-wide view.
+    """
+    with _lock:
+        entry = _servers.get(sid)
+    if not entry:
+        return jsonify({"error": "no such session"}), 404
+    return jsonify({"viewPort": entry.get("view_port"), "display": entry.get("display")})
+
+
 @app.post("/release")
 def release():
     body = request.get_json(silent=True) or {}
@@ -435,6 +559,7 @@ def release():
         entry = _servers.pop(sid, None)
     if entry:
         _kill(entry["proc"])
+        _stop_session_display(entry)
         print(f"[camoufox] released {sid}", flush=True)
     return jsonify({"ok": True})
 
@@ -450,6 +575,7 @@ def release_all():
         _servers.clear()
     for sid, e in entries:
         _kill(e["proc"])
+        _stop_session_display(e)
         print(f"[camoufox] released {sid} (release-all)", flush=True)
     return jsonify({"ok": True, "released": len(entries)})
 

@@ -1474,7 +1474,7 @@ export interface Translations {
       sessionProfileField: "会话档案",
       sessionProfileFieldHint: "选一个在「浏览器」页手工登录后保存的会话。注意后端/指纹/代理要和这里选的一致，否则站点会看到环境突变。",
       watchLive: "看画面",
-      watchLiveHint: "看这个任务正在操作的浏览器屏幕。多个任务同时跑在同一个后端时，画面上会同时出现它们的窗口。",
+      watchLiveHint: "看这个任务自己的浏览器屏幕——每个会话有独立显示器，并发运行互不干扰。任务没在跑时显示的是该后端的公共屏幕。",
   };
 
   export const en: Translations = {
@@ -2200,6 +2200,6 @@ export interface Translations {
       sessionProfileField: "Session profile",
       sessionProfileFieldHint: "A session captured by hand on the Browsers page. Use the same backend, fingerprint and proxy as it was captured with, or the site sees the environment change underneath the cookies.",
       watchLive: "Watch",
-      watchLiveHint: "The screen of the browser this task is driving. Concurrent runs share one display, so their windows appear together.",
+      watchLiveHint: "This task's own browser screen — each session gets its own display, so concurrent runs do not overlap. When the task is not running this shows the backend's shared screen.",
   };
   

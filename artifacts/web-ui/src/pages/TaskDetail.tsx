@@ -1442,7 +1442,9 @@ export default function TaskDetail() {
           <p className="text-xs text-muted-foreground px-1 pb-2">{t.watchLiveHint}</p>
           {watching && liveViewProviderId != null && (
             <iframe
-              src={`/api/live-view/${liveViewProviderId}/`}
+              // "task-<id>" asks for THIS run's own display; the server falls back to the
+              // provider's shared one when the task is not currently running.
+              src={`/api/live-view/task-${taskId}/`}
               title={t.watchLive}
               className="w-full rounded border border-border bg-black"
               style={{ height: "70vh" }}
