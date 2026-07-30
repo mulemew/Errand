@@ -1022,12 +1022,42 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
  * form and the step happily reported "session restored — login skipped", leaving
  * every later step running logged-out. Guessing wrong here is worse than not
  * guessing: without a success signal we log in, which costs a login but is correct.
+ *
+ * POLLS, rather than asking once. The caller navigates with waitUntil:"domcontentloaded"
+ * and probes immediately, and a dashboard that renders client-side has painted nothing at
+ * that point: body.innerText is near-empty and the success selector does not exist yet. A
+ * single shot therefore answered "not authenticated" for a perfectly good session — and on
+ * an OAuth step that is not a wasted login but a FAILED run, because the site, being
+ * logged in, shows no "Sign in with Google" button to click.
+ *
+ * The wait costs nothing on a genuinely logged-out page: a visible password field or a
+ * visible provider button ends it on the first iteration.
  */
 async function isSessionAuthenticated(
   page: PageAdapter,
   successSelector?: string,
   successText?: string,
+  opts?: { settleMs?: number },
 ): Promise<boolean> {
+  const deadline = Date.now() + (opts?.settleMs ?? Number(process.env.SESSION_PROBE_MS ?? 8000));
+  for (let attempt = 1; ; attempt++) {
+    const done = await probeSessionOnce(page, successSelector, successText, attempt);
+    if (done !== null) return done;
+    if (Date.now() >= deadline) {
+      logger.debug({ attempt, hadCriterion: !!(successText || successSelector) }, "Session check: nothing conclusive before the deadline");
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
+/** One pass. `true`/`false` are verdicts; `null` means "too early to tell, ask again". */
+async function probeSessionOnce(
+  page: PageAdapter,
+  successSelector: string | undefined,
+  successText: string | undefined,
+  attempt: number,
+): Promise<boolean | null> {
   // A visible password field means we're looking at a login form. Definitive NO,
   // whatever else the page says.
   const onLoginForm = (await page
@@ -1039,7 +1069,10 @@ async function isSessionAuthenticated(
       return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
     })
     .catch(() => false)) as boolean;
-  if (onLoginForm) return false;
+  if (onLoginForm) {
+    logger.debug({ attempt }, "Session check: visible password field — not authenticated");
+    return false;
+  }
 
   if (successText) {
     try {
@@ -1048,7 +1081,7 @@ async function isSessionAuthenticated(
         logger.debug({ successText }, "Session check: success TEXT found on the page");
         return true;
       }
-      logger.debug({ successText, chars: bodyText.length }, "Session check: success text NOT on the page");
+      logger.debug({ attempt, successText, chars: bodyText.length }, "Session check: success text not on the page yet");
     } catch {}
   }
   if (successSelector) {
@@ -1066,7 +1099,7 @@ async function isSessionAuthenticated(
         }
         logger.debug({ successSelector }, "Session check: success selector matched but is not visible");
       } else if (successSelector) {
-        logger.debug({ successSelector }, "Session check: success selector did not match");
+        logger.debug({ attempt, successSelector }, "Session check: success selector has not appeared yet");
       }
     } catch {}
   }
@@ -1080,10 +1113,15 @@ async function isSessionAuthenticated(
     logger.info({ evidence }, "Session looks authenticated (no explicit success criterion configured)");
     return true;
   }
-  // "unknown" is the common case on a site we cannot read, and it is the reason a task
-  // logs in on every run despite cookie mode being on. Say so.
-  logger.debug({ verdict, evidence, hadCriterion: !!(successText || successSelector) }, "Session check: not authenticated");
-  return false;
+  if (verdict === "logged_out") {
+    // A visible provider button ("Sign in with Google") is proof, and it is what an OAuth
+    // site shows when the session really is gone. Stop waiting.
+    logger.debug({ attempt, evidence }, "Session check: page is showing a login affordance — not authenticated");
+    return false;
+  }
+  // "unknown": the page may simply not have rendered yet. Let the caller ask again.
+  logger.debug({ attempt, verdict, evidence, hadCriterion: !!(successText || successSelector) }, "Session check: inconclusive so far");
+  return null;
 }
 
 /**

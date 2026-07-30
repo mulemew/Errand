@@ -1,7 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
-import { verifyOAuthLanding, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
+import { verifyOAuthLanding, detectLoginState, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
 import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { generateTotpCode } from "../lib/totp";
 import { detectAndHandleCaptcha } from "./captcha";
@@ -464,10 +464,23 @@ export async function googleLogin(
 
       timer.mark("findButton");
       if (!clicked) {
+        // "No button" has two very different causes and they need different fixes. The
+        // page may genuinely lack one — or the session was RESTORED and the site is
+        // already signed in, so there is nothing to sign in with. Cookie mode probes for
+        // that before getting here, and if its success criterion is wrong the probe says
+        // "logged out", the login runs, and the user gets this message with no hint that
+        // their criterion is the problem. Ask the page which of the two it is.
+        const { verdict, evidence } = await detectLoginState(page);
+        const hint =
+          verdict === "logged_in"
+            ? ` The page looks ALREADY SIGNED IN (${evidence}) — the saved session is fine, but this step's success criterion did not recognise it, so the login ran anyway. Fix the criterion on the login step.`
+            : verdict === "unknown"
+              ? " The page shows neither a login button nor an account affordance — it may not have finished rendering, or the URL is not the login page."
+              : " Ensure the target URL is a page that carries a Google OAuth login button.";
         return {
           success: false,
           captchaBlocked: false,
-          message: timer.annotate("Could not find a 'Sign in with Google' button on the target page after 15s. Ensure the target URL contains a Google OAuth login button."),
+          message: timer.annotate(`Could not find a 'Sign in with Google' button on the target page after 15s.${hint}`),
         };
       }
       logger.info({ url: page.url() }, "Clicked the Google OAuth button — waiting for the flow to move");
