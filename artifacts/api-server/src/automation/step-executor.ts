@@ -356,6 +356,16 @@ async function executeStep(
             res = await clickByText(page, step.selector);
           }
         }
+        if (!res.found) {
+          // Not a button — maybe it is the LABEL of a checkbox ("I agree to the terms").
+          // clickByText only ever looked at buttons and links, so consent boxes could only
+          // be reached by writing a CSS selector for the input itself.
+          const cb = await tickCheckboxByText(page, step.selector);
+          if (cb.found) {
+            await settleAfterClick(page, urlBefore);
+            return { message: `Checkbox matching text "${step.selector}" is now ${cb.checked ? "checked" : "UNCHECKED (the click did not take)"} [${cb.method}]` };
+          }
+        }
         if (!res.found) throw new Error(`No visible element with text "${step.selector}" found`);
         await settleAfterClick(page, urlBefore);
         const reaction = res.reacted
@@ -1184,6 +1194,121 @@ async function pageHasExactText(page: PageAdapter, needle: string): Promise<bool
     }
     return false;
   }, target).catch(() => false)) as boolean;
+}
+
+/**
+ * Tick the checkbox that belongs to a piece of text.
+ *
+ * Consent boxes are the case the text-click path could not express: the thing you can name
+ * is the sentence ("I have read and agree to the Terms"), and the thing you must click is a
+ * 13px input somewhere to its left. Writing a CSS selector for that input works until the
+ * page changes, and clicking coordinates is worse.
+ *
+ * Resolution, in order of how reliable the association is:
+ *   1. <label for="x"> — an explicit, authored association. Clicking the LABEL is what a
+ *      person does, and the browser toggles the input natively, so no coordinates and no
+ *      synthetic events.
+ *   2. a checkbox wrapped inside a matching <label>.
+ *   3. aria-label / aria-labelledby on the input itself.
+ *   4. the checkbox nearest BEFORE the matching text within the same block — the plain
+ *      `<input><span>I agree…</span>` layout that has no label element at all.
+ *
+ * Matching is "contains", normalised for whitespace, unlike the button path's exact match:
+ * consent sentences are long, usually wrap links mid-sentence ("agree to the <a>Terms</a>
+ * and <a>Privacy Policy</a>"), and nobody can be expected to reproduce that string exactly.
+ *
+ * Returns whether the box ENDED UP checked, not merely whether something was clicked —
+ * a consent box that silently failed to tick would fail the form submit later, with an
+ * error that points nowhere near here.
+ */
+async function tickCheckboxByText(
+  page: PageAdapter,
+  text: string,
+): Promise<{ found: boolean; checked: boolean; method: string }> {
+  const result = (await page
+    .evaluate((needleRaw: unknown) => {
+      const needle = String(needleRaw).trim().replace(/\s+/g, " ").toLowerCase();
+      const norm = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+      const visible = (el: Element): boolean => {
+        const r = el.getBoundingClientRect();
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        // A styled checkbox is often the 0x0 input behind a drawn one; that is still a
+        // legitimate target, so size alone does not disqualify it — but its label must be
+        // on screen, which the label branches below check.
+        return !(r.width === 0 && r.height === 0 && st.opacity === "0" && st.position === "fixed");
+      };
+      const boxes = Array.from(
+        document.querySelectorAll<HTMLInputElement>("input[type='checkbox'], [role='checkbox']"),
+      ).filter((b) => !b.disabled && visible(b));
+      if (boxes.length === 0) return { found: false, checked: false, method: "no checkbox on the page" };
+
+      const isChecked = (el: Element) =>
+        el instanceof HTMLInputElement ? el.checked : el.getAttribute("aria-checked") === "true";
+
+      // 1 + 2 — an authored label. Click the LABEL, which toggles natively.
+      for (const label of Array.from(document.querySelectorAll<HTMLLabelElement>("label"))) {
+        if (!norm(label.textContent).includes(needle)) continue;
+        const forId = label.getAttribute("for");
+        const box =
+          (forId ? document.getElementById(forId) : null) ??
+          label.querySelector<HTMLInputElement>("input[type='checkbox'], [role='checkbox']");
+        if (!box || !boxes.includes(box as HTMLInputElement)) continue;
+        if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+        (label as HTMLElement).click();
+        return { found: true, checked: isChecked(box), method: forId ? "label[for]" : "wrapping label" };
+      }
+
+      // 3 — the input describes itself.
+      for (const box of boxes) {
+        const described = box.getAttribute("aria-labelledby");
+        const viaIds = described
+          ? described
+              .split(/\s+/)
+              .map((id) => norm(document.getElementById(id)?.textContent))
+              .join(" ")
+          : "";
+        if (norm(box.getAttribute("aria-label")).includes(needle) || viaIds.includes(needle)) {
+          if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+          box.click();
+          return { found: true, checked: isChecked(box), method: "aria label" };
+        }
+      }
+
+      // 4 — no label element: the nearest checkbox before the text, in the same block.
+      const holder = Array.from(document.querySelectorAll<HTMLElement>("*")).find((el) => {
+        if (el.children.length > 3) return false; // a leaf-ish node, not a whole section
+        return norm(el.textContent).includes(needle) && visible(el);
+      });
+      if (holder) {
+        // Walk outwards a few levels looking for a checkbox that sits before this text.
+        let scope: HTMLElement | null = holder;
+        for (let up = 0; up < 4 && scope; up++, scope = scope.parentElement) {
+          const near = Array.from(
+            scope.querySelectorAll<HTMLInputElement>("input[type='checkbox'], [role='checkbox']"),
+          ).filter((b) => boxes.includes(b));
+          if (near.length === 1) {
+            const box = near[0]!;
+            if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+            box.click();
+            return { found: true, checked: isChecked(box), method: "nearest checkbox in the same block" };
+          }
+        }
+      }
+      return { found: false, checked: false, method: "no checkbox matched that text" };
+    }, text as never)
+    .catch(() => ({ found: false, checked: false, method: "page not readable" }))) as {
+    found: boolean;
+    checked: boolean;
+    method: string;
+  };
+
+  if (result.found) {
+    logger.info({ text, ...result }, "Checkbox resolved from its text");
+  } else {
+    logger.debug({ text, reason: result.method }, "No checkbox matched that text");
+  }
+  return result;
 }
 
 async function clickByText(
