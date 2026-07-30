@@ -876,23 +876,25 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
       // a last resort because on some embedded widgets it IS the widget.
       if (resp?.parentElement) candidates.push([resp.parentElement, "response-parent"]);
 
-      // A Turnstile widget is a fixed-size control: ~300x65, and never wider than about
-      // 500. Anything much wider is a container that merely CONTAINS it, and its left edge
-      // has no relationship to where the checkbox sits. Prefer whatever is actually
+      // A Turnstile widget is a fixed-size control. Normal is ~300x65; compact is ~150x140.
+      // Anything much wider is a container that merely CONTAINS it, and its left edge has
+      // no relationship to where the checkbox sits. Prefer whatever is actually
       // widget-shaped, whichever selector found it.
-      const widgetShaped = (r: DOMRect) => r.width >= 200 && r.width <= 520 && r.height >= 40 && r.height <= 120;
+      const widgetShaped = (r: DOMRect) => r.width >= 140 && r.width <= 520 && r.height >= 40 && r.height <= 200;
       for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
         if (usable(r) && widgetShaped(r)) return point(r, `${from}:widget-shaped`);
       }
-      // Nothing was the right shape. Falling back to the old behaviour would aim into a
-      // wide container again, so say so instead of clicking somewhere meaningless — the
-      // caller logs this and the run fails honestly rather than silently missing.
+      // Nothing is the right shape. Take the SMALLEST usable candidate rather than the
+      // first: the innermost box is the one most likely to be the widget, and picking by
+      // document order is what put a 896px-wide wrapper in front of it in the first place.
+      let best: { r: DOMRect; from: string } | null = null;
       for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
-        if (usable(r) && r.width <= 900) return point(r, `${from}:approx`);
+        if (!usable(r)) continue;
+        if (!best || r.width * r.height < best.r.width * best.r.height) best = { r, from };
       }
-      return null;
+      return best ? point(best.r, `${best.from}:smallest`) : null;
     },
     null,
   );
