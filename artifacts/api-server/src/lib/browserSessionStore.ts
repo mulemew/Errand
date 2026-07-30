@@ -1,4 +1,4 @@
-import { db, browserSessionsTable, eq, and } from "@workspace/db";
+import { db, browserSessionsTable, sessionProfilesTable, eq, and } from "@workspace/db";
 import { encrypt, decrypt } from "./encryption";
 import { logger } from "./logger";
 
@@ -101,4 +101,24 @@ export function taskUsesCookieMode(steps: unknown): {
     }
   }
   return { enabled: false, sessionKey: DEFAULT_KEY };
+}
+
+/**
+ * A named session profile — one captured by hand on the Browsers page.
+ *
+ * Same storage shape as a task's own saved session, so the runner can seed a context with
+ * either. Kept separate because the two answer different questions: a task's session is
+ * "what this task last logged in as", a profile is "an identity you prepared deliberately".
+ */
+export async function loadSessionProfile(id: number): Promise<unknown | null> {
+  try {
+    const [row] = await db.select().from(sessionProfilesTable).where(eq(sessionProfilesTable.id, id));
+    if (!row) return null;
+    const raw = row.storageState as { enc?: string } | null;
+    if (!raw?.enc) return null;
+    return JSON.parse(decrypt(raw.enc));
+  } catch (err) {
+    logger.warn({ err, id }, "Could not load the session profile");
+    return null;
+  }
 }

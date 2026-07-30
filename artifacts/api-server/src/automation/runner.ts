@@ -11,7 +11,7 @@ import path from "path";
   import { emitTaskProgress, emitTaskDone, getTaskEmitter, clearTaskEventBuffer } from "../lib/taskEvents";
   import { runWithTaskContext } from "../lib/taskContext";
   import { executeWorkflowSteps, CaptchaBlockedError, type WorkflowStep, type StepResult } from "./step-executor";
-  import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode } from "../lib/browserSessionStore";
+  import { loadBrowserSession, saveBrowserSession, clearBrowserSession, taskUsesCookieMode, loadSessionProfile } from "../lib/browserSessionStore";
 
 /**
  * After a failed run, book the next attempt if the task has retries configured.
@@ -469,6 +469,17 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           logger.info({ taskId, cookieSessionKey }, "Cookie mode — restored saved session");
         } else {
           logger.debug({ taskId, cookieSessionKey }, "Cookie mode — no saved session for this key");
+          // Nothing saved by this task yet. A session profile — one captured by hand on the
+          // Browsers page, in the same provider/fingerprint/proxy this task uses — seeds the
+          // context, which is what makes "register by hand, then let the task take over"
+          // work. After the first successful run the task's own session takes over.
+          const _profileId = cookieModeStep?.sessionProfileId as number | undefined;
+          const _profileState = _profileId ? await loadSessionProfile(_profileId) : null;
+          if (_profileState) {
+            browserConfig.storageState = _profileState as typeof browserConfig.storageState;
+            emitTaskProgress(taskId, "Seeded the session from a saved profile-¦");
+            logger.info({ taskId, sessionProfileId: _profileId }, "Cookie mode — seeded from a session profile");
+          } else {
           // Nothing saved yet — seed Playwright's context from the pasted cookies.
           // (The cf-proxy path seeds the live page after newPage() instead; without
           // this branch a pasted cookie only worked on cf-proxy.)
@@ -477,6 +488,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             browserConfig.storageState = { cookies: seed, origins: [] };
             emitTaskProgress(taskId, `Seeded ${seed.length} configured cookie(s)-¦`);
             logger.info({ taskId, count: seed.length }, "Cookie mode — seeded context from configured cookies");
+          }
           }
         }
         browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };

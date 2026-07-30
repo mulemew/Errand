@@ -730,6 +730,24 @@ export interface Translations {
       randomFingerprintEachRun: string;
       liveViewTitle: string;
       liveViewHint: string;
+      navBrowsers: string;
+      browsersIntro: string;
+      newBrowserInstance: string;
+      browserNameExample: string;
+      launchBrowser: string;
+      browserLaunchFailed: string;
+      runningBrowsers: string;
+      noRunningBrowsers: string;
+      stopBrowser: string;
+      saveAsSessionProfile: string;
+      sessionProfileNamePrompt: string;
+      sessionProfileSaved: string;
+      sessionProfiles: string;
+      sessionProfilesHint: string;
+      noSessionProfiles: string;
+      defaultValue: string;
+      sessionProfileField: string;
+      sessionProfileFieldHint: string;
   }
 
   export const zh: Translations = {
@@ -1435,6 +1453,24 @@ export interface Translations {
       randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
       liveViewTitle: "实时预览",
       liveViewHint: "看到的是这个后端浏览器真实的屏幕。需要在 sidecar 上设置 VNC_ENABLE=1 和 VNC_PASSWORD 并重启；画面通过本站代理，不用额外开端口。",
+      navBrowsers: "浏览器",
+      browsersIntro: "用「后端 + 指纹 + 代理」组成一个环境，开一个常驻浏览器自己操作：手工注册、过掉脚本搞不定的验证，然后把登录状态存成会话档案。任务用同一套环境选中它，环境就完全一致了。",
+      newBrowserInstance: "新建浏览器实例",
+      browserNameExample: "例如：注册用-美国住宅",
+      launchBrowser: "启动浏览器",
+      browserLaunchFailed: "浏览器启动失败",
+      runningBrowsers: "运行中的实例",
+      noRunningBrowsers: "当前没有运行中的浏览器实例。",
+      stopBrowser: "终止实例",
+      saveAsSessionProfile: "保存为会话档案",
+      sessionProfileNamePrompt: "给这份会话起个名字：",
+      sessionProfileSaved: "会话档案已保存",
+      sessionProfiles: "会话档案",
+      sessionProfilesHint: "在登录步骤开启 Cookie 模式后就能选中：任务还没有自己的会话时，用这份档案作为起点，之后任务会保存自己的。",
+      noSessionProfiles: "还没有保存过会话档案。",
+      defaultValue: "默认",
+      sessionProfileField: "会话档案",
+      sessionProfileFieldHint: "选一个在「浏览器」页手工登录后保存的会话。注意后端/指纹/代理要和这里选的一致，否则站点会看到环境突变。",
   };
 
   export const en: Translations = {
@@ -2141,5 +2177,23 @@ export interface Translations {
       randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
       liveViewTitle: "Live view",
       liveViewHint: "The real screen of this backend's browser. Requires VNC_ENABLE=1 and VNC_PASSWORD on the sidecar; the stream is proxied by this app, so no extra port is exposed.",
+      navBrowsers: "Browsers",
+      browsersIntro: "Compose an environment from a backend, a fingerprint and a proxy, then keep a browser open and drive it yourself: register by hand, clear what a script cannot, and save the signed-in state as a session profile. A task that selects it with the same three settings runs in an identical environment.",
+      newBrowserInstance: "New browser instance",
+      browserNameExample: "e.g. signup / US residential",
+      launchBrowser: "Launch browser",
+      browserLaunchFailed: "Could not launch the browser",
+      runningBrowsers: "Running instances",
+      noRunningBrowsers: "No browser instances are running.",
+      stopBrowser: "Stop this instance",
+      saveAsSessionProfile: "Save as a session profile",
+      sessionProfileNamePrompt: "Name this session profile:",
+      sessionProfileSaved: "Session profile saved",
+      sessionProfiles: "Session profiles",
+      sessionProfilesHint: "Selectable on a login step once cookie mode is on: while the task has no session of its own, this profile is the starting point, and the task saves its own from then on.",
+      noSessionProfiles: "No session profiles saved yet.",
+      defaultValue: "Default",
+      sessionProfileField: "Session profile",
+      sessionProfileFieldHint: "A session captured by hand on the Browsers page. Use the same backend, fingerprint and proxy as it was captured with, or the site sees the environment change underneath the cookies.",
   };
   

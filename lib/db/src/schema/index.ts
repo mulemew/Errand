@@ -9,4 +9,5 @@
   export * from "./proxy-profiles";
   export * from "./providers";
   export * from "./task-groups";
+  export * from "./session-profiles";
  

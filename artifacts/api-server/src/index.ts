@@ -13,6 +13,7 @@
   import { loadLogConfig } from "./lib/appSettings";
   import { attachLiveViewUpgrade } from "./routes/live-view";
   import { hasSession } from "./lib/sessions";
+  import { stopAllInstances } from "./lib/browserInstances";
   import cookieParser from "cookie-parser";
   import { pool } from "@workspace/db";
 
@@ -100,6 +101,9 @@
     // Reap sing-box/Xvfb helpers on SIGTERM/SIGINT/fatal errors — nothing killed
     // them before, so every restart left orphans behind.
     installSignalHandlers(async () => {
+      // Hand-driven browsers are held open deliberately; on the way out they must still be
+      // released, or the sidecar keeps a Firefox per instance until its own TTL.
+      await stopAllInstances().catch(() => {});
       await pool.end().catch(() => {});
     });
     await initScheduler();

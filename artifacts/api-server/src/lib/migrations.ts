@@ -130,6 +130,18 @@ import { pool } from "@workspace/db";
   );
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "group_id" integer;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "sort_order" integer;
+
+  CREATE TABLE IF NOT EXISTS "session_profiles" (
+    "id"                     serial      PRIMARY KEY,
+    "name"                   text        NOT NULL,
+    "storage_state"          jsonb       NOT NULL,
+    "provider_id"            integer,
+    "fingerprint_profile_id" integer,
+    "proxy_profile_id"       integer,
+    "origin_url"             text,
+    "created_at"             timestamptz NOT NULL DEFAULT now(),
+    "updated_at"             timestamptz NOT NULL DEFAULT now()
+  );
   `;
 
   export async function runMigrations(): Promise<void> {

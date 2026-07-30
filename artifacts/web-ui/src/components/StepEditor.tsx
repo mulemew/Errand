@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Reorder, useDragControls } from "framer-motion";
 import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
@@ -47,6 +47,9 @@ export interface WorkflowStep {
   successText?: string;
   cookieMode?: boolean;
   sessionKey?: string;
+  /** A session captured by hand on the Browsers page — the starting point until this task
+   *  has saved a session of its own. */
+  sessionProfileId?: number;
   /** document.cookie-style seed, used only until a real session has been saved. */
   cookies?: string;
   inlineUsername?: string;
@@ -254,6 +257,7 @@ function StepCard({
   index,
   total,
   savedCredentials,
+  sessionProfiles,
   onChange,
   onDelete,
   onMoveUp,
@@ -264,6 +268,7 @@ function StepCard({
   index: number;
   total: number;
   savedCredentials: SavedCredentialOption[];
+  sessionProfiles: Array<{ id: number; name: string }>;
   onChange: (step: WorkflowStep) => void;
   onDelete: () => void;
   onMoveUp: () => void;
@@ -502,6 +507,24 @@ function StepCard({
                     <p className="text-[10px] text-amber-500 leading-snug">{t.cookieCriterionRecommended}</p>
                   )}
                 </>
+              )}
+              {/* A hand-captured session. Only offered when there is one to offer — an empty
+                  dropdown teaches nothing. */}
+              {(step.cookieMode || step.loginMethod === "cookie") && sessionProfiles.length > 0 && (
+                <div className="space-y-1">
+                  <Label className="text-xs">{t.sessionProfileField}</Label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                    value={step.sessionProfileId != null ? String(step.sessionProfileId) : ""}
+                    onChange={(e) => set({ sessionProfileId: e.target.value ? Number(e.target.value) : undefined })}
+                  >
+                    <option value="">{t.noneValue}</option>
+                    {sessionProfiles.map((sp) => (
+                      <option key={sp.id} value={String(sp.id)}>{sp.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{t.sessionProfileFieldHint}</p>
+                </div>
               )}
               {(step.cookieMode || step.loginMethod === "cookie") && (
                 // Required for cookie-only (there is no login to fall back on), and folded
@@ -889,6 +912,16 @@ function DraggableStepItem({
 }
 
 export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentials = [] }: StepEditorProps) {
+  // Sessions captured by hand on the Browsers page. Fetched here rather than threaded down
+  // from the task form: only this component knows whether a login step needs them.
+  const [sessionProfiles, setSessionProfiles] = useState<Array<{ id: number; name: string }>>([]);
+  useEffect(() => {
+    const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+    void fetch(`${base}/api/session-profiles`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setSessionProfiles(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, []);
   const { t } = useLang();
   const STEP_META = getStepMeta(t);
   // Stable React key per step, kept in a ref and reordered in lockstep with the
@@ -931,6 +964,7 @@ export function StepEditor({ steps, onChange, taskTargetUrl = "", savedCredentia
               {(startDrag) => (
                 <StepCard step={step} index={i} total={steps.length}
                   savedCredentials={savedCredentials}
+                  sessionProfiles={sessionProfiles}
                   onChange={(s) => update(i, s)} onDelete={() => remove(i)}
                   onMoveUp={() => moveUp(i)} onMoveDown={() => moveDown(i)}
                   onHandlePointerDown={startDrag} />

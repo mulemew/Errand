@@ -9,6 +9,7 @@ import { Router, type IRouter } from "express";
   import proxyProfilesRouter from "./proxy-profiles";
   import providersRouter from "./providers";
   import liveViewRouter from "./live-view";
+  import browsersRouter from "./browsers";
   import taskGroupsRouter from "./task-groups";
   import webhookRouter from "./webhook";
   import { requireAuth } from "../middlewares/requireAuth";
@@ -33,6 +34,7 @@ import { Router, type IRouter } from "express";
   router.use(proxyProfilesRouter);
   router.use(providersRouter);
   router.use(liveViewRouter);
+  router.use(browsersRouter);
 
   export default router;
   

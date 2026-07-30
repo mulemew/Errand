@@ -25,6 +25,7 @@ import { Suspense, lazy } from "react";
   const FingerprintProfiles = lazy(() => import("@/pages/FingerprintProfiles"));
   const ProxyProfiles = lazy(() => import("@/pages/ProxyProfiles"));
   const Providers = lazy(() => import("@/pages/Providers"));
+  const Browsers = lazy(() => import("@/pages/Browsers"));
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -53,6 +54,7 @@ import { Suspense, lazy } from "react";
             <Route path="/fingerprints" component={FingerprintProfiles} />
             <Route path="/proxies" component={ProxyProfiles} />
             <Route path="/providers" component={Providers} />
+            <Route path="/browsers" component={Browsers} />
             <Route path="/logs" component={LogsExplorer} />
             <Route component={NotFound} />
           </Switch>
