@@ -8,6 +8,35 @@ import { detectAndHandleCaptcha } from "./captcha";
 import type { CaptchaSolver } from "./captcha-solver";
 import type { LoginResult } from "./form-login";
 
+/**
+ * Put the caret in a field without depending on the pointer.
+ *
+ * `page.click()` here only ever existed to focus the input before typing, but it drags in
+ * Playwright's full actionability contract: the element must be hittable at its centre for
+ * the whole action. Google routinely covers the form for a moment (a scrim while the
+ * account chooser settles, a re-render mid-navigation), and the click then retries until
+ * the adapter's DEFAULT 60 s timeout and fails the whole login — with the log saying the
+ * element was found, visible, enabled, stable and scrolled into view, which reads like a
+ * contradiction until you notice it never says the click landed.
+ *
+ * So: try the real click briefly, then fall back to focusing the element directly. Typing
+ * goes to the focused element either way, and nothing about the human-shaped typing
+ * changes.
+ */
+async function focusField(page: PageAdapter, selector: string, clickMs = 8000): Promise<void> {
+  const clicked = await Promise.race([
+    page.click(selector).then(() => true, () => false),
+    new Promise<boolean>((r) => setTimeout(() => r(false), clickMs)),
+  ]);
+  if (clicked) return;
+  logger.debug({ selector, clickMs }, "Click did not land in time — focusing the field directly");
+  await page
+    .evaluate((sel: unknown) => {
+      document.querySelector<HTMLElement>(sel as string)?.focus();
+    }, selector as never)
+    .catch(() => {});
+}
+
 export interface GoogleCredentials {
   username: string;
   password: string;
@@ -134,7 +163,7 @@ async function resolveSecondFactor(page: PageAdapter, totpSecret?: string): Prom
       // generateTotpCode normalises first, so a secret stored with spaces still works.
       const totp = generateTotpCode(totpSecret);
       logger.info({ round }, "Google 2FA - entering an authenticator code");
-      await page.click(TOTP_INPUT_SEL);
+      await focusField(page, TOTP_INPUT_SEL);
       // Clear first: a rejected code can be left in the field, and typing after it
       // produces a 12-digit string that is refused for a reason nothing reports.
       await page
@@ -319,7 +348,7 @@ async function completeGoogleAuth(
     return { success: false, captchaBlocked: false, message: "Could not find email input on Google sign-in page" };
   }
 
-  await page.click(emailSel);
+  await focusField(page, emailSel);
   await page.evaluate((sel: unknown) => {
     const el = document.querySelector<HTMLInputElement>(sel as string);
     if (el) el.value = "";
@@ -352,7 +381,7 @@ async function completeGoogleAuth(
     return { success: false, captchaBlocked: false, message: "Could not find password input on Google sign-in page. Google may require additional verification." };
   }
 
-  await page.click(passwordSel);
+  await focusField(page, passwordSel);
   await page.evaluate((sel: unknown) => {
     const el = document.querySelector<HTMLInputElement>(sel as string);
     if (el) el.value = "";
