@@ -1030,8 +1030,10 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
  * an OAuth step that is not a wasted login but a FAILED run, because the site, being
  * logged in, shows no "Sign in with Google" button to click.
  *
- * The wait costs nothing on a genuinely logged-out page: a visible password field or a
- * visible provider button ends it on the first iteration.
+ * With a criterion configured the rule is exactly: poll for the criterion; matched → skip
+ * the login, still not matched when the budget runs out → run the login flow. Nothing else
+ * gets a vote. A genuinely logged-out run therefore waits out the budget before logging in —
+ * a few seconds, which is the right price for not failing a run whose session was fine.
  */
 async function isSessionAuthenticated(
   page: PageAdapter,
@@ -1051,34 +1053,31 @@ async function isSessionAuthenticated(
   }
 }
 
-/** One pass. `true`/`false` are verdicts; `null` means "too early to tell, ask again". */
+/**
+ * One pass. `true`/`false` are verdicts; `null` means "too early to tell, ask again".
+ *
+ * When the step HAS a success criterion, that criterion is the only authority — nothing
+ * else may produce an early "no". Every other signal is a guess, and each of them fails on
+ * a client-rendered app: before hydration such a page often renders its LOGIN shell (so a
+ * provider button is visible), and a signed-in dashboard can legitimately contain a visible
+ * password field (a "change password" form). Acting on either one would skip the very wait
+ * this function exists to provide.
+ *
+ * The heuristics still run when there is NO criterion, because then they are all there is.
+ */
 async function probeSessionOnce(
   page: PageAdapter,
   successSelector: string | undefined,
   successText: string | undefined,
   attempt: number,
 ): Promise<boolean | null> {
-  // A visible password field means we're looking at a login form. Definitive NO,
-  // whatever else the page says.
-  const onLoginForm = (await page
-    .evaluate(() => {
-      const pw = document.querySelector<HTMLElement>("input[type='password']");
-      if (!pw) return false;
-      const r = pw.getBoundingClientRect();
-      const s = window.getComputedStyle(pw);
-      return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
-    })
-    .catch(() => false)) as boolean;
-  if (onLoginForm) {
-    logger.debug({ attempt }, "Session check: visible password field — not authenticated");
-    return false;
-  }
+  const hasCriterion = !!(successText?.trim() || successSelector?.trim());
 
   if (successText) {
     try {
       const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
       if (bodyText.includes(successText)) {
-        logger.debug({ successText }, "Session check: success TEXT found on the page");
+        logger.debug({ attempt, successText }, "Session check: success TEXT found on the page");
         return true;
       }
       logger.debug({ attempt, successText, chars: bodyText.length }, "Session check: success text not on the page yet");
@@ -1094,33 +1093,32 @@ async function probeSessionOnce(
           return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
         }).catch(() => false) as boolean;
         if (visible) {
-          logger.debug({ successSelector }, "Session check: success SELECTOR matched and is visible");
+          logger.debug({ attempt, successSelector }, "Session check: success SELECTOR matched and is visible");
           return true;
         }
-        logger.debug({ successSelector }, "Session check: success selector matched but is not visible");
+        logger.debug({ attempt, successSelector }, "Session check: success selector matched but is not visible yet");
       } else if (successSelector) {
         logger.debug({ attempt, successSelector }, "Session check: success selector has not appeared yet");
       }
     } catch {}
   }
-  // Nothing explicit matched. Rather than always answering "no" — which made cookie mode
-  // on a form/GitHub/Google login silently pointless (it could never skip the login, so it
-  // logged in every single run and merely re-saved the session) — look at the page itself.
-  // Only a POSITIVE signal counts: a visible sign-out / account affordance. "unknown" still
-  // means no, so a site we cannot read keeps the old, safe behaviour of logging in.
+  if (hasCriterion) {
+    // Configured criterion, not matched yet. Keep waiting — this is the whole point.
+    return null;
+  }
+
+  // No criterion configured: fall back to reading the page. Only a POSITIVE signal counts
+  // as authenticated; "unknown" keeps the old, safe behaviour of logging in.
   const { verdict, evidence } = await detectLoginState(page);
   if (verdict === "logged_in") {
     logger.info({ evidence }, "Session looks authenticated (no explicit success criterion configured)");
     return true;
   }
   if (verdict === "logged_out") {
-    // A visible provider button ("Sign in with Google") is proof, and it is what an OAuth
-    // site shows when the session really is gone. Stop waiting.
-    logger.debug({ attempt, evidence }, "Session check: page is showing a login affordance — not authenticated");
+    logger.debug({ attempt, evidence }, "Session check: login affordance visible and no criterion configured — not authenticated");
     return false;
   }
-  // "unknown": the page may simply not have rendered yet. Let the caller ask again.
-  logger.debug({ attempt, verdict, evidence, hadCriterion: !!(successText || successSelector) }, "Session check: inconclusive so far");
+  logger.debug({ attempt, verdict, evidence }, "Session check: page unreadable and no criterion configured");
   return null;
 }
 
