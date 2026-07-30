@@ -1,6 +1,6 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
-import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox } from "./cloudflare-bypass";
+import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox, describeTurnstileState } from "./cloudflare-bypass";
 import { solveRecaptchaAudio } from "./recaptcha-audio";
 import type { CaptchaSolver, CaptchaTokenType } from "./captcha-solver";
 
@@ -1007,6 +1007,38 @@ export async function detectAndHandleCaptcha(
           } catch (err) {
             logger.debug({ err, attempt }, "Turnstile click attempt threw");
           }
+        }
+
+        // ── Phase 3: still spinning? wait it out ────────────────────────────
+        //
+        // The click's own wait (12 s) ends the moment it expires, whether the widget
+        // reached a verdict or not — and a Turnstile that is STILL VERIFYING at that point
+        // is not a failure, it is an unfinished one. This path had no grace period at all
+        // (the full-page path does), so a widget a few seconds slower than the token wait
+        // was reported as needs-attention while it was still working. That is the
+        // "occasionally fails with the box still spinning" case on embedded widgets.
+        //
+        // Quiet wait only: no clicking, no DOM changes — both restart the verification.
+        // A widget that announces a verdict of "failed" ends it immediately; there is
+        // nothing to wait for once Cloudflare has judged the attempt.
+        const graceMs = Number(process.env.CF_EMBED_GRACE_MS ?? 15_000);
+        const graceDeadline = Date.now() + graceMs;
+        while (Date.now() < graceDeadline) {
+          await new Promise((r) => setTimeout(r, 1_000));
+          if (await checkTurnstileToken()) {
+            logger.info("Turnstile token appeared during the grace period");
+            return { detected: true, solved: true, message: "Turnstile solved (token appeared while it finished verifying)" };
+          }
+          if ((await getTurnstileState()) === "not_found") {
+            logger.info("Turnstile widget disappeared during the grace period — solved");
+            return { detected: true, solved: true, message: "Turnstile solved (widget disappeared while it finished verifying)" };
+          }
+          const widget = await describeTurnstileState(page);
+          if (/fail|失败|错误|エラー|fehlgeschlagen|échec|erro/i.test(widget)) {
+            logger.warn({ widget }, "Turnstile announced a failed verdict — not waiting further");
+            break;
+          }
+          logger.debug({ widget, leftMs: Math.max(0, Math.round(graceDeadline - Date.now())) }, "Turnstile still verifying — waiting quietly");
         }
 
         // Neither auto-solve nor click worked
