@@ -1013,6 +1013,22 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       );
       await humanClickAt(page, x, y);
 
+      // Did the click LAND? This is the one question the logs could never answer.
+      //
+      // The widget's own words settle it, but only if you look immediately: a second later
+      // it says "Verifying…", and by the time the 12 s settle wait gives up it may have
+      // reverted to its initial state, which reads exactly like a click that never landed.
+      //   "Verify you are human"  → the event did not reach the checkbox (aim/overlay/frame)
+      //   "Verifying…"            → it landed; whatever happens next is Cloudflare's verdict
+      //   "Success!" / gone       → passed
+      //   "Verification failed"   → it landed and was judged a bot
+      // Debug-gated: it costs a frame read plus ~800 ms, so it only happens while someone
+      // is actually watching the run.
+      if (logger.isLevelEnabled("debug")) {
+        await sleep(800);
+        logger.debug({ widget: await describeTurnstileState(page) }, "Turnstile state right AFTER the click");
+      }
+
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
       const settled = await waitForTurnstileSettled(
