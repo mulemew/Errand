@@ -480,15 +480,15 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             emitTaskProgress(taskId, "Seeded the session from a saved profile-¦");
             logger.info({ taskId, sessionProfileId: _profileId }, "Cookie mode — seeded from a session profile");
           } else {
-          // Nothing saved yet — seed Playwright's context from the pasted cookies.
-          // (The cf-proxy path seeds the live page after newPage() instead; without
-          // this branch a pasted cookie only worked on cf-proxy.)
-          const seed = parseCookieHeader((cookieModeStep?.cookies as string | undefined) ?? "", cookieOriginUrl);
-          if (seed.length) {
-            browserConfig.storageState = { cookies: seed, origins: [] };
-            emitTaskProgress(taskId, `Seeded ${seed.length} configured cookie(s)-¦`);
-            logger.info({ taskId, count: seed.length }, "Cookie mode — seeded context from configured cookies");
-          }
+            // No profile either — seed Playwright's context from the pasted cookies.
+            // (The cf-proxy path seeds the live page after newPage() instead; without
+            // this branch a pasted cookie only worked on cf-proxy.)
+            const seed = parseCookieHeader((cookieModeStep?.cookies as string | undefined) ?? "", cookieOriginUrl);
+            if (seed.length) {
+              browserConfig.storageState = { cookies: seed, origins: [] };
+              emitTaskProgress(taskId, `Seeded ${seed.length} configured cookie(s)-¦`);
+              logger.info({ taskId, count: seed.length }, "Cookie mode — seeded context from configured cookies");
+            }
           }
         }
         browserConfig.onContextReady = (dumper) => { dumpStorageState = dumper; };

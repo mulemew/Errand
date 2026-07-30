@@ -288,6 +288,14 @@ def _start_session_display():
         return None, None, []
     procs = []
     try:
+        # A crashed Xvfb leaves its lock behind, and the next Xvfb on that number refuses to
+        # start ("Server is already active"). Without this the number would fail forever
+        # after one crash — sessions would still run, just always on the shared display.
+        for stale in (f"/tmp/.X{n}-lock", f"/tmp/.X11-unix/X{n}"):
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
         xvfb = subprocess.Popen(
             ["Xvfb", f":{n}", "-screen", "0", _screen_geometry(), "-ac"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
