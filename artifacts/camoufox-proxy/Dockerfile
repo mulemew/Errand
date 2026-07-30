@@ -38,7 +38,11 @@ ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 ENV PORT=7318
 EXPOSE 7318
+# Live view of the Xvfb display (only served when VNC_ENABLE=1).
+ENV VNC_PORT=7900
+EXPOSE 7900
 
 # Xvfb for Camoufox's "virtual" headful mode, then the launcher API. Both run as `app`;
 # /tmp is world-writable, so the X socket and its lock file need no privileges.
-ENTRYPOINT ["/bin/sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99; Xvfb :99 -screen 0 1920x1080x24 -ac & sleep 2 && exec python server.py"]
+COPY --chown=app:app entrypoint.sh /app/entrypoint.sh
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]

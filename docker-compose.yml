@@ -75,6 +75,13 @@ services:
         PORT: "7318"
         # 有头(默认,渲染在容器 Xvfb :99);true=无头。launch_server 的 headless 只收 bool。
         CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
+        # Live view of the browser (noVNC in a browser tab). It is a remote CONTROL of a
+        # real browser, so it stays off unless you set a password.
+        VNC_ENABLE: "${VNC_ENABLE:-0}"
+        VNC_PASSWORD: "${VNC_PASSWORD:-}"
+      # Only reachable when VNC_ENABLE=1; bound to localhost so it is not on the internet.
+      ports:
+        - "127.0.0.1:${VNC_PORT:-7900}:7900"
       shm_size: 2g
       networks:
         default:
