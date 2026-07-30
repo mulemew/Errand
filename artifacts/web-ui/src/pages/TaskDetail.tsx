@@ -215,6 +215,9 @@ export default function TaskDetail() {
   // per launch, everything else uses the browser's own identity.
   const effectiveProviderType =
     boundProvider?.type ?? providersList.find((p) => p.isDefault && p.enabled !== false)?.type ?? null;
+  // The provider whose screen to show: the one this task names, else the starred default.
+  const liveViewProviderId =
+    boundProvider?.id ?? providersList.find((p) => p.isDefault && p.enabled !== false)?.id ?? null;
   const hasProxy = !!(bcfg && ((bcfg.proxyUrl && bcfg.proxyUrl.trim()) || bcfg.proxyType === "warp" || bcfg.proxyProfileId));
 
   type ProxyGeo = { configured: boolean; direct?: boolean; ok?: boolean; error?: string; proxyType?: string;
@@ -392,6 +395,9 @@ export default function TaskDetail() {
   // Live server log. OFF by default — the open connection is what tells the server to
   // stream, so nothing happens until you ask for it.
   const [verbose, setVerbose] = useState(false);
+  // Watching the browser's screen. Only possible on camoufox (the only backend whose
+  // display is served), and only worth offering while there is something to see.
+  const [watching, setWatching] = useState(false);
     const [isStopping, setIsStopping] = useState(false);
 
     const handleStop = async () => {
@@ -878,6 +884,19 @@ export default function TaskDetail() {
                     )}
                   </CardTitle>
                   <div className="flex items-center gap-2">
+                    {/* The run happens on the provider's display, so watching the provider
+                        IS watching this task. Offered here because this is where you are
+                        when you want to look, not on the Providers page. */}
+                    {effectiveProviderType === "camoufox" && liveViewProviderId != null && (
+                      <button
+                        type="button"
+                        onClick={() => setWatching(true)}
+                        title={t.watchLiveHint}
+                        className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                      >
+                        {t.watchLive}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setVerbose((v) => !v)}
@@ -1415,6 +1434,22 @@ export default function TaskDetail() {
 
         </div>
       </div>
+
+      {/* Live screen of the backend running this task. The iframe exists only while the
+          dialog is open — mounting it is what opens the connection. */}
+      <Dialog open={watching} onOpenChange={(o) => !o && setWatching(false)}>
+        <DialogContent className="max-w-6xl w-full p-2">
+          <p className="text-xs text-muted-foreground px-1 pb-2">{t.watchLiveHint}</p>
+          {watching && liveViewProviderId != null && (
+            <iframe
+              src={`/api/live-view/${liveViewProviderId}/`}
+              title={t.watchLive}
+              className="w-full rounded border border-border bg-black"
+              style={{ height: "70vh" }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

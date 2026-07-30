@@ -748,6 +748,8 @@ export interface Translations {
       defaultValue: string;
       sessionProfileField: string;
       sessionProfileFieldHint: string;
+      watchLive: string;
+      watchLiveHint: string;
   }
 
   export const zh: Translations = {
@@ -1471,6 +1473,8 @@ export interface Translations {
       defaultValue: "默认",
       sessionProfileField: "会话档案",
       sessionProfileFieldHint: "选一个在「浏览器」页手工登录后保存的会话。注意后端/指纹/代理要和这里选的一致，否则站点会看到环境突变。",
+      watchLive: "看画面",
+      watchLiveHint: "看这个任务正在操作的浏览器屏幕。多个任务同时跑在同一个后端时，画面上会同时出现它们的窗口。",
   };
 
   export const en: Translations = {
@@ -2195,5 +2199,7 @@ export interface Translations {
       defaultValue: "Default",
       sessionProfileField: "Session profile",
       sessionProfileFieldHint: "A session captured by hand on the Browsers page. Use the same backend, fingerprint and proxy as it was captured with, or the site sees the environment change underneath the cookies.",
+      watchLive: "Watch",
+      watchLiveHint: "The screen of the browser this task is driving. Concurrent runs share one display, so their windows appear together.",
   };
   
