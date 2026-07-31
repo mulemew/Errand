@@ -654,18 +654,56 @@ export default function Home() {
   // Headers only appear once a group exists, so a user who never makes one sees exactly
   // the list they had before.
   const showGroupHeaders = groupList.length > 0;
+
+  /**
+   * The order this tab has dragged into, before the server has confirmed it.
+   *
+   * Reorder.Group is CONTROLLED: after it calls onReorder it must immediately be re-rendered
+   * with the new `values`, or its idea of the list and the DOM diverge and it stops
+   * detecting further crossings. Ours went to the server first — PUT, invalidate, refetch —
+   * so `values` only changed a few hundred milliseconds later. Dragging past several rows
+   * therefore moved exactly one of them, and it took another pointer event (the jiggle) to
+   * move the next: every intermediate crossing was evaluated against a stale list.
+   *
+   * So the drag now updates this map synchronously and the request goes out behind it.
+   */
+  const [optimisticOrder, setOptimisticOrder] = useState<number[] | null>(null);
+  const orderIndex = useMemo(() => {
+    if (!optimisticOrder) return null;
+    const m = new Map<number, number>();
+    optimisticOrder.forEach((id, i) => m.set(id, i));
+    return m;
+  }, [optimisticOrder]);
+
+  /** Server order for the tasks we are showing — used to retire the override. */
+  const serverOrderKey = (displayedTasks as TaskRow[]).map((tk) => tk.id).join(",");
+  useEffect(() => {
+    // Once the fetched order matches what we dragged to, the override has nothing left to
+    // say. Dropping it also means an add/remove elsewhere is not fighting a stale list.
+    if (optimisticOrder && serverOrderKey === optimisticOrder.join(",")) setOptimisticOrder(null);
+  }, [serverOrderKey, optimisticOrder]);
+
+  const applyOrder = (rows: TaskRow[]): TaskRow[] => {
+    if (!orderIndex) return rows;
+    // Unknown ids (a task created since the drag) keep their fetched position by sorting
+    // last among equals — Array.prototype.sort is stable, so their relative order holds.
+    return [...rows].sort(
+      (a, b) => (orderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    );
+  };
+
   const sections = [
     ...groupList.map((g) => ({
       key: `g${g.id}`,
       groupId: g.id as number | null,
       name: g.name,
-      tasks: (displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === g.id),
+      tasks: applyOrder((displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === g.id)),
     })),
     {
       key: "ungrouped",
       groupId: null as number | null,
       name: t.ungrouped,
-      tasks: (displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === null),
+      tasks: applyOrder((displayedTasks as TaskRow[]).filter((tk) => groupOf(tk) === null)),
     },
   ];
 
@@ -680,6 +718,9 @@ export default function Home() {
       if (!res.ok) throw new Error();
       queryClient.invalidateQueries({ queryKey: getListTasksQueryKey() });
     } catch {
+      // Drop the optimistic order: the list would otherwise keep showing an arrangement the
+      // server never accepted, and the next refetch would silently undo it.
+      setOptimisticOrder(null);
       toast({ title: t.failedToReorder, variant: "destructive" });
     }
   };
@@ -699,7 +740,11 @@ export default function Home() {
     const beforeIds = new Set(sections.slice(0, idx).flatMap((sec) => sec.tasks.map((tk) => tk.id)));
     const before = others.filter((o) => beforeIds.has(o.id));
     const after = others.filter((o) => !beforeIds.has(o.id));
-    void persistOrder([...before, ...moved, ...after]);
+    const next = [...before, ...moved, ...after];
+    // Synchronously, so the very next pointer move is measured against the list the user
+    // can already see. The PUT follows; the override retires itself when the fetch agrees.
+    setOptimisticOrder(next.map((o) => o.id));
+    void persistOrder(next);
   };
 
   /** Move one task into another group (or out of all of them), appended at its end.
@@ -712,6 +757,7 @@ export default function Home() {
     const [moved] = order.splice(from, 1);
     const lastOfGroup = order.map((o) => o.groupId).lastIndexOf(groupId);
     order.splice(lastOfGroup + 1, 0, { ...moved, groupId });
+    setOptimisticOrder(order.map((o) => o.id));
     void persistOrder(order);
   };
 
