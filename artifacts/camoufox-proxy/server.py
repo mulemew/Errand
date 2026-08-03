@@ -308,7 +308,11 @@ def _start_session_display():
         view_port = None
         if not _VNC_DISABLED:
             view_port = _VIEW_PORT_BASE + (n - _DISPLAY_BASE)
-            vnc_port = 5900 + (n - _DISPLAY_BASE)
+            # 5900 belongs to the container-wide viewer the entrypoint starts on :99.
+            # Starting at 5901 keeps the first session from colliding with it — x11vnc
+            # would fail to bind, websockify would still come up, and the view would be a
+            # port that answers and never shows anything.
+            vnc_port = 5901 + (n - _DISPLAY_BASE)
             # -bg would daemonise out of our process tree; keep it in the foreground so the
             # teardown below actually owns it.
             procs.append(subprocess.Popen(

@@ -95,10 +95,18 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
     res.setHeader("Cache-Control", "no-store");
     res.send(Buffer.from(await upstream.arrayBuffer()));
   } catch (err) {
-    logger.warn({ err, viewId }, "Live view is not reachable — is the camoufox sidecar up to date?");
+    // Say WHERE it failed. A 502 from this route and a 502 from the reverse proxy in front
+    // of the app look identical in a browser, and the difference decides where to look.
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { viewId, target: `${target.host}:${target.port}`, path, reason },
+      "Live view upstream did not answer",
+    );
     res.status(502).json({
-      error:
-        "The live view is not answering. The camoufox sidecar needs to be on a recent image (it serves the view itself) — pull and recreate it.",
+      error: `The live view at ${target.host}:${target.port} did not answer (${reason}).`,
+      hint:
+        "This is the app talking to the sidecar, not your reverse proxy. Check that the camoufox container is running a recent image: `docker logs <camoufox> | grep vnc` should show '[vnc] live view ready'.",
+      target: `${target.host}:${target.port}`,
     });
   }
 });
