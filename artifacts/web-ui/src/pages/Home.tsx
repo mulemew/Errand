@@ -305,10 +305,13 @@ type FilterValue = typeof VALID_FILTERS[number];
 function DraggableTaskRow({
   id,
   enabled,
+  instant,
   children,
 }: {
   id: number;
   enabled: boolean;
+  /** Move without animating — see the note on the move-to-group action. */
+  instant: boolean;
   children: (startDrag: (e: React.PointerEvent) => void) => React.ReactNode;
 }) {
   const controls = useDragControls();
@@ -317,7 +320,13 @@ function DraggableTaskRow({
       value={id}
       dragListener={false}
       dragControls={controls}
-      transition={{ type: "spring", stiffness: 600, damping: 40 }}
+      // Moving to another group means leaving one Reorder.Group and appearing in another.
+      // The layout animation only knows the row's old and new positions and tweens between
+      // them, so with two independently laid-out lists the path starts at the edge of the
+      // old group — the row appears to run to the boundary and then slip into the target.
+      // Nothing is wrong with the data; only the interpolation is misleading. For that one
+      // action the move is instant. Dragging within a list still springs as before.
+      transition={instant ? { duration: 0 } : { type: "spring", stiffness: 600, damping: 40 }}
       whileDrag={{ scale: 1.01, zIndex: 30, boxShadow: "0 8px 24px rgba(0,0,0,0.28)" }}
       className="relative"
     >
@@ -668,6 +677,8 @@ export default function Home() {
    * So the drag now updates this map synchronously and the request goes out behind it.
    */
   const [optimisticOrder, setOptimisticOrder] = useState<number[] | null>(null);
+  /** True for the moment a task changes group — see DraggableTaskRow's transition. */
+  const [instantMove, setInstantMove] = useState(false);
   const orderIndex = useMemo(() => {
     if (!optimisticOrder) return null;
     const m = new Map<number, number>();
@@ -757,6 +768,10 @@ export default function Home() {
     const [moved] = order.splice(from, 1);
     const lastOfGroup = order.map((o) => o.groupId).lastIndexOf(groupId);
     order.splice(lastOfGroup + 1, 0, { ...moved, groupId });
+    // Land it, don't fly it there. Long enough to cover this render and the refetch that
+    // follows; after that dragging inside a list springs normally again.
+    setInstantMove(true);
+    window.setTimeout(() => setInstantMove(false), 600);
     setOptimisticOrder(order.map((o) => o.id));
     void persistOrder(order);
   };
@@ -1156,7 +1171,7 @@ export default function Home() {
                   className="space-y-3"
                 >
                   {section.tasks.map((task) => (
-                    <DraggableTaskRow key={task.id} id={task.id} enabled={canReorder}>
+                    <DraggableTaskRow key={task.id} id={task.id} enabled={canReorder} instant={instantMove}>
                       {(startDrag) => renderTaskCard(task, canReorder ? startDrag : undefined)}
                     </DraggableTaskRow>
                   ))}
