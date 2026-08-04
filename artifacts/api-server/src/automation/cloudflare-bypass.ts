@@ -451,12 +451,26 @@ const CF_WIDGET_FRAME_PATTERNS = [...CF_FRAME_PATTERNS, "/cdn-cgi/challenge-plat
 /** Turnstile frames, the one carrying the widget UI first. */
 function cfWidgetFrames(page: PageAdapter): FrameAdapter[] {
   try {
-    const all = page.frames().filter((f) => CF_WIDGET_FRAME_PATTERNS.some((pat) => f.url().includes(pat)));
-    // A challenge page has several: the orchestrator, and the visible widget under
-    // .../turnstile/if/... — prefer the latter, it is the one holding the checkbox.
+    const frames = page.frames();
+    const named = frames.filter((f) => CF_WIDGET_FRAME_PATTERNS.some((pat) => f.url().includes(pat)));
+    const rest = frames.filter((f) => !named.includes(f));
+    // Named ones first — the widget under .../turnstile/if/... ahead of the orchestrator —
+    // and then EVERY OTHER FRAME.
+    //
+    // Recognising the widget by its URL was the whole problem. page.frames() sees through
+    // the closed shadow root Turnstile renders into, so the frame was always in this list;
+    // we just did not recognise it, because a widget created as about:blank (or on a path
+    // these patterns do not cover) matches nothing. The logs said "no turnstile frame" and
+    // the click fell back to guessing coordinates from a container in the main document,
+    // which is how a checkbox ends up never being pressed.
+    //
+    // Asking every frame whether it contains a Turnstile checkbox costs a few cheap
+    // queries and cannot misidentify anything: a frame either has that element or it does
+    // not. URL order is kept only so the likely one is asked first.
     return [
-      ...all.filter((f) => f.url().includes("/turnstile/")),
-      ...all.filter((f) => !f.url().includes("/turnstile/")),
+      ...named.filter((f) => f.url().includes("/turnstile/")),
+      ...named.filter((f) => !f.url().includes("/turnstile/")),
+      ...rest,
     ];
   } catch {
     return [];
@@ -472,23 +486,44 @@ function cfWidgetFrames(page: PageAdapter): FrameAdapter[] {
  * hits; the <input> behind it is often 0x0 or opacity:0, so the box check filters it out.
  */
 const CF_CHECKBOX_SELECTORS = [
+  // Turnstile's own markup, most specific first. The label is what a hand hits; the input
+  // behind it is often 0x0 or opacity:0, which the box check below filters out.
   ".cb-lb label",
   ".cb-lb input",
+  "#challenge-stage input[type='checkbox']",
+  "#challenge-stage label",
   "input[type='checkbox']",
+  "label[for]",
   ".cf-checkbox-label",
-  "#challenge-stage input",
   ".mark",
+  // Any frame is asked now, not just URL-matched ones, so the LAST resort is deliberately
+  // generic: a Turnstile frame whose markup has changed still has something clickable in
+  // the top-left. Restricted to small elements by the caller's box check, so it cannot
+  // match a page-sized container in some unrelated frame.
+  "[role='checkbox']",
 ];
 
 async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarget | null> {
-  for (const frame of cfWidgetFrames(page)) {
+  const frames = cfWidgetFrames(page);
+  if (frames.length === 0) {
+    logger.debug("No frames at all to search for a Turnstile checkbox");
+    return null;
+  }
+  for (const frame of frames) {
     for (const sel of CF_CHECKBOX_SELECTORS) {
       const el = await frame.$(sel).catch(() => null);
       if (!el) continue;
       const box = await el.boundingBox?.().catch(() => null);
-      if (!box || box.width < 8 || box.height < 8) continue;
+      // A checkbox is small. The upper bound matters now that every frame is searched with
+      // generic selectors: without it, a page-sized label in some unrelated frame could win
+      // and the click would land nowhere near a Turnstile.
+      if (!box || box.width < 8 || box.height < 8 || box.width > 320 || box.height > 320) continue;
       // Playwright reports this in MAIN-FRAME viewport coordinates, so it needs no offset
       // arithmetic and no assumption about the widget's padding.
+      logger.debug(
+        { frameUrl: (() => { try { return frame.url(); } catch { return "?"; } })(), sel },
+        "Turnstile checkbox located inside a frame",
+      );
       return {
         x: box.x + box.width / 2,
         y: box.y + box.height / 2,
@@ -497,6 +532,12 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       };
     }
   }
+  // Nothing anywhere — say what WAS there, so the next report names the frames instead of
+  // just "not found".
+  logger.debug(
+    { frames: frames.map((f) => { try { return f.url().slice(0, 120); } catch { return "?"; } }) },
+    "No Turnstile checkbox in any frame — falling back to main-document geometry",
+  );
   return null;
 }
 
