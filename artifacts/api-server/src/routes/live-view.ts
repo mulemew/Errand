@@ -76,12 +76,25 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  // "" → the noVNC page itself. autoconnect + the path the WebSocket half is mounted on,
-  // so the client connects back through this app rather than to the sidecar directly.
-  let path = req.url === "/" || req.url === "" ? "/vnc.html" : req.url;
-  if (path === "/vnc.html") {
-    path += `?autoconnect=1&resize=scale&path=${encodeURIComponent(`api/live-view/${viewId}/websockify`)}`;
+  // The bare directory REDIRECTS to vnc.html with its settings in the query string.
+  //
+  // These used to be appended to the URL the app fetched from the sidecar, which does
+  // nothing at all: noVNC reads its configuration from window.location.search — the
+  // BROWSER's address — and that was just "/api/live-view/1/" with no query. So it fell
+  // back to its defaults and dialled wss://<this-host>/websockify, a path that belongs to
+  // the SPA, not to this route. The socket never reached the app: no upgrade, no error,
+  // just "Connecting…" forever, which is exactly what the access log showed — every asset
+  // 200 and not one request for websockify.
+  //
+  // Redirecting puts the settings where the client actually looks.
+  if (req.url === "/" || req.url === "") {
+    const qs =
+      `autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000` +
+      `&path=${encodeURIComponent(`api/live-view/${viewId}/websockify`)}`;
+    res.redirect(302, `vnc.html?${qs}`); // relative: resolves under this same prefix
+    return;
   }
+  const path = req.url;
 
   try {
     const upstream = await fetch(`http://${target.host}:${target.port}${path}`, {
