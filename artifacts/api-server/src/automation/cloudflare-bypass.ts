@@ -231,14 +231,26 @@ export async function describeTurnstileState(page: PageAdapter): Promise<string>
 
 async function _describeTurnstileState(page: PageAdapter): Promise<string> {
   try {
-    const frame = cfWidgetFrames(page)[0];
-    if (!frame) return "no turnstile frame";
-    const body = await frame.$("body").catch(() => null);
-    if (!body) return "frame present, no body";
-    const text = (await body
-      .evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120))
-      .catch(() => "")) as string;
-    return text || "(empty)";
+    // cfWidgetFrames now returns EVERY frame, so [0] is no longer "the widget" — taking it
+    // blindly would report some unrelated frame's text as the Turnstile's verdict, and this
+    // string is what the whole diagnosis rests on. Read each frame and keep the first whose
+    // words are a Turnstile verdict; a wrong answer here is worse than no answer.
+    const VERDICT =
+      /verify you are human|verifying|success|verification failed|请稍候|人机|確認|vérifi|überprüf|verifica/i;
+    let firstNonEmpty: string | null = null;
+    for (const frame of cfWidgetFrames(page)) {
+      const body = await frame.$("body").catch(() => null);
+      if (!body) continue;
+      const text = (await body
+        .evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120))
+        .catch(() => "")) as string;
+      if (!text) continue;
+      if (VERDICT.test(text)) return text;
+      firstNonEmpty ??= text;
+    }
+    // Nothing said anything Turnstile-shaped. Report the frame we did read, marked as such,
+    // rather than passing it off as the widget's state.
+    return firstNonEmpty ? `no turnstile frame (nearest frame says: ${firstNonEmpty.slice(0, 60)})` : "no turnstile frame";
   } catch {
     return "(unreadable)";
   }
