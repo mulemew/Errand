@@ -128,13 +128,20 @@ export function attachLiveViewUpgrade(server: Server, isAuthorised: (cookie: str
     if (!m) return; // not ours — leave it for anything else listening
 
     void (async () => {
+      // Every step is logged. "Connecting…" forever has three possible causes — the upgrade
+      // never reached this process (a reverse proxy that does not forward Upgrade), it was
+      // refused here, or the sidecar did not answer — and they are indistinguishable from
+      // the browser. If none of these lines appear at all, the request never arrived.
+      logger.info({ url, hasCookie: !!req.headers.cookie }, "Live view upgrade received");
       try {
         if (!(await isAuthorised(req.headers.cookie ?? ""))) {
+          logger.warn({ url }, "Live view upgrade REFUSED — no valid session cookie on the upgrade request");
           socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
           return;
         }
         const target = await liveViewTarget(decodeURIComponent(m[1] ?? ""));
         if (!target) {
+          logger.warn({ url }, "Live view upgrade has no target (not a camoufox provider?)");
           socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
           return;
         }
@@ -149,13 +156,17 @@ export function attachLiveViewUpgrade(server: Server, isAuthorised: (cookie: str
           if (head?.length) upstream.write(head);
           socket.pipe(upstream);
           upstream.pipe(socket);
+          logger.info({ target: `${target.host}:${target.port}` }, "Live view upgrade piped to the sidecar");
         });
 
         const close = () => {
           try { upstream.destroy(); } catch { /* ignore */ }
           try { socket.destroy(); } catch { /* ignore */ }
         };
-        upstream.on("error", close);
+        upstream.on("error", (err) => {
+          logger.warn({ target: `${target.host}:${target.port}`, err: String(err) }, "Live view upstream socket failed");
+          close();
+        });
         socket.on("error", close);
         socket.on("close", close);
       } catch (err) {
