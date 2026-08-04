@@ -198,6 +198,59 @@ def _summ_from_preset(preset: dict, os_name: str) -> dict:
     }
 
 
+def _preset_ff_version():
+    """Which preset set to draw from — and it is not the default.
+
+    camoufox ships two: a legacy file and a v150 file, chosen by ff_version at
+    PRESETS_V150_MIN_FF (149). Passing None picked the LEGACY set: 75 Windows presets
+    carrying rv:147/rv:148 user agents, against 180 in the current set. Two problems at
+    once — less than half the variety, and a browser that IS Firefox 150 announcing itself
+    as 147, which is a contradiction anyone can check.
+
+    Resolved once, in order: CAMOUFOX_FF_VERSION if set, then whatever the installed
+    package reports, and finally the newest set available. The last is a guess, but a
+    better one than a version we know is stale.
+    """
+    global _PRESET_FF
+    if _PRESET_FF is not _UNSET:
+        return _PRESET_FF
+
+    resolved = None
+    env = (os.getenv("CAMOUFOX_FF_VERSION") or "").strip()
+    if env.isdigit():
+        resolved = int(env)
+        why = "CAMOUFOX_FF_VERSION"
+    else:
+        try:
+            from camoufox import pkgman
+            for attr in ("installed_verstr", "get_installed_version", "installed_version", "current_verstr"):
+                fn = getattr(pkgman, attr, None)
+                if callable(fn):
+                    m = re.search(r"(\d+)", str(fn()))
+                    if m:
+                        resolved = int(m.group(1))
+                        why = f"pkgman.{attr}"
+                        break
+        except Exception:
+            pass
+    if resolved is None:
+        # Ask for the newest set rather than accepting the legacy default.
+        try:
+            from camoufox.fingerprints import PRESETS_V150_MIN_FF
+            resolved = int(PRESETS_V150_MIN_FF) + 1
+        except Exception:
+            resolved = 150
+        why = "newest available set"
+
+    _PRESET_FF = resolved
+    print(f"[fingerprint] preset set for Firefox {resolved} ({why})", flush=True)
+    return _PRESET_FF
+
+
+_UNSET = object()
+_PRESET_FF = _UNSET
+
+
 @app.get("/generate")
 def generate():
     """Generate ONE concrete, consistent fingerprint the user saves as a FIXED profile.
@@ -215,7 +268,7 @@ def generate():
     try:
         if source == "preset":
             from camoufox.fingerprints import get_random_preset
-            preset = get_random_preset(os=os_name)
+            preset = get_random_preset(os=os_name, ff_version=_preset_ff_version())
             if not preset:
                 return jsonify({"error": f"no bundled preset available for os={os_name}"}), 404
             summary = _summ_from_preset(preset, os_name)
@@ -250,13 +303,27 @@ def generate():
                 (1920, 1080), (1536, 864), (1366, 768), (1440, 900),
                 (1600, 900), (1280, 720), (1680, 1050), (1920, 1200),
             }
-            for _ in range(24):
-                scr = getattr(fp, "screen", None)
-                if scr and (getattr(scr, "width", 0), getattr(scr, "height", 0)) in COMMON:
+            # A common SCREEN with an exotic GPU is still an odd machine — the renderer
+            # string is one of the most-read fields there is. Accept the vendors that
+            # actually ship in consumer desktops and laptops.
+            GPU_OK = re.compile(r"nvidia|geforce|rtx|gtx|amd|radeon|intel|iris|uhd graphics|hd graphics|apple", re.I)
+
+            def ordinary(f) -> bool:
+                scr = getattr(f, "screen", None)
+                if not scr or (getattr(scr, "width", 0), getattr(scr, "height", 0)) not in COMMON:
+                    return False
+                vc = getattr(f, "videoCard", None) or getattr(f, "video_card", None)
+                renderer = (_g(vc, "renderer") or "") if vc is not None else ""
+                # No card reported at all is normal for some Firefox configs; only reject a
+                # renderer that IS present and is something nobody runs.
+                return not renderer or bool(GPU_OK.search(renderer))
+
+            for _ in range(40):
+                if ordinary(fp):
                     break
                 fp = gen.generate(os=os_name, browser="firefox")
             else:
-                print("[fingerprint] no common resolution after 24 tries — keeping the last", flush=True)
+                print("[fingerprint] no ordinary screen+GPU after 40 tries — keeping the last", flush=True)
         summary = _summ_from_fp(fp, os_name)
         fp_b64 = base64.b64encode(pickle.dumps(fp)).decode("ascii")
         return jsonify({"config": {"source": "browserforge", "os": os_name, "fp": fp_b64, "summary": summary}, "summary": summary})
