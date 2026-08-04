@@ -221,13 +221,42 @@ def generate():
             summary = _summ_from_preset(preset, os_name)
             return jsonify({"config": {"source": "preset", "os": os_name, "preset": preset, "summary": summary}, "summary": summary})
         # default: browserforge synthetic — pickle the Fingerprint so /launch reproduces it EXACTLY
-        from browserforge.fingerprints import FingerprintGenerator
+        from browserforge.fingerprints import FingerprintGenerator, Screen
         import base64
         import pickle
         # MUST be a Firefox fingerprint — Camoufox is patched Firefox and rejects Chrome/
         # other-browser fingerprints (NonFirefoxFingerprint). browser= flows through to the
         # header generator, forcing a Firefox UA the rest of the fingerprint is built around.
-        fp = FingerprintGenerator().generate(os=os_name, browser="firefox")
+        #
+        # CONSTRAINED to ordinary hardware. browserforge samples its whole dataset, which is
+        # statistically honest and individually terrible: every value it picks exists
+        # somewhere, but a 1600x2560 portrait panel with an obscure GPU is a machine almost
+        # nobody has, and standing out is the one thing a fingerprint must not do. The
+        # generated profiles were "rare-looking" for exactly this reason.
+        #
+        # So: keep the screen inside the band real desktops occupy, then prefer a generation
+        # whose resolution is one people actually run. mainstream=0 restores raw sampling.
+        mainstream = (request.args.get("mainstream") or "1").strip().lower() not in ("0", "false", "no")
+        gen = FingerprintGenerator(
+            screen=Screen(min_width=1280, max_width=1920, min_height=720, max_height=1200)
+        ) if mainstream else FingerprintGenerator()
+
+        fp = gen.generate(os=os_name, browser="firefox")
+        if mainstream:
+            # The desktop resolutions with real share. Sampling until one lands is cheap
+            # (generation is local and fast) and leaves the rest of the fingerprint alone —
+            # nothing is hand-edited, so it stays internally consistent.
+            COMMON = {
+                (1920, 1080), (1536, 864), (1366, 768), (1440, 900),
+                (1600, 900), (1280, 720), (1680, 1050), (1920, 1200),
+            }
+            for _ in range(24):
+                scr = getattr(fp, "screen", None)
+                if scr and (getattr(scr, "width", 0), getattr(scr, "height", 0)) in COMMON:
+                    break
+                fp = gen.generate(os=os_name, browser="firefox")
+            else:
+                print("[fingerprint] no common resolution after 24 tries — keeping the last", flush=True)
         summary = _summ_from_fp(fp, os_name)
         fp_b64 = base64.b64encode(pickle.dumps(fp)).decode("ascii")
         return jsonify({"config": {"source": "browserforge", "os": os_name, "fp": fp_b64, "summary": summary}, "summary": summary})
