@@ -1059,10 +1059,84 @@ export async function detectAndHandleCaptcha(
     // whisper) and Playwright backends. This is what makes cfVerify / login pass
     // reCAPTCHA on the sites we test against without a paid solver.
     if (type === "reCAPTCHA") {
+      // ── Is there anything to solve? ────────────────────────────────────────
+      //
+      // Detection matches iframe[src*='recaptcha'], and EVERY page using invisible
+      // reCAPTCHA (v2-invisible or v3) has one: the badge's anchor iframe is always
+      // present. There is no checkbox, no challenge, and nothing a human would do — the
+      // token is minted by the site's own JS when it calls grecaptcha.execute() on submit.
+      //
+      // Treating that as a captcha meant hunting for a challenge popup that does not
+      // exist, failing with "bframe not found", and stopping the run as needs-attention on
+      // a page where the user can see no captcha at all. Which is exactly the report.
+      //
+      // So: only an INTERACTIVE widget — a visible checkbox, or a challenge already open —
+      // is something to work on. Anything else is left to the page, and the login carries
+      // on to submit the form.
+      const interactive = (await page
+        .evaluate(() => {
+          const bigEnough = (r: DOMRect) => r.width >= 200 && r.height >= 60;
+          // The checkbox lives in the anchor iframe — but so does the invisible mode's
+          // BADGE, and at 256x60 it is close enough to a 304x78 checkbox that size alone
+          // cannot tell them apart. The src can: Google puts size=invisible in the anchor
+          // URL exactly for this distinction.
+          const anchors = Array.from(
+            document.querySelectorAll<HTMLIFrameElement>(
+              "iframe[src*='api2/anchor'], iframe[src*='enterprise/anchor']",
+            ),
+          );
+          if (
+            anchors.some((f) => {
+              if (/[?&]size=invisible/.test(f.getAttribute("src") ?? "")) return false;
+              return bigEnough(f.getBoundingClientRect());
+            })
+          ) {
+            return true;
+          }
+          // A container rendered at checkbox size and not declared invisible.
+          return Array.from(document.querySelectorAll<HTMLElement>(".g-recaptcha, [data-sitekey]")).some(
+            (c) => c.getAttribute("data-size") !== "invisible" && bigEnough(c.getBoundingClientRect()),
+          );
+        })
+        .catch(() => true)) as boolean; // unreadable page: assume interactive, i.e. behave as before
+
+      // A challenge popup that is ALREADY open counts, whatever the widget looks like:
+      // an invisible reCAPTCHA that decided to challenge does show a bframe.
+      const challengeOpen = (() => {
+        try {
+          return page.frames().some((f) => /api2\/bframe|enterprise\/bframe/.test(f.url()));
+        } catch {
+          return false;
+        }
+      })();
+
+      if (!interactive && !challengeOpen) {
+        logger.info("Invisible reCAPTCHA present with no challenge — nothing to solve, continuing");
+        return {
+          detected: true,
+          solved: false,
+          needsAttention: false,
+          message:
+            "Invisible reCAPTCHA (v3 / v2-invisible) with no challenge shown — nothing to solve; " +
+            "the page mints its own token when the form is submitted.",
+        };
+      }
+
       const audio = await solveRecaptchaAudio(page);
 
       if (audio.solved) {
         return { detected: true, solved: true, message: audio.message };
+      }
+      if (!audio.solved && /bframe\) not found/.test(audio.message)) {
+        // We believed there was an interactive widget, and there is no challenge behind it.
+        // Failing the run here would stop a login on a page showing no captcha at all.
+        logger.info({ message: audio.message }, "reCAPTCHA has no challenge popup — continuing rather than failing");
+        return {
+          detected: true,
+          solved: false,
+          needsAttention: false,
+          message: "reCAPTCHA present but no challenge was shown — continuing; the page may solve it itself.",
+        };
       }
       if (audio.blocked) {
         // IP-level refusal ("automated queries"): no STT/fingerprint/mouse work fixes
