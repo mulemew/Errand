@@ -790,6 +790,27 @@ router.put("/tasks/:id", async (req, res): Promise<void> => {
       { taskId: params.data.id, from: existing.cronExpression, to: cronExpression },
       "Schedule changed — clearing the pending next run so it is recomputed",
     );
+
+    // ── @after_completion: measure the NEW interval from the last run ────────
+    //
+    // Clearing the column hands the recompute to the scheduler, which seeds from NOW —
+    // correct when a task is enabled or the server restarts, wrong when the interval was
+    // merely edited. Shortening 24h to 12h at 14:00 for a task that ran at 10:00 should
+    // bring the next run to 22:00, not push it to 02:00: editing an interval is not the
+    // same as restarting it, and the "now" version means an edit can only ever delay.
+    const afterMatch = /^@after_completion:(\d+)$/.exec(cronExpression ?? "");
+    if (afterMatch && existing.lastRunAt) {
+      const delayMs = parseInt(afterMatch[1] ?? "0", 10) * 60_000;
+      if (delayMs > 0) {
+        // Never in the past: an interval that already elapsed runs shortly, not retroactively.
+        const due = new Date(Math.max(new Date(existing.lastRunAt).getTime() + delayMs, Date.now() + 60_000));
+        updateData.nextRunAt = due;
+        req.log.info(
+          { taskId: params.data.id, lastRunAt: existing.lastRunAt, nextRunAt: due.toISOString() },
+          "after_completion interval edited — next run measured from the last run",
+        );
+      }
+    }
   }
 
   const [updated] = await db

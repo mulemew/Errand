@@ -219,6 +219,27 @@ async function enforceScreenshotSizeLimit(maxMb: number): Promise<void> {
   }
 }
 
+/**
+ * setTimeout, but for delays a browser-era 32-bit millisecond counter cannot hold.
+ *
+ * Node stores the delay in a signed 32-bit int: anything above 2147483647 ms (24.8 days)
+ * OVERFLOWS and the timer fires almost immediately. A "2 runs per 30 days" schedule
+ * therefore did not wait 30 days — it fired at once, ran, re-armed, overflowed again, and
+ * ran continuously. This is the "30天两次却不停地执行" report, and no amount of window
+ * arithmetic above it could have helped.
+ *
+ * Chunking keeps each hop inside the range and re-arms until the real deadline.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_000;
+
+function setLongTimeout(fn: () => void, delayMs: number, sink: ReturnType<typeof setTimeout>[]): void {
+  if (delayMs <= MAX_TIMEOUT_MS) {
+    sink.push(setTimeout(fn, Math.max(0, delayMs)));
+    return;
+  }
+  sink.push(setTimeout(() => setLongTimeout(fn, delayMs - MAX_TIMEOUT_MS, sink), MAX_TIMEOUT_MS));
+}
+
 function clearRandomTimeouts(taskId: number): void {
   const existing = randomScheduleTimeouts.get(taskId);
   if (existing) { existing.forEach(clearTimeout); randomScheduleTimeouts.delete(taskId); }
@@ -227,121 +248,92 @@ function clearRandomTimeouts(taskId: number): void {
 function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow: number): void {
   clearRandomTimeouts(taskId);
   const windowMs = windowMinutes * 60 * 1000;
+  // "N runs per window" is really "one run every window/N, give or take". Scheduling by SLOT
+  // rather than by window quota is what makes that true.
+  //
+  // The old code anchored a window to the last run, counted the runs already inside it, and
+  // spread the remainder uniformly across whatever was left. Two things went wrong:
+  //
+  //   • the anchor run itself sat inside its own window and used up a slot, so every run
+  //     reset the quota — the rate was never actually limited
+  //   • once the quota was met it waited for the window to end and then picked uniformly
+  //     across the NEXT full window, so the expected gap was 1.5x the window and the worst
+  //     case 2x. "Every 90 minutes" ran roughly every 135, sometimes 180 — the doubling
+  //     that got reported.
+  //
+  // One run at a time, at lastRun + slot * uniform(0.5, 1.5): the mean gap is exactly the
+  // slot, the spread is still unpredictable, and no run can be more than 1.5 slots after
+  // the one before it.
+  const slotMs = windowMs / Math.max(1, runsPerWindow);
 
   async function scheduleWindow(): Promise<void> {
     const now = Date.now();
+    const timeouts: ReturnType<typeof setTimeout>[] = [];
 
-    // ── Window anchoring ──────────────────────────────────────────────
-    // Instead of epoch-aligned windows (which create arbitrary boundaries
-    // and can cause gaps up to 2x windowMs), anchor the window to the
-    // task's most recent run.  This guarantees the gap between consecutive
-    // runs is always ≤ windowMs.
-    let anchorMs: number;
+    let lastRunMs = 0;
     try {
       const [lastRun] = await db
         .select({ runAt: logsTable.runAt })
         .from(logsTable)
-        .where(eq(logsTable.taskId, taskId))
-        .orderBy(sql`${logsTable.runAt} desc`)
-        .limit(1);
-      anchorMs = lastRun ? new Date(lastRun.runAt).getTime() : 0;
-    } catch {
-      anchorMs = 0;
-    }
-
-    let windowStart: number;
-    let windowEnd: number;
-    if (anchorMs > 0 && anchorMs <= now) {
-      const elapsed = now - anchorMs;
-      const windowsSinceAnchor = Math.floor(elapsed / windowMs);
-      windowStart = anchorMs + windowsSinceAnchor * windowMs;
-      windowEnd = windowStart + windowMs;
-    } else {
-      windowStart = now;
-      windowEnd = now + windowMs;
-    }
-
-    // 查询本窗口内已运行次数（成功和失败都计入），防止重启/禁用/修改配置后多跑
-    let runsInWindow = 0;
-    try {
-      const [result] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(logsTable)
         .where(and(
           eq(logsTable.taskId, taskId),
-          gte(logsTable.runAt, new Date(windowStart)),
-          lt(logsTable.runAt, new Date(windowEnd)),
-          // Auto-retries are not scheduled runs — they exist because a scheduled run
-          // failed. Counting them would let a flaky task use up its window quota on
-          // retries and then skip the runs the user actually asked for.
+          // A retry is not a scheduled run; letting one reset the clock would push the
+          // real schedule back every time a run failed.
           sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
-        ));
-      runsInWindow = result?.count ?? 0;
+        ))
+        .orderBy(sql`${logsTable.runAt} desc`)
+        .limit(1);
+      lastRunMs = lastRun ? new Date(lastRun.runAt).getTime() : 0;
     } catch (err) {
-      logger.warn({ taskId, err }, "Failed to count runs in window, assuming 0");
+      logger.warn({ taskId, err }, "Could not read the last run — scheduling from now");
     }
 
-    const remainingRuns = Math.max(0, runsPerWindow - runsInWindow);
-    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    const jitter = 0.5 + Math.random(); // uniform in [0.5, 1.5) — mean 1
+    let nextRunMs = lastRunMs > 0 ? lastRunMs + slotMs * jitter : now + Math.random() * slotMs;
+    if (nextRunMs <= now) {
+      // Overdue: the process was down, or the task was just enabled. Go soon, but not
+      // instantly — a restart should not look like a trigger.
+      nextRunMs = now + 5_000 + Math.random() * Math.min(slotMs * 0.25, 5 * 60 * 1000);
+    }
 
-    if (remainingRuns > 0) {
-      // 在剩余窗口时间内（[now, windowEnd]）生成随机运行时间
-      const remainingMs = windowEnd - now;
-      const runTimes: number[] = [];
-      for (let i = 0; i < remainingRuns; i++) {
-        runTimes.push(now + Math.random() * remainingMs);
-      }
-      runTimes.sort((a, b) => a - b);
+    db.update(tasksTable).set({ nextRunAt: new Date(nextRunMs) }).where(eq(tasksTable.id, taskId)).catch(() => {});
+    logger.info(
+      {
+        taskId,
+        windowMinutes,
+        runsPerWindow,
+        slotMinutes: Math.round(slotMs / 60000),
+        nextRunAt: new Date(nextRunMs).toISOString(),
+      },
+      "Random-interval task scheduled",
+    );
 
-      for (let _ri = 0; _ri < runTimes.length; _ri++) {
-        const runTime = runTimes[_ri];
-        const delay = runTime - now;
-        if (delay > 0) {
-          const _capturedIndex = _ri;
-          const t = setTimeout(async () => {
-            const _nextInWindow = runTimes.slice(_capturedIndex + 1).find((t) => t > Date.now());
-            db.update(tasksTable)
-              .set({ nextRunAt: _nextInWindow !== undefined ? new Date(_nextInWindow) : new Date(windowEnd) })
-              .where(eq(tasksTable.id, taskId))
-              .catch(() => {});
-            try {
-              const [task] = await db.select({ enabled: tasksTable.enabled }).from(tasksTable).where(eq(tasksTable.id, taskId));
-              if (task?.enabled) {
-                logger.info({ taskId, windowMinutes, runsPerWindow }, "Random-interval task run triggered");
-                await runTask(taskId, false, "cron");
-              }
-            } catch (err) {
-              logger.error({ taskId, err }, "Random-interval task run failed");
+    setLongTimeout(
+      () => {
+        void (async () => {
+          try {
+            const [task] = await db
+              .select({ enabled: tasksTable.enabled, cronExpression: tasksTable.cronExpression })
+              .from(tasksTable)
+              .where(eq(tasksTable.id, taskId));
+            if (!task?.enabled || !task.cronExpression || !parseRandomSchedule(task.cronExpression)) {
+              randomScheduleTimeouts.delete(taskId);
+              return;
             }
-          }, delay);
-          timeouts.push(t);
-        }
-      }
-
-      const firstFutureRun = runTimes[0];
-      db.update(tasksTable).set({ nextRunAt: new Date(firstFutureRun) }).where(eq(tasksTable.id, taskId)).catch(() => {});
-      logger.info({ taskId, windowMinutes, runsPerWindow, runsInWindow, remainingRuns, windowEndsAt: new Date(windowEnd).toISOString() }, "Random schedule window activated");
-    } else {
-      const estimatedNextRun = windowEnd + Math.random() * windowMs;
-      db.update(tasksTable).set({ nextRunAt: new Date(estimatedNextRun) }).where(eq(tasksTable.id, taskId)).catch(() => {});
-      logger.info({ taskId, windowMinutes, runsPerWindow, runsInWindow }, "Random window quota met, waiting for next window");
-    }
-
-    const nextWindowDelay = windowEnd - now;
-    const nextTimer = setTimeout(() => {
-      db.select({ cronExpression: tasksTable.cronExpression, enabled: tasksTable.enabled })
-        .from(tasksTable).where(eq(tasksTable.id, taskId))
-        .then((rows: { cronExpression: string | null; enabled: boolean }[]) => {
-          const task = rows[0];
-          if (task?.enabled && task.cronExpression && parseRandomSchedule(task.cronExpression)) {
+            logger.info({ taskId, windowMinutes, runsPerWindow }, "Random-interval task run triggered");
+            await runTask(taskId, false, "cron");
+          } catch (err) {
+            logger.error({ taskId, err }, "Random-interval task run failed");
+          } finally {
+            // Re-arm from the run that just happened, whatever its outcome.
             scheduleWindow().catch((err: unknown) => logger.error({ taskId, err }, "scheduleWindow error"));
-          } else {
-            randomScheduleTimeouts.delete(taskId);
           }
-        })
-        .catch(() => randomScheduleTimeouts.delete(taskId));
-    }, nextWindowDelay > 0 ? nextWindowDelay : 1000);
-    timeouts.push(nextTimer);
+        })();
+      },
+      nextRunMs - now,
+      timeouts,
+    );
+
     randomScheduleTimeouts.set(taskId, timeouts);
   }
 
