@@ -3,10 +3,11 @@ FROM python:3.11-slim-bookworm
 # Camoufox is a patched Firefox. It needs the usual GTK/X libs + Xvfb for its
 # "virtual" headful mode (headful-on-virtual-display is harder to detect than headless).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
+    xvfb x11vnc novnc websockify \
     libgtk-3-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
     libasound2 libdbus-glib-1-2 libxt6 libpci3 fonts-liberation ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && command -v x11vnc && command -v websockify && test -d /usr/share/novnc
 
 # Run as a NON-ROOT user (uid 1000, matching the cf-proxy sidecar so host-side ownership
 # is consistent). A browser is the most exposed process in this stack — it renders hostile
@@ -38,7 +39,9 @@ ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 ENV PORT=7318
 EXPOSE 7318
-# Live view of the Xvfb display (only served when VNC_ENABLE=1).
+# Live view of the Xvfb display, served by x11vnc + noVNC (see entrypoint.sh). The build
+# above fails outright if those are missing, rather than shipping an image that starts fine
+# and only reveals at runtime that it cannot serve a screen.
 ENV VNC_PORT=7900
 EXPOSE 7900
 
