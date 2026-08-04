@@ -97,9 +97,38 @@ type IpApi = {
   countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
 };
 function runGeoCurl(proxyArg?: string): Promise<IpApi> {
-  const args = ["-s", "--max-time", "15", ...(proxyArg ? ["-x", proxyArg] : []), GEO_URL];
+  // An https:// proxy means TLS to the PROXY itself, and curl verifies that certificate.
+  // These are addressed by IP far more often than by hostname, so the certificate cannot
+  // match and verification fails every single time — which is why every https proxy read as
+  // broken while the same proxy worked fine by hand with --proxy-insecure.
+  //
+  // This skips verification of the PROXY's certificate only. The connection to the target
+  // is unaffected, and the target here is plain http anyway: the request travels inside the
+  // proxy's TLS regardless.
+  const isHttpsProxy = /^https:\/\//i.test(proxyArg ?? "");
+  const args = [
+    "-s",
+    "--show-error",
+    "--max-time",
+    "15",
+    ...(isHttpsProxy ? ["--proxy-insecure"] : []),
+    ...(proxyArg ? ["-x", proxyArg] : []),
+    GEO_URL,
+  ];
   return new Promise((resolve, reject) => {
-    execFile("curl", args, { timeout: 20_000 }, (err, out) => (err ? reject(err) : resolve(JSON.parse(out) as IpApi)));
+    // stderr was discarded, so a failure arrived as a bare exit code with nothing to act on.
+    execFile("curl", args, { timeout: 20_000 }, (err, out, errOut) => {
+      if (err) {
+        const detail = String(errOut ?? "").trim() || err.message;
+        reject(new Error(detail));
+        return;
+      }
+      try {
+        resolve(JSON.parse(out) as IpApi);
+      } catch {
+        reject(new Error(`unexpected response: ${String(out).trim().slice(0, 120)}`));
+      }
+    });
   });
 }
 /** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy.
