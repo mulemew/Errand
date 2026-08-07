@@ -270,8 +270,13 @@ async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<vo
   // somewhere along the path — so the carefully computed coordinates in the log above are
   // never where the press actually lands, and the checkbox is not what gets clicked.
   //
+  // 1.6-2.1s is camoufox's documented "up to ~1.5s to cross the window" plus margin. It is
+  // an upper bound rather than a measurement: neither Playwright nor camoufox signals that a
+  // trajectory has finished, and measuring it would mean installing a listener and polling
+  // it while Cloudflare watches the page — the one thing this module keeps saying not to do.
+  //
   // Firefox here means camoufox, the only backend where this applies; other backends keep
-  // the short, human-looking dwell. Costs ~1.5s on a path that runs once per bypass round.
+  // the short, human-looking dwell.
   const humanized = await isFirefoxPage(page).catch(() => false);
   await sleep(humanized ? rand(1600, 2100) : rand(120, 350));
 
