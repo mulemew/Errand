@@ -259,7 +259,22 @@ async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<vo
   await page.mouse.move(x - rand(18, 45), y + rand(-14, 14)).catch(() => {});
   await sleep(rand(90, 220));
   await page.mouse.move(x, y).catch(() => {});
-  await sleep(rand(120, 350)); // dwell before pressing
+
+  // WAIT FOR THE CURSOR TO ARRIVE before pressing.
+  //
+  // mouse.down() and mouse.up() take no coordinates — they press wherever the cursor is
+  // NOW. That is fine when a move is instantaneous, and wrong when it is not: camoufox's
+  // `humanize` (ON by default in the sidecar) replaces each move with an interpolated
+  // trajectory that its own docs describe as taking up to ~1.5s to cross the window. A
+  // 120-350ms dwell can therefore press the button while the cursor is still travelling,
+  // somewhere along the path — so the carefully computed coordinates in the log above are
+  // never where the press actually lands, and the checkbox is not what gets clicked.
+  //
+  // Firefox here means camoufox, the only backend where this applies; other backends keep
+  // the short, human-looking dwell. Costs ~1.5s on a path that runs once per bypass round.
+  const humanized = await isFirefoxPage(page).catch(() => false);
+  await sleep(humanized ? rand(1600, 2100) : rand(120, 350));
+
   if (page.mouse.down && page.mouse.up) {
     await page.mouse.down();
     await sleep(rand(60, 140)); // press duration
