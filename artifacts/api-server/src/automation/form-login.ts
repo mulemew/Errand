@@ -134,14 +134,85 @@ import type { PageAdapter } from "./page-adapter";
   }
 
   /**
-   * Determine whether login succeeded by inspecting the page state —
-   * NOT by comparing URLs, which is unreliable for SPAs and OAuth redirects.
+   * Is the login form we just submitted STILL on the screen?
    *
-   * Heuristics (in order):
-   * 1. Visible error message on page → failure
-   * 2. Login form fields still visible → failure (page didn't advance)
-   * 3. URL changed away from targetUrl → success
-   * 4. Login form fields gone, no error → success (SPA replaced the form)
+   * The one signal that means "not logged in" no matter what else the page does. Everything
+   * else here is circumstantial: a URL can change without a session being created, an error
+   * can be rendered in markup we cannot recognise, a submit button can be swapped out for a
+   * spinner. A password field you can still see and type into is none of those.
+   *
+   * Prefers the field locateLoginFields marked, which is the form we actually filled — a
+   * reload wipes the mark, so any visible password field counts as the fallback.
+   *
+   * Returns the evidence, or "" when the form is gone (or the page is mid-navigation and
+   * cannot be read, which is itself the shape of a login that worked).
+   */
+  async function loginFormEvidence(page: PageAdapter): Promise<string> {
+    try {
+      return (await page.evaluate(() => {
+        const vis = (el: Element | null): boolean => {
+          if (!el) return false;
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const s = getComputedStyle(el as HTMLElement);
+          return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+        };
+        const marked = document.querySelector("input[data-wa-pass='1']");
+        if (vis(marked)) return "the login form we filled is still on screen";
+        const pw = Array.from(document.querySelectorAll("input[type='password']")).find(vis);
+        if (pw) return "a password field is still visible";
+        return "";
+      })) as string;
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Watch the page from the moment of submit until the login resolves.
+   *
+   * Replaces "settle for a few seconds, then look once". Looking once loses a message that
+   * is not there yet AND a message that is no longer there — the Pterodactyl/Arix theme
+   * renders its login error as a toast that starts fading at 5.5 s, so a single read timed
+   * anywhere outside that window sees a page with no error on it and no session either.
+   *
+   * Stops early on either verdict: an error message (nothing later can make that a success)
+   * or the login form disappearing (which is the success shape, and stops us scanning a
+   * dashboard for words that look like failures).
+   */
+  async function awaitLoginResolution(page: PageAdapter, maxMs = 12_000): Promise<{ error: string; formGone: boolean }> {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      const err = await readLoginError(page);
+      if (err) return { error: err, formGone: false };
+      if (!(await loginFormEvidence(page))) {
+        // Let a redirect chain finish so the URL we report is the one it landed on.
+        await waitForSettle(page, 4000);
+        // Only elements that call themselves errors from here on. We are looking at the page
+        // the login LANDED on, and phrase-matching a whole dashboard would eventually find a
+        // node whose text reads like a failure — and turn a good login into a bad one.
+        return { error: await readLoginError(page, false), formGone: true };
+      }
+      await sleep(400);
+    }
+    return { error: await readLoginError(page), formGone: !(await loginFormEvidence(page)) };
+  }
+
+  /**
+   * Determine whether login succeeded by inspecting the page state.
+   *
+   * Ordered so that success needs POSITIVE evidence. It used to be the other way round —
+   * "the URL changed" and even "no error was recognised" were enough — and both are true of
+   * a login that did nothing at all. A panel whose SPA redirects / → /auth/login on load
+   * satisfies "URL changed" before a single credential is typed, so every failed attempt
+   * against it was reported as `Successfully logged in. Navigated to: …/auth/login`.
+   *
+   * 0. Caller's own successSelector / successText → success (explicit intent wins)
+   * 1. The site said something went wrong          → failure
+   * 2. The login form is still on screen           → failure
+   * 3. URL left the login page                     → success
+   * 4. An element that names itself an error       → failure
+   * 5. A post-login element appeared               → success
+   * 6. The submit control is gone                  → success
    */
   async function detectLoginOutcome(
     page: PageAdapter,
@@ -149,6 +220,7 @@ import type { PageAdapter } from "./page-adapter";
     successSelector?: string,
     submitSel?: string,
     successText?: string,
+    submitError?: string,
   ): Promise<{ success: boolean; reason: string }> {
     const normalize = (u: string) => u.replace(/\/+$/, "").split("?")[0].split("#")[0];
 
@@ -177,13 +249,29 @@ import type { PageAdapter } from "./page-adapter";
       }
     }
 
-    // 1. URL changed → success (most reliable signal)
     const finalUrl = page.url();
+
+    // 1. The site itself reported a failure. Captured at submit time by the watcher, which
+    //    is the only place a message that lives for six seconds can be seen. This used to be
+    //    read and then discarded whenever a later heuristic guessed "success" — a page
+    //    saying "these credentials do not match our records" was reported as a login.
+    if (submitError) {
+      return { success: false, reason: `The site reported an error: "${submitError}"` };
+    }
+
+    // 2. The login form is still there — whatever the URL says, we are not logged in.
+    const stillOnForm = await loginFormEvidence(page);
+    if (stillOnForm) {
+      return { success: false, reason: `Login did not go through — ${stillOnForm}. URL: ${finalUrl}` };
+    }
+
+    // 3. URL changed → success. Only meaningful now that the two checks above have ruled
+    //    out the ways a URL can change without a session being created.
     if (normalize(finalUrl) !== normalize(targetUrl)) {
       return { success: true, reason: `Navigated to: ${finalUrl}` };
     }
 
-    // 2. URL is the same — look for visible error messages
+    // 4. URL is the same — look for visible error messages
     const errorText = await page.evaluate(() => {
       const ERROR_SELS = [
         ".error-message", ".alert-danger", ".alert-error", ".error",
@@ -213,7 +301,7 @@ import type { PageAdapter } from "./page-adapter";
       return { success: false, reason: `Login error message: "${errorText}"` };
     }
 
-    // 3. Check for common post-login indicators before checking button visibility.
+    // 5. Check for common post-login indicators before checking button visibility.
     //    Many SPAs keep the submit button in DOM briefly while updating the page.
     const hasPostLoginIndicator = await page.evaluate(() => {
       // Look for elements that typically appear only after login
@@ -239,17 +327,17 @@ import type { PageAdapter } from "./page-adapter";
       return { success: true, reason: `Post-login element detected on page. URL: ${finalUrl}` };
     }
 
-    // 4. Check if the login/submit button is still visible.
+    // 6. Check if the login/submit button is still visible.
     //    Per user spec: URL same + button GONE → page advanced (SPA / 2FA) → success
     //                   URL same + button STILL VISIBLE → login didn't move the page → failure
     //    Only use the caller-supplied submit selector.  The old generic fallback
     //    (button[type='submit'], button.btn-primary, …) matched post-login page
     //    elements that had nothing to do with the login form, causing false negatives.
     if (!submitSel) {
-      // No submit selector supplied — we can't reliably tell whether the login
-      // form is still present, so assume success (other heuristics above would
-      // have caught real failures).
-      return { success: true, reason: `No error detected and no explicit submit selector — assuming success. URL: ${finalUrl}` };
+      // No submit selector supplied. The password field is already known to be gone (rule 2),
+      // which is the part that actually distinguishes a login from a page that ignored us —
+      // this is a weak success, not the bare "nothing looked wrong" it used to be.
+      return { success: true, reason: `The login form is gone and nothing reported an error. URL: ${finalUrl}` };
     }
 
     const checkLoginBtnVisible = async (): Promise<boolean> => {
@@ -521,13 +609,49 @@ import type { PageAdapter } from "./page-adapter";
     return null;
   }
 
+  /**
+   * What a login failure SOUNDS like, for pages whose markup gives us nothing to match.
+   *
+   * The class-name selectors below cover panels that name their error containers. Plenty do
+   * not: a styled-components or CSS-modules theme ships hashed class names ("sc-1yg9bob-0"),
+   * carries no role="alert", and renders the message as an ordinary toast — the
+   * Pterodactyl/Arix panel this was found on does exactly that, so every one of our
+   * selectors matched nothing and a rejected login looked like a quiet page.
+   *
+   * Deliberately phrase-specific rather than keyword-loose: "error" or "invalid" alone
+   * appears in plenty of innocent copy, and a false failure here costs three retries.
+   */
+  const LOGIN_ERROR_PATTERNS = [
+    String.raw`credentials?\s+(do(es)?\s+not\s+match|are\s+(incorrect|invalid)|were\s+(incorrect|invalid))`,
+    String.raw`(invalid|incorrect|wrong)\s+(username|user\s?name|email|password|credentials|login|account)`,
+    String.raw`(username|email|password)\s+(is\s+)?(invalid|incorrect|wrong)`,
+    String.raw`(login|log\s?in|sign\s?in|authentication)\s+(has\s+)?(failed|was\s+unsuccessful|unsuccessful)`,
+    String.raw`(failed|unable)\s+to\s+(log\s?in|sign\s?in|authenticate)`,
+    String.raw`no\s+account\s+(was\s+)?found`,
+    String.raw`too\s+many\s+(failed\s+)?(login\s+)?attempts`,
+    String.raw`account\s+(has\s+been\s+)?(locked|disabled|suspended|banned)`,
+    String.raw`(用户名|账号|賬號|帐号|邮箱|郵箱|密码|密碼)(或(密码|密碼))?\s*(错误|錯誤|不正确|不正確|无效|無效|有误|有誤)`,
+    String.raw`(登录|登陆|登入)\s*(失败|失敗|错误|錯誤)`,
+    String.raw`(验证码|驗證碼)\s*(错误|錯誤|不正确|不正確|已过期|已過期)`,
+    String.raw`(账号|帐号|賬號|账户|帳戶)\s*(已)?\s*(被)?\s*(锁定|鎖定|禁用|封禁|停用)`,
+  ];
+
   // Read a visible login error/alert message. Called RIGHT AFTER submit and
   // BEFORE dismissPopups — otherwise the popup cleanup clicks the alert's close
   // button (one panel's `auth-form-alert`) and erases the real reason, leaving
   // only a generic "login button still visible".
-  async function readLoginError(page: PageAdapter): Promise<string> {
+  async function readLoginError(page: PageAdapter, scanText = true): Promise<string> {
     try {
-      return (await page.evaluate(() => {
+      return (await page.evaluate((arg: unknown) => {
+        const { pats, scanText: scan } = arg as { pats: string[]; scanText: boolean };
+        const vis = (el: HTMLElement): boolean => {
+          const r = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          return (
+            r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden" &&
+            parseFloat(s.opacity || "1") > 0.05
+          );
+        };
         const sels = [
           ".auth-form-alert", "[role='alert']", ".alert-danger", ".alert-error",
           "[class*='error-message' i]", "[class*='login-error' i]", "[class*='form-error' i]",
@@ -535,16 +659,29 @@ import type { PageAdapter } from "./page-adapter";
         ];
         for (const sel of sels) {
           for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
-            const r = el.getBoundingClientRect();
-            const s = getComputedStyle(el);
-            if (r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden") {
-              const t = (el.textContent || "").trim();
-              if (t && t.length < 300) return t;
-            }
+            if (!vis(el)) continue;
+            const t = (el.textContent || "").trim();
+            if (t && t.length < 300) return t;
           }
         }
+        // Nothing named itself an error — go by what the page SAYS instead. Only the node
+        // that owns the text (few children), so the match is a message and not the whole
+        // document that happens to contain one.
+        if (!scan) return "";
+        const res = pats.map((p) => new RegExp(p, "i"));
+        const cands = document.querySelectorAll<HTMLElement>("div,span,p,li,strong,small,label,h1,h2,h3,h4");
+        const limit = Math.min(cands.length, 4000);
+        for (let i = 0; i < limit; i++) {
+          const el = cands[i];
+          if (el.children.length > 3) continue;
+          const t = (el.textContent || "").trim();
+          if (t.length < 4 || t.length > 200) continue;
+          if (!res.some((r) => r.test(t))) continue;
+          if (!vis(el)) continue;
+          return t;
+        }
         return "";
-      })) as string;
+      }, { pats: LOGIN_ERROR_PATTERNS, scanText } as never)) as string;
     } catch { return ""; }
   }
 
@@ -708,14 +845,15 @@ import type { PageAdapter } from "./page-adapter";
         await page.keyboard.press("Enter");
       }
 
-      // Wait for page to fully settle (URL stops changing) — up to 15 s
-      await waitForSettle(page, 8000);
-      // Read any login error, but DON'T run dismissPopups here: after submit it
-      // was clicking the site's own login-result alert (one panel's
-      // auth-form-alert), which erased the real reason and could reset the form /
-      // Turnstile. Overlays that block the FORM/captcha are already cleared before
-      // fill (dismissCookieConsent). Post-submit, we only observe — don't touch.
-      let submitError = await readLoginError(page);
+      // Watch from the moment of submit until the login resolves, instead of settling for a
+      // fixed few seconds and then looking once — a message that appears late, or one that
+      // removes itself after six seconds, is invisible to a single read.
+      //
+      // DON'T run dismissPopups here: after submit it was clicking the site's own
+      // login-result alert (one panel's auth-form-alert), which erased the real reason and
+      // could reset the form / Turnstile. Overlays that block the FORM/captcha are already
+      // cleared before fill (dismissCookieConsent). Post-submit, we only observe.
+      let submitError = (await awaitLoginResolution(page)).error;
       if (submitError) logger.warn({ submitError }, "Login page shows an error message after submit");
 
       // Check if a dialog popped up indicating captcha was required but not solved.
@@ -738,8 +876,7 @@ import type { PageAdapter } from "./page-adapter";
           if (!(await jsClickSubmit(page))) {
             await page.keyboard.press("Enter");
           }
-          await waitForSettle(page, 8000);
-          submitError = (await readLoginError(page)) || submitError;
+          submitError = (await awaitLoginResolution(page)).error || submitError;
           await dismissPopups(page);
         }
       }
@@ -779,6 +916,10 @@ import type { PageAdapter } from "./page-adapter";
               if (otpSubmit) await otpSubmit.click();
               else await page.keyboard.press("Enter");
               await waitForSettle(page, 12000);
+              // REPLACE, never merge: the message from the credentials step ("a verification
+              // code is required") describes a screen we have since passed, and an error is
+              // now decisive — carrying it forward would fail a 2FA login that worked.
+              submitError = await readLoginError(page);
               await dismissPopups(page);
             }
           }
@@ -792,15 +933,18 @@ import type { PageAdapter } from "./page-adapter";
       const detectSubmitSel =
         "button[type='submit'], input[type='submit'], button.login-btn, " +
         "button[class*='submit' i], button[class*='sign-in' i]";
-      const outcome = await detectLoginOutcome(page, targetUrl, successSelector, detectSubmitSel, successText);
-      logger.info({ url: page.url(), success: outcome.success, reason: outcome.reason }, "Form login outcome");
+      const outcome = await detectLoginOutcome(page, targetUrl, successSelector, detectSubmitSel, successText, submitError);
+      logger.info(
+        { url: page.url(), success: outcome.success, reason: outcome.reason, submitError: submitError || undefined },
+        "Form login outcome",
+      );
 
       return {
         success: outcome.success,
         captchaBlocked: false,
         message: outcome.success
           ? `Successfully logged in. ${outcome.reason}`
-          : `Login failed: ${outcome.reason}${submitError ? ` — site said: "${submitError}"` : ""}`,
+          : `Login failed: ${outcome.reason}`,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
