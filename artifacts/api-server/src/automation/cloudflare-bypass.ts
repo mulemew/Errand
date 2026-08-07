@@ -956,41 +956,13 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
       // The checkbox is a FIXED ~24px control after ~13px of padding, so its centre is
       // ~30px from the widget's left edge whatever the widget's width is. A proportional
       // offset lands in the padding and reads as "verification failed".
-      type Rect = { x: number; y: number; width: number; height: number };
-      const point = (r: Rect, from: string) => ({
+      const point = (r: DOMRect, from: string) => ({
         x: Math.round(r.x + Math.min(Math.max(r.width - 8, 8), 30)),
         y: Math.round(r.y + r.height / 2),
         from,
         box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
       });
-      const usable = (r: Rect) => r.width >= 20 && r.height >= 16;
-
-      /**
-       * Where inside this container does the widget actually sit?
-       *
-       * "30px in from the left edge" is only true of the WIDGET. Applied to a container that
-       * merely holds it — the full-page challenge centres a 300px widget inside an 896px
-       * block — it aims at empty space a couple of hundred pixels to the left of the
-       * checkbox, which is a click that lands on nothing and a box that never gets ticked.
-       *
-       * So ask the page instead of assuming an alignment. Sweeping elementFromPoint across
-       * the container's middle row returns the container itself over the empty part and the
-       * widget's own element (the shadow HOST, or the iframe) over the widget — and that
-       * element's rect is the real geometry, whatever the layout does.
-       */
-      const innerWidget = (c: Element, r: Rect): Rect | null => {
-        const y = r.y + r.height / 2;
-        const STEPS = 40;
-        for (let i = 1; i < STEPS; i++) {
-          const el = document.elementFromPoint(r.x + (r.width * i) / STEPS, y);
-          if (!el || el === c || !c.contains(el)) continue;
-          const rr = el.getBoundingClientRect();
-          // Must be genuinely narrower, or we have just found the container again by
-          // another name and would re-apply the same wrong offset.
-          if (usable(rr) && rr.width < r.width * 0.9) return rr;
-        }
-        return null;
-      };
+      const usable = (r: DOMRect) => r.width >= 20 && r.height >= 16;
 
       for (const f of Array.from(document.querySelectorAll("iframe"))) {
         const src = f.src || "";
@@ -1015,42 +987,21 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
       // Anything much wider is a container that merely CONTAINS it, and its left edge has
       // no relationship to where the checkbox sits. Prefer whatever is actually
       // widget-shaped, whichever selector found it.
-      const widgetShaped = (r: Rect) => r.width >= 140 && r.width <= 520 && r.height >= 40 && r.height <= 200;
+      const widgetShaped = (r: DOMRect) => r.width >= 140 && r.width <= 520 && r.height >= 40 && r.height <= 200;
       for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
         if (usable(r) && widgetShaped(r)) return point(r, `${from}:widget-shaped`);
       }
-      // Nothing is widget-shaped, so every candidate is a container. Before falling back to
-      // its geometry, look INSIDE it for the widget — this is the case the fallback used to
-      // get wrong, and it is also the common one on a full-page challenge.
-      for (const [c, from] of candidates) {
-        const r = c.getBoundingClientRect();
-        if (!usable(r)) continue;
-        const inner = innerWidget(c, r);
-        if (inner && widgetShaped(inner)) return point(inner, `${from}:probed`);
-      }
-      // Take the SMALLEST usable candidate rather than the first: the innermost box is the
-      // one most likely to be the widget, and picking by document order is what put a 896px
-      // wrapper in front of it in the first place.
-      let best: { r: Rect; from: string } | null = null;
+      // Nothing is the right shape. Take the SMALLEST usable candidate rather than the
+      // first: the innermost box is the one most likely to be the widget, and picking by
+      // document order is what put a 896px-wide wrapper in front of it in the first place.
+      let best: { r: DOMRect; from: string } | null = null;
       for (const [c, from] of candidates) {
         const r = c.getBoundingClientRect();
         if (!usable(r)) continue;
         if (!best || r.width * r.height < best.r.width * best.r.height) best = { r, from };
       }
-      if (!best) return null;
-      // Still a container, and the probe found nothing clickable in it. Aiming 30px from the
-      // left edge of something this wide is known to be wrong; a centred widget is what the
-      // challenge page actually renders, so aim there instead. A guess either way — but this
-      // one is the layout we have seen, and it is logged as a guess.
-      if (!widgetShaped(best.r)) {
-        const w = Math.min(best.r.width, 300);
-        return point(
-          { x: best.r.x + (best.r.width - w) / 2, y: best.r.y, width: w, height: best.r.height },
-          `${best.from}:assumed-centred`,
-        );
-      }
-      return point(best.r, `${best.from}:smallest`);
+      return best ? point(best.r, `${best.from}:smallest`) : null;
     },
     null,
   );
