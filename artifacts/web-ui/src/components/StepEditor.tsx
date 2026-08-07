@@ -438,7 +438,8 @@ function StepCard({
                     />
                     <p className="text-[10px] text-muted-foreground leading-snug">
                       CSS selector for an element visible only after login (e.g. avatar, logout button).
-                      If found after submit, login is confirmed successful regardless of URL changes.
+                      Once set, it decides the outcome: visible after submit means success, absent means
+                      failure — whatever the URL did.
                     </p>
                   </div>
                   {/* Success text */}
