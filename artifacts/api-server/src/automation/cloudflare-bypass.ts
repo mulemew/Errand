@@ -181,10 +181,16 @@ async function evalBounded<T>(page: PageAdapter, fn: unknown, fallback: T, ms = 
  * background ten pixels to its right, or on an overlay sitting on top of the widget. Every
  * diagnosis past that point has been inference.
  *
- * document.elementFromPoint answers it directly. Hit-testing retargets through a closed
- * shadow root to its HOST, so the widget's own container coming back IS the confirmation
- * that the point is over the widget: anything else — the challenge page's layout divs, the
- * body — means we are aiming at empty space.
+ * document.elementFromPoint is most of the answer, with one trap that has to be spelled out:
+ * hit-testing retargets through a closed shadow root to its HOST, and that host is the
+ * oversized CONTAINER (896x69, 740x71 on the two sites seen), not the 300x65 widget. So the
+ * container coming back does NOT mean the point is on the widget — every point across that
+ * whole width returns it, including the empty space beside the widget. Verified on
+ * nodeseek's login form: offsets 20 and 30 both "hit" the host, and so would offset 400.
+ *
+ * What it CAN say for certain is the negative: anything other than the container means we
+ * are outside the widget's container entirely. Reported as such, in those words, rather than
+ * as a confirmation it cannot give.
  *
  * Diagnostics only: bounded, never throws, and its answer is not acted on.
  */
@@ -204,9 +210,14 @@ async function describeAimPoint(page: PageAdapter, x: number, y: number): Promis
             'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
           );
           const host = resp?.parentElement ?? null;
-          if (host && (el === host || host.contains(el))) return `${name} — ON the widget`;
+          if (host && (el === host || host.contains(el))) {
+            const h = host.getBoundingClientRect();
+            // Say how far in we are, and how wide the thing is. A widget is ~300 wide, so an
+            // offset of 30 into a 740-wide host is the only part of this that is diagnostic.
+            return `${name} — inside the widget's CONTAINER (${Math.round(h.width)}x${Math.round(h.height)}), ${Math.round(ax - h.x)}px from its left edge; whether that is the widget itself this cannot tell`;
+          }
           const r = el.getBoundingClientRect();
-          return `${name} — NOT the widget (its box: ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
+          return `${name} — OUTSIDE the widget's container (its box: ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
         }) as never,
         { x, y } as never,
       ),
@@ -589,6 +600,36 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       };
     }
   }
+  // No checkbox element — but the WIDGET's own rectangle is still worth having, and a frame
+  // can give it even when its internal markup matches none of our selectors.
+  //
+  // This is the gap that matters. The main-document fallback derives coordinates from the
+  // response input's parent, and on both sites this was reported against, that parent is a
+  // container 2.5-3x wider than the widget (896x69 and 740x71 for a 300x65 control). "The
+  // checkbox is ~30px from the left edge" is a fact about the WIDGET; applied to a container
+  // it is only right when the widget happens to sit flush left, which is luck, not geometry.
+  //
+  // A frame's body IS the widget, in main-frame coordinates, so the same offset applied to
+  // it is correct wherever the container puts it.
+  for (const frame of frames) {
+    const body = await frame.$("body").catch(() => null);
+    if (!body) continue;
+    const box = await body.boundingBox?.().catch(() => null);
+    // Turnstile is a fixed-size control: ~300x65 normal, ~150x140 compact. Anything else is
+    // some other frame's document, and aiming into it would be worse than the fallback.
+    if (!box || box.width < 140 || box.width > 520 || box.height < 40 || box.height > 200) continue;
+    logger.debug(
+      { frameUrl: (() => { try { return frame.url().slice(0, 120); } catch { return "?"; } })(), box },
+      "No checkbox element, but this frame IS the widget — using its own rectangle",
+    );
+    return {
+      x: box.x + Math.min(Math.max(box.width - 8, 8), 30),
+      y: box.y + box.height / 2,
+      from: "frame:body",
+      box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
+    };
+  }
+
   // Nothing anywhere — say what WAS there, so the next report names the frames instead of
   // just "not found".
   logger.debug(
