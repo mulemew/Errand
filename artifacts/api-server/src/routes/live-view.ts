@@ -3,7 +3,8 @@ import type { Server } from "http";
 import net from "net";
 import { logger } from "../lib/logger";
 import { db, providersTable, tasksTable, eq } from "@workspace/db";
-import { getTaskView } from "../lib/taskViews";
+import { getView, taskViewKey } from "../lib/taskViews";
+import { getInstance } from "../lib/browserInstances";
 
 /**
  * Live view of a provider's browser, served THROUGH this app.
@@ -25,16 +26,28 @@ const VNC_PORT = Number(process.env.CAMOUFOX_VNC_PORT ?? 7900);
 /**
  * Where to point the proxy.
  *
- * The id is either a provider ("7" — the container's shared display, which shows every
- * concurrent run at once) or a task ("task-37" — that run's OWN display, which is what you
- * almost always want). A task with no session running falls back to its provider's shared
- * display, so the button works whether or not the task is mid-run.
+ * The id is a provider ("7" — the container's shared display, which shows every concurrent
+ * run at once), a task ("task-37"), or a hand-started browser ("bi_…"). The last two name a
+ * session's OWN display, which is what you almost always want. Either falls back to the
+ * provider's shared display when no session of its own exists, so the button works whether
+ * or not something is currently running.
  */
 async function liveViewTarget(id: string): Promise<{ host: string; port: number } | null> {
+  // A browser opened by hand from the Browsers page. It registers its own display under its
+  // instance id, exactly as a run does — this used to point at the provider's container-wide
+  // display instead, which nothing renders on, so the viewer connected and stayed black.
+  if (id.startsWith("bi_")) {
+    const own = getView(id);
+    if (own) return own;
+    // Still starting, or the sidecar had no display left and put it on the shared :99.
+    const inst = getInstance(id);
+    return inst?.providerId ? providerTarget(inst.providerId) : null;
+  }
+
   const taskMatch = id.match(/^task-(\d+)$/);
   if (taskMatch) {
     const taskId = Number(taskMatch[1]);
-    const own = getTaskView(taskId);
+    const own = getView(taskViewKey(taskId));
     if (own) return own;
     // Not running (or the sidecar could not give it a display): fall back to whichever
     // provider this task uses.

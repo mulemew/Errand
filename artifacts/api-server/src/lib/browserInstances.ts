@@ -1,6 +1,7 @@
 import { createBrowserProvider, type BrowserProvider, type BrowserProviderConfig } from "../automation/browser-provider";
 import type { PageAdapter } from "../automation/page-adapter";
 import { logger } from "../lib/logger";
+import { clearView } from "../lib/taskViews";
 
 /**
  * Long-lived browsers you drive by hand.
@@ -57,8 +58,12 @@ export async function launchInstance(opts: {
   startUrl?: string;
 }): Promise<BrowserInstance> {
   let dumper: (() => Promise<unknown>) | null = null;
+  // The id has to exist BEFORE the browser starts: it is also the name the sidecar's
+  // per-session display gets registered under, and that registration happens during launch.
+  const id = `bi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const config: BrowserProviderConfig = {
     ...opts.config,
+    viewKey: id,
     // Same hook the runner uses to persist cookie-mode sessions; here it is what lets a
     // hand-driven login be saved as a profile.
     onContextReady: (d: () => Promise<unknown>) => {
@@ -74,7 +79,6 @@ export async function launchInstance(opts: {
     });
   }
 
-  const id = `bi_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const inst: BrowserInstance = {
     id,
     name: opts.name,
@@ -103,6 +107,7 @@ export async function stopInstance(id: string): Promise<boolean> {
   const inst = instances.get(id);
   if (!inst) return false;
   instances.delete(id);
+  clearView(id);
   try {
     await inst.provider.close();
   } catch (err) {

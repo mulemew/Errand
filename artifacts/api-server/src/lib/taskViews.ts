@@ -1,24 +1,31 @@
 /**
- * Where to watch a given task's browser.
+ * Where to watch a given browser.
  *
  * Each camoufox session now gets its own Xvfb and its own websockify port, so "watch this
- * task" means proxying THAT port rather than the container-wide one. The sidecar reports
- * the port when the session launches; this remembers which task it belongs to for as long
- * as the run lasts.
+ * one" means proxying THAT port rather than the container-wide one. The sidecar reports the
+ * port when the session launches; this remembers who it belongs to for as long as it lasts.
+ *
+ * Keyed by a string rather than a task id because not every browser belongs to a task: the
+ * Browsers page opens sessions by hand ("bi_…"), and they need watching just as much.
  *
  * In memory and deliberately lossy: it describes a live process. A missing entry simply
  * means "no session of its own right now", and the caller falls back to the shared display.
  */
-const views = new Map<number, { host: string; port: number }>();
+const views = new Map<string, { host: string; port: number }>();
 
-export function setTaskView(taskId: number, host: string, port: number): void {
-  views.set(taskId, { host, port });
+export function setView(key: string, host: string, port: number): void {
+  views.set(key, { host, port });
 }
 
-export function getTaskView(taskId: number): { host: string; port: number } | undefined {
-  return views.get(taskId);
+export function getView(key: string): { host: string; port: number } | undefined {
+  return views.get(key);
 }
 
-export function clearTaskView(taskId: number): void {
-  views.delete(taskId);
+export function clearView(key: string): void {
+  views.delete(key);
+}
+
+/** The key a task's own session is registered under — the one key shape we mint ourselves. */
+export function taskViewKey(taskId: number): string {
+  return `task-${taskId}`;
 }

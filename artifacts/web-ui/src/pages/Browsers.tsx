@@ -301,7 +301,9 @@ export default function Browsers() {
           <p className="text-xs text-muted-foreground px-1 pb-2">{t.liveViewHint}</p>
           {viewing && (
             <iframe
-              src={`${BASE}/api/live-view/${viewing.providerId}/`}
+              // THIS instance's own display. Asking for the provider showed the sidecar's
+              // shared screen, where nothing is drawn — a black rectangle, every time.
+              src={`${BASE}/api/live-view/${viewing.id}/`}
               title={t.liveViewTitle}
               className="w-full rounded border border-border bg-black"
               style={{ height: "70vh" }}

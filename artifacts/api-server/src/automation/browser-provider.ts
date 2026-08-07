@@ -1,6 +1,6 @@
 import { logger } from "../lib/logger";
 import { currentTaskId } from "../lib/taskContext";
-import { setTaskView, clearTaskView } from "../lib/taskViews";
+import { setView, clearView, taskViewKey } from "../lib/taskViews";
 import { SeleniumBaseProvider } from "./seleniumbase-adapter";
 import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, firefox } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
@@ -111,6 +111,16 @@ export interface BrowserProviderConfig {
      * successful cookie-mode login. Only wired for the Playwright/local providers.
      */
     onContextReady?: (dumpStorageState: () => Promise<unknown>) => void;
+    /**
+     * Name this browser's live view is registered under.
+     *
+     * A task run gets one implicitly from the ambient task context ("task-37"), which is
+     * how the task page can watch its own session rather than the container-wide display.
+     * A browser started by hand from the Browsers page has no task, so it must say who it
+     * is — without this its session still got a private display, and the viewer pointed at
+     * the shared one, which shows nothing: a black screen.
+     */
+    viewKey?: string;
     /**
      * Ignore HTTPS certificate errors (self-signed, expired, etc.).
      * ─ Playwright: applied via newContext({ ignoreHTTPSErrors }) — universal.
@@ -747,7 +757,8 @@ class CamoufoxProvider implements BrowserProvider {
 
   private async release(id: string): Promise<void> {
     const _tid = currentTaskId();
-    if (_tid != null) clearTaskView(_tid);
+    if (this.config.viewKey) clearView(this.config.viewKey);
+    else if (_tid != null) clearView(taskViewKey(_tid));
     try {
       await fetch(`${this.baseUrl}/release`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
@@ -795,13 +806,17 @@ class CamoufoxProvider implements BrowserProvider {
     const { id, ws, viewPort } = (await res.json()) as { id: string; ws: string; viewPort?: number | null };
     const wsUrl = reachableCamoufoxWs(ws, this.baseUrl);
 
-    // Remember where THIS run can be watched. Each session has its own display now, so the
-    // task page can show just this browser instead of every concurrent one at once. The
-    // task id comes from the ambient run context — nothing down here knows about tasks.
-    const _watchTaskId = currentTaskId();
-    if (_watchTaskId != null && viewPort) {
+    // Remember where THIS session can be watched. Each one has its own display now, so a
+    // viewer can show just this browser instead of every concurrent one at once.
+    //
+    // Two ways to be identified: a run takes its key from the ambient task context (nothing
+    // down here knows about tasks), and a hand-started browser passes viewKey explicitly.
+    // Without the second, an instance from the Browsers page registered nothing and the
+    // viewer fell back to the container-wide display — which is empty, hence a black screen.
+    const _viewKey = this.config.viewKey ?? (currentTaskId() != null ? taskViewKey(currentTaskId()!) : null);
+    if (_viewKey && viewPort) {
       try {
-        setTaskView(_watchTaskId, new URL(this.baseUrl).hostname, viewPort);
+        setView(_viewKey, new URL(this.baseUrl).hostname, viewPort);
       } catch { /* a malformed base URL is not worth failing a run over */ }
     }
 
