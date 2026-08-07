@@ -172,6 +172,51 @@ async function evalBounded<T>(page: PageAdapter, fn: unknown, fallback: T, ms = 
   }
 }
 
+/**
+ * What is actually under the point we are about to click?
+ *
+ * The one question the logs could never answer. We log the coordinates we AIMED at, and the
+ * box we derived them from, and then nothing — so when a widget does not react there is no
+ * way to tell a click that landed on the checkbox from one that landed on the page
+ * background ten pixels to its right, or on an overlay sitting on top of the widget. Every
+ * diagnosis past that point has been inference.
+ *
+ * document.elementFromPoint answers it directly. Hit-testing retargets through a closed
+ * shadow root to its HOST, so the widget's own container coming back IS the confirmation
+ * that the point is over the widget: anything else — the challenge page's layout divs, the
+ * body — means we are aiming at empty space.
+ *
+ * Diagnostics only: bounded, never throws, and its answer is not acted on.
+ */
+async function describeAimPoint(page: PageAdapter, x: number, y: number): Promise<string> {
+  try {
+    return (await Promise.race([
+      page.evaluate(
+        ((arg: unknown) => {
+          const { x: ax, y: ay } = arg as { x: number; y: number };
+          const el = document.elementFromPoint(ax, ay);
+          if (!el) return "nothing (outside the viewport?)";
+          const name =
+            el.tagName.toLowerCase() +
+            (el.id ? `#${el.id}` : "") +
+            (typeof el.className === "string" && el.className ? `.${el.className.trim().split(/\s+/)[0]}` : "");
+          const resp = document.querySelector(
+            'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+          );
+          const host = resp?.parentElement ?? null;
+          if (host && (el === host || host.contains(el))) return `${name} — ON the widget`;
+          const r = el.getBoundingClientRect();
+          return `${name} — NOT the widget (its box: ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
+        }) as never,
+        { x, y } as never,
+      ),
+      new Promise<string>((r) => setTimeout(() => r("(aim probe timed out)"), 3000)),
+    ])) as string;
+  } catch {
+    return "(aim probe failed)";
+  }
+}
+
 // ── Backend flavour ───────────────────────────────────────────────────────────
 
 /** Camoufox is a patched FIREFOX. Chromium-only tricks (window.chrome, the Network
@@ -1134,6 +1179,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
           from: target.from,
           box: target.box,
           viaFrame: target.from.indexOf("frame:") === 0,
+          // What is really there. Without this the next failure is another round of
+          // inference from coordinates that LOOK right.
+          under: await describeAimPoint(page, x, y),
         },
         "Clicking Turnstile checkbox",
       );
