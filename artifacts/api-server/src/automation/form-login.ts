@@ -197,8 +197,63 @@ import type { PageAdapter } from "./page-adapter";
     return { error: await readLoginError(page), formGone: !(await loginFormEvidence(page)) };
   }
 
+  /** How long a success criterion gets to show up before we call it absent. */
+  const CRITERION_WAIT_MS = Math.max(2000, Number(process.env.LOGIN_CRITERION_WAIT_MS ?? 10_000));
+
+  /**
+   * Wait for the caller's own definition of success — their text, their selector, or either.
+   *
+   * Checked repeatedly rather than once, because the criterion describes the page login
+   * LANDS on and that page usually arrives via a redirect: a single look immediately after
+   * submit reports "not there" about a page that had not loaded yet.
+   *
+   * The text match is deliberately forgiving. It used to be `innerText.includes(needle)`,
+   * raw — so "Dashboard" missed a page rendering "dashboard", and a needle typed with a
+   * double space missed a page with one. Nobody who sets this expects to be matching
+   * whitespace exactly; case and run-length are noise, and ignoring them cannot make an
+   * absent phrase present.
+   *
+   * Returns the evidence, or "" if it never appeared.
+   */
+  async function waitForSuccessCriterion(
+    page: PageAdapter,
+    selector?: string,
+    text?: string,
+    maxMs = CRITERION_WAIT_MS,
+  ): Promise<string> {
+    const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+    const needle = text ? squash(text) : "";
+    const deadline = Date.now() + maxMs;
+    for (;;) {
+      if (needle) {
+        try {
+          const body = (await page.evaluate(() => document.body?.innerText ?? "")) as string;
+          if (squash(body).includes(needle)) return `Found the success text: "${text}"`;
+        } catch { /* mid-navigation — try again on the next pass */ }
+      }
+      if (selector) {
+        try {
+          const el = await page.$(selector);
+          const visible = el
+            ? ((await el.evaluate((e: Element) => {
+                const style = window.getComputedStyle(e);
+                const rect = e.getBoundingClientRect();
+                return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
+              })) as boolean)
+            : false;
+          if (visible) return `The success selector "${selector}" is visible`;
+        } catch { /* invalid selector or a detached element — treat as not found */ }
+      }
+      if (Date.now() >= deadline) return "";
+      await sleep(500);
+    }
+  }
+
   /**
    * Determine whether login succeeded by inspecting the page state.
+   *
+   * Only consulted when the caller gave NO success criterion of their own — when they did,
+   * that answer is the whole verdict.
    *
    * Ordered so that success needs POSITIVE evidence. It used to be the other way round —
    * "the URL changed" and even "no error was recognised" were enough — and both are true of
@@ -206,7 +261,6 @@ import type { PageAdapter } from "./page-adapter";
    * satisfies "URL changed" before a single credential is typed, so every failed attempt
    * against it was reported as `Successfully logged in. Navigated to: …/auth/login`.
    *
-   * 0. Caller's own successSelector / successText → success (explicit intent wins)
    * 1. The site said something went wrong          → failure
    * 2. The login form is still on screen           → failure
    * 3. URL left the login page                     → success
@@ -221,32 +275,37 @@ import type { PageAdapter } from "./page-adapter";
     submitSel?: string,
     successText?: string,
     submitError?: string,
+    /**
+     * The criterion was ALREADY satisfied on the login page, before anything was submitted.
+     * Then it says nothing about whether we logged in — most often a site name or a nav item
+     * that is on every page, including the one we are trying to leave — so it is ignored and
+     * the heuristics below decide. Refusing outright would be wrong too: the login may well
+     * have worked.
+     */
+    criterionWasAlreadyTrue?: boolean,
   ): Promise<{ success: boolean; reason: string }> {
     const normalize = (u: string) => u.replace(/\/+$/, "").split("?")[0].split("#")[0];
 
-    // 0a. User-defined success text
-      if (successText) {
-        try {
-          const bodyText = await page.evaluate(() => document.body.innerText) as string;
-          if (bodyText.includes(successText)) return { success: true, reason: `Found text: "${successText}"` };
-        } catch { /* ignore */ }
-      }
-
-      // 0. User-defined success selector — definitive positive signal
-    if (successSelector) {
-      try {
-        const el = await page.$(successSelector);
-        if (el) {
-          const visible = await el.evaluate((e: Element) => {
-            const style = window.getComputedStyle(e);
-            const rect = e.getBoundingClientRect();
-            return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-          }) as boolean;
-          if (visible) return { success: true, reason: `Success selector "${successSelector}" is visible` };
-        }
-      } catch {
-        // Invalid selector or element not found — fall through
-      }
+    // 0. The caller said what success looks like — so it decides, BOTH ways.
+    //
+    //    This used to be a positive signal only: present meant success, absent meant fall
+    //    through to the guesswork below. Which makes the setting almost useless in the case
+    //    people reach for it — someone who has already seen a false success sets a success
+    //    text precisely to stop it, and absent-means-keep-guessing let the very next
+    //    heuristic ("the URL changed") declare success anyway. A criterion that cannot
+    //    refuse is not a criterion.
+    const wantText = successText?.trim();
+    const wantSelector = successSelector?.trim();
+    if ((wantText || wantSelector) && !criterionWasAlreadyTrue) {
+      const found = await waitForSuccessCriterion(page, wantSelector, wantText);
+      if (found) return { success: true, reason: found };
+      return {
+        success: false,
+        reason:
+          `The success criterion never appeared — ${wantText ? `text "${wantText}"` : `selector "${wantSelector}"`} ` +
+          `was not on the page ${Math.round(CRITERION_WAIT_MS / 1000)}s after submitting. URL: ${page.url()}` +
+          (submitError ? ` The site said: "${submitError}"` : ""),
+      };
     }
 
     const finalUrl = page.url();
@@ -840,6 +899,23 @@ import type { PageAdapter } from "./page-adapter";
         logger.warn("Captcha detected but not solved — attempting login anyway");
       }
 
+      // Does the success criterion already hold on the LOGIN page? Asked here, while we are
+      // still definitely logged out, because the answer decides whether it can be used as
+      // proof afterwards. A criterion that was true before we submitted proves nothing —
+      // "Heaven Cloud" in the header is on the login page too — and now that the criterion
+      // is authoritative, believing it would turn every failed attempt into a success.
+      const criterionWasAlreadyTrue = !!(
+        (successText?.trim() || successSelector?.trim()) &&
+        (await waitForSuccessCriterion(page, successSelector?.trim(), successText?.trim(), 0))
+      );
+      if (criterionWasAlreadyTrue) {
+        logger.warn(
+          { targetUrl, successText, successSelector },
+          "The login success criterion is already satisfied on the login page — it cannot prove a login, " +
+            "so the outcome will be judged without it. Pick something that only exists once signed in.",
+        );
+      }
+
       // ── 3. Submit — click the real login control, else press Enter ────────
       if (!(await jsClickSubmit(page))) {
         await page.keyboard.press("Enter");
@@ -933,9 +1009,17 @@ import type { PageAdapter } from "./page-adapter";
       const detectSubmitSel =
         "button[type='submit'], input[type='submit'], button.login-btn, " +
         "button[class*='submit' i], button[class*='sign-in' i]";
-      const outcome = await detectLoginOutcome(page, targetUrl, successSelector, detectSubmitSel, successText, submitError);
+      const outcome = await detectLoginOutcome(
+        page, targetUrl, successSelector, detectSubmitSel, successText, submitError, criterionWasAlreadyTrue,
+      );
       logger.info(
-        { url: page.url(), success: outcome.success, reason: outcome.reason, submitError: submitError || undefined },
+        {
+          url: page.url(),
+          success: outcome.success,
+          reason: outcome.reason,
+          submitError: submitError || undefined,
+          criterionWasAlreadyTrue: criterionWasAlreadyTrue || undefined,
+        },
         "Form login outcome",
       );
 
