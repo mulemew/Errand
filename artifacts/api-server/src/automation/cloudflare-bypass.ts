@@ -560,6 +560,24 @@ const CF_PROBE_FN = () => {
   const bodyText = document.body?.innerText ?? "";
   const title = document.title ?? "";
 
+  // ── Cloudflare's own account of the page, from the object its inline script writes.
+  //
+  // Worth more than everything below it. Every one of the markers we look for lives in the
+  // light DOM, and the current challenge platform (cvId 3) puts NONE of them there — the
+  // widget, its response input and its iframe are all injected into a CLOSED shadow root, so
+  // a page that is unmistakably a challenge answers "no" to every question we ask. This
+  // object is in the page's own script, always reachable, and carries the one fact the DOM
+  // will not give up: cType, which is "interactive" when there is a box to click.
+  let chlPresent = false;
+  let chlType = "";
+  try {
+    const opt = (window as unknown as { _cf_chl_opt?: Record<string, unknown> })._cf_chl_opt;
+    if (opt && typeof opt === "object") {
+      chlPresent = true;
+      chlType = String(opt.cType ?? "");
+    }
+  } catch { /* not a challenge page, or it has been torn down */ }
+
   // ── WAF block — "Sorry, you have been blocked". Not a challenge: no browser
   // technique clears it, the IP/fingerprint is refused at the edge.
   const blocked =
@@ -595,10 +613,11 @@ const CF_PROBE_FN = () => {
     );
   const marker =
     !siteContent &&
-    !!document.querySelector(
-      'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
-        'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
-    );
+    (chlPresent ||
+      !!document.querySelector(
+        'input[id^="cf-chl-widget-"][id$="_response"], [name="cf-turnstile-response"], ' +
+          'script[src*="challenges.cloudflare.com"], [id^="cf-chl-widget"]',
+      ));
 
   // ── Legacy overlay markup, still used by older challenge pages.
   const legacy = [
@@ -632,7 +651,7 @@ const CF_PROBE_FN = () => {
     ["challenges.cloudflare.com", "cf-turnstile"].some((pat) => (f.src ?? "").includes(pat)),
   );
 
-  return { blocked, marker, legacy, title, visibleWidget, turnstileIframe };
+  return { blocked, marker, legacy, title, visibleWidget, turnstileIframe, chlPresent, chlType };
 };
 
 type CfPageProbe = {
@@ -642,6 +661,10 @@ type CfPageProbe = {
   title: string;
   visibleWidget: boolean;
   turnstileIframe: boolean;
+  /** window._cf_chl_opt exists — this page IS a Cloudflare challenge, whatever it renders. */
+  chlPresent: boolean;
+  /** Its cType: "interactive" (a box to click), "non-interactive", "managed", or "". */
+  chlType: string;
 };
 
 async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
@@ -697,6 +720,16 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // From here on it is a FULL-PAGE challenge (embedded/popup widgets returned "none" via
   // the site-content guard and are handled by the token path). A visible box means there
   // is something to click; otherwise it is a self-verifying challenge we can only wait on.
+
+  // Cloudflare already said which kind this is — no inference beats that. "interactive" is
+  // the one with a checkbox; everything below this line is us trying to guess the same fact
+  // from markup the current challenge platform keeps in a closed shadow root.
+  const cType = probe.chlType.toLowerCase();
+  if (cType === "interactive" || cType === "captcha") {
+    logger.debug({ title: probe.title, via: `_cf_chl_opt.cType=${cType}` }, "CF challenge classified as turnstile_click");
+    return "turnstile_click";
+  }
+
   if (probe.visibleWidget) {
     logger.debug({ title: probe.title, via: "visibleWidget" }, "CF challenge classified as turnstile_click");
     return "turnstile_click";
@@ -712,9 +745,30 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   } catch {
     // frames() may not be available on every adapter
   }
-  const _verdict = probe.turnstileIframe ? "turnstile_click" : "js_challenge";
-  logger.debug({ title: probe.title, via: probe.turnstileIframe ? "light-DOM iframe" : "no widget found" }, `CF challenge classified as ${_verdict}`);
-  return _verdict;
+  if (probe.turnstileIframe) {
+    logger.debug({ title: probe.title, via: "light-DOM iframe" }, "CF challenge classified as turnstile_click");
+    return "turnstile_click";
+  }
+
+  // Last resort, and only when Cloudflare did NOT tell us: ask whether a checkbox actually
+  // exists. This is the honest version of the frame-URL test — a full-page interstitial
+  // serves its widget frame from the site's own origin under /cdn-cgi/challenge-platform/,
+  // which a non-interactive challenge also loads, so the URL cannot separate them. What
+  // separates them is whether that frame CONTAINS something to click, which is exactly the
+  // question locateCheckboxInCfFrame answers.
+  //
+  // Skipped when cType says "non-interactive": there is nothing to find, and this walks
+  // several selectors across every frame on a page Cloudflare is watching.
+  if (!cType || cType === "managed") {
+    const target = await locateCheckboxInCfFrame(page).catch(() => null);
+    if (target) {
+      logger.debug({ title: probe.title, via: `checkbox in ${target.from}` }, "CF challenge classified as turnstile_click");
+      return "turnstile_click";
+    }
+  }
+
+  logger.debug({ title: probe.title, cType: cType || undefined, via: "no widget found" }, "CF challenge classified as js_challenge");
+  return "js_challenge";
 }
 
 // ── Turnstile solved state check ────────────────────────────────────────────

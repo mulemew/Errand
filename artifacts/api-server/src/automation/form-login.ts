@@ -797,6 +797,14 @@ import type { PageAdapter } from "./page-adapter";
                 "input[type='password'], input[name='email'], input[name='username']",
               );
               if (hasForm) return false;
+              // window._cf_chl_opt first: the current challenge platform puts the widget,
+              // its response input and its iframe inside a CLOSED shadow root, so none of
+              // the selectors below exist on a page that is nothing BUT a challenge. Going
+              // by them alone, we answered "not blocked" and then reported the real problem
+              // as "could not find username/email input field on the page".
+              try {
+                if ((window as unknown as { _cf_chl_opt?: unknown })._cf_chl_opt) return true;
+              } catch { /* fall through to the markup probes */ }
               return !!document.querySelector(
                 'input[id^="cf-chl-widget-"][id$="_response"], #challenge-stage, ' +
                   '#challenge-running, .cf-browser-verification',
