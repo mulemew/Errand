@@ -433,12 +433,13 @@ async function physicalClickTurnstile(page: PageAdapter): Promise<boolean> {
   // Get Turnstile iframe coordinates via JS injection
   const coords = await page.evaluate(() => {
     // The Cloudflare Turnstile checkbox is a FIXED-size control (~24px) sitting
-    // after ~13px of left padding, so its centre is ~30px from the widget's left
-    // edge REGARDLESS of the widget's total width. A proportional offset
-    // (width * 0.06 → 14-18px) lands in the padding to the LEFT of the checkbox
-    // and misses it, which reads as "verification failed" / an unchecked box.
-    // Use a fixed ~30px offset (clamped for unusually narrow widgets).
-    const checkboxOffsetX = (r: DOMRect) => Math.round(Math.min(r.width - 8, 30));
+    // after ~13px of left padding, so its centre is a fixed distance from the
+    // widget's left edge REGARDLESS of the widget's total width. A proportional
+    // offset (width * 0.06 → 14-18px) lands in the padding to the LEFT of the
+    // checkbox and misses it, which reads as "verification failed" / an unchecked
+    // box. 22px is measured off two live widgets — see point() in
+    // locateTurnstileCheckbox; the 30px this used to be sat on the box's right edge.
+    const checkboxOffsetX = (r: DOMRect) => Math.round(Math.min(r.width - 8, 22));
     // First try iframes
     const iframes = document.querySelectorAll("iframe");
     for (let i = 0; i < iframes.length; i++) {
@@ -643,7 +644,9 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       "No checkbox element, but this frame IS the widget — using its own rectangle",
     );
     return {
-      x: box.x + Math.min(Math.max(box.width - 8, 8), 30),
+      // Same measured offset as point() in locateTurnstileCheckbox — and here it is applied
+      // to the widget's OWN rectangle, which is what it was always a fact about.
+      x: box.x + Math.min(Math.max(box.width - 8, 8), 22),
       y: box.y + box.height / 2,
       from: "frame:body",
       box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
@@ -1059,11 +1062,17 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
   return evalBounded<CheckboxTarget | null>(
     page,
     () => {
-      // The checkbox is a FIXED ~24px control after ~13px of padding, so its centre is
-      // ~30px from the widget's left edge whatever the widget's width is. A proportional
-      // offset lands in the padding and reads as "verification failed".
+      // The checkbox is a FIXED control — the widget is always ~300x65 whatever the page or
+      // the viewport does — so its centre is a fixed distance from the widget's left edge,
+      // and a proportional offset lands in the padding and reads as "verification failed".
+      //
+      // 22px, measured rather than assumed: rendering the computed point as a marker over
+      // two live widgets (nodeseek's login form, hub.weirdhost's full-page challenge) put
+      // the old 30px hard on the checkbox's RIGHT EDGE with roughly half the marker hanging
+      // off the control, while 22px sat centred. 30 was inside the box on a good day — and
+      // the caller adds ±2px of jitter on top.
       const point = (r: DOMRect, from: string) => ({
-        x: Math.round(r.x + Math.min(Math.max(r.width - 8, 8), 30)),
+        x: Math.round(r.x + Math.min(Math.max(r.width - 8, 8), 22)),
         y: Math.round(r.y + r.height / 2),
         from,
         box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
