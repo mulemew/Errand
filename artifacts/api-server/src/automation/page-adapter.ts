@@ -69,6 +69,18 @@ export interface PageAdapter {
   waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter>;
   /** Returns true if the underlying page has been closed / detached. */
   isClosed(): boolean;
+  /**
+   * Drop every cookie in this browser context.
+   *
+   * For the moment cookie mode has PROBED a restored session and found it dead. Those
+   * cookies have no value from then on — we are about to log in from scratch — and they can
+   * actively break that login: a server that binds its CSRF token to the session sees a
+   * session it does not recognise and answers "CSRF token mismatch", which is not a thing a
+   * human hits because a human arrives with no session at all.
+   *
+   * Optional: the cf-proxy adapter has no equivalent.
+   */
+  clearCookies?(): Promise<void>;
   /** Raise/activate this page's window. Turnstile checks document.hasFocus(), and the
    *  camoufox sidecar runs every concurrent session's headful Firefox on ONE Xvfb — so
    *  without this only one window is focused and the rest fail the interactive check.
@@ -319,6 +331,7 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
       down: () => page.mouse.down(),
       up: () => page.mouse.up(),
     },
+    clearCookies: async () => { await page.context().clearCookies(); },
     bringToFront: () => page.bringToFront(),
     viewport: () => page.viewportSize(),
     frames: () => page.frames().map(wrapPlaywrightFrame),

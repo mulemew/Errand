@@ -742,6 +742,26 @@ async function executeStep(
             return { message: "Session restored from saved cookies — login skipped" };
           }
           logger.info({ taskId, stepIndex }, "Cookie mode — no valid session, performing full login");
+          // Drop the dead session before logging in on top of it.
+          //
+          // The probe above just decided these cookies do not authenticate us. They have no
+          // value from here on — a full login follows — and they can actively break it: a
+          // server that ties its CSRF token to the session sees one it does not recognise and
+          // answers "CSRF token mismatch" on the very first submit. A human never hits that,
+          // because a human arrives with no session at all. Reported on
+          // control.heavencloud.in, whose login is an XHR carrying the token from the page's
+          // csrf-token meta.
+          //
+          // formLogin navigates to the login URL itself immediately after, so the page (and
+          // its token) is refetched against the fresh session rather than the discarded one.
+          if (page.clearCookies) {
+            try {
+              await page.clearCookies();
+              logger.info({ taskId, stepIndex }, "Cookie mode — discarded the invalid session's cookies");
+            } catch (clrErr) {
+              logger.warn({ taskId, stepIndex, clrErr }, "Could not clear the invalid session's cookies — logging in with them still present");
+            }
+          }
         } catch (probeErr) {
           logger.warn({ taskId, stepIndex, probeErr }, "Cookie-mode session probe failed — performing full login");
         }
