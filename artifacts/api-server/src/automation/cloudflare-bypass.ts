@@ -318,8 +318,10 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
       const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number; el: string }> };
       const ev = w.__waIn ?? [];
       if (ev.length === 0) return "the page received NOTHING";
-      const moves = ev.filter((e) => e.t === "mousedown" ? false : e.t === "mousemove");
+      const moves = ev.filter((e) => e.t === "mousemove");
       const down = ev.find((e) => e.t === "mousedown");
+      const up = ev.find((e) => e.t === "mouseup");
+      const clicked = ev.find((e) => e.t === "click");
       const last = moves[moves.length - 1];
       // The TARGET is the discriminator, not the presence of the event. A closed shadow root
       // retargets to its host, so a press that landed on the checkbox inside the widget shows
@@ -332,13 +334,19 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
         ? (resp.parentElement.tagName.toLowerCase() +
            (resp.parentElement.id ? `#${resp.parentElement.id}` : ""))
         : "(no widget host)";
+      // The WHOLE sequence. A browser only synthesises `click` when mousedown and mouseup
+      // land on the same element — and `click` (or pointerdown) is what a checkbox listens
+      // for, not a bare mousedown. So "mousedown arrived" is not the same as "it was
+      // clicked", and reporting only the mousedown hid the difference: a press and release
+      // that drift apart produce every event below EXCEPT click, and the widget stays
+      // untouched without anything having gone wrong that a coordinate can explain.
       return (
         `${moves.length} mousemove${moves.length === 1 ? "" : "s"}` +
         (last ? ` (last at ${last.x},${last.y} on ${last.el})` : "") +
-        (down
-          ? `, mousedown at ${down.x},${down.y} received by ${down.el}`
-          : ", no mousedown reached this document") +
-        ` — the widget's host element is ${hostName}`
+        (down ? `, mousedown ${down.x},${down.y} on ${down.el}` : ", NO mousedown") +
+        (up ? `, mouseup ${up.x},${up.y} on ${up.el}` : ", NO mouseup") +
+        (clicked ? `, click on ${clicked.el}` : ", NO CLICK EVENT") +
+        ` — widget host is ${hostName}`
       );
     },
     "(probe unreadable)",
