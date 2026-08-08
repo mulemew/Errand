@@ -77,6 +77,23 @@ def _build_options(body: dict) -> dict:
         "geoip": True,
         "humanize": _bodyflag("humanize", "CAMOUFOX_HUMANIZE", True),
         "block_webrtc": _bodyflag("blockWebrtc", "CAMOUFOX_BLOCK_WEBRTC", True),
+        # Keep cross-origin iframes IN THIS PROCESS.
+        #
+        # Fission (site isolation) puts a cross-origin iframe in its own content process, and
+        # Playwright's Firefox backend cannot reach into one: page.frames() lists them with an
+        # EMPTY url, every read of them times out, and — the part that actually breaks
+        # automation — synthesized input does not route into them. A Turnstile click then
+        # lands on whatever in-process element sits behind the widget instead of on the
+        # checkbox. Measured on hub.weirdhost.xyz: the cursor arrives on the box, the press is
+        # dispatched at the right coordinates, and the page reports "mousedown ... in the MAIN
+        # document, not the widget".
+        #
+        # Turnstile is ALWAYS a cross-origin iframe, so this affects every challenge we try to
+        # click. Not a fingerprinting concern: process architecture is not visible to page JS.
+        "firefox_user_prefs": {
+            "fission.autostart": False,
+            "fission.webContentIsolationStrategy": 0,
+        },
     }
     # Extra camoufox knobs, opt-in via env (all off by default):
     if _envflag("CAMOUFOX_BLOCK_IMAGES", False):

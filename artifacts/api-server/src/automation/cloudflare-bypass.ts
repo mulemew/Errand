@@ -1,4 +1,4 @@
-import type { FrameAdapter, PageAdapter } from "./page-adapter";
+import type { ElementAdapter, FrameAdapter, PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { execSync, execFileSync } from "child_process";
 
@@ -386,7 +386,7 @@ async function _describeTurnstileState(page: PageAdapter): Promise<string> {
       /verify you are human|verifying|success|verification failed|请稍候|人机|確認|vérifi|überprüf|verifica/i;
     let firstNonEmpty: string | null = null;
     for (const frame of cfWidgetFrames(page)) {
-      const body = await frame.$("body").catch(() => null);
+      const body = await frameQuery(frame, "body");
       if (!body) continue;
       const text = (await body
         .evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120))
@@ -663,15 +663,38 @@ const CF_CHECKBOX_SELECTORS = [
   "[role='checkbox']",
 ];
 
+/**
+ * A frame query that cannot hang.
+ *
+ * An unreachable frame — the out-of-process kind, listed with an empty url — does not answer
+ * $() at all, and the default wait is long enough that walking nine selectors across three
+ * frames took 62 SECONDS in a real run. The clear budget is 60s, so the search alone spent
+ * it: leftMs=0 at round 0, no reload ever attempted, the whole retry path dead. A lookup that
+ * is allowed to consume the entire budget is worse than a lookup that fails.
+ */
+async function frameQuery(frame: FrameAdapter, sel: string, ms = 1200): Promise<ElementAdapter | null> {
+  return Promise.race([
+    frame.$(sel).catch(() => null),
+    new Promise<null>((r) => setTimeout(() => r(null), ms)),
+  ]);
+}
+
 async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarget | null> {
   const frames = cfWidgetFrames(page);
   if (frames.length === 0) {
     logger.debug("No frames at all to search for a Turnstile checkbox");
     return null;
   }
+  // Whole-search cap on top of the per-query one: enough for a responsive page, nowhere near
+  // enough to matter to the caller's budget.
+  const deadline = Date.now() + 10_000;
   for (const frame of frames) {
     for (const sel of CF_CHECKBOX_SELECTORS) {
-      const el = await frame.$(sel).catch(() => null);
+      if (Date.now() > deadline) {
+        logger.debug("Checkbox search hit its time cap — falling back to main-document geometry");
+        return null;
+      }
+      const el = await frameQuery(frame, sel);
       if (!el) continue;
       const box = await el.boundingBox?.().catch(() => null);
       // A checkbox is small. The upper bound matters now that every frame is searched with
@@ -704,7 +727,7 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
   // A frame's body IS the widget, in main-frame coordinates, so the same offset applied to
   // it is correct wherever the container puts it.
   for (const frame of frames) {
-    const body = await frame.$("body").catch(() => null);
+    const body = await frameQuery(frame, "body");
     if (!body) continue;
     const box = await body.boundingBox?.().catch(() => null);
     // Turnstile is a fixed-size control: ~300x65 normal, ~150x140 compact. Anything else is
