@@ -686,13 +686,22 @@ function cfWidgetFrames(page: PageAdapter): FrameAdapter[] {
     // the click fell back to guessing coordinates from a container in the main document,
     // which is how a checkbox ends up never being pressed.
     //
-    // Asking every frame whether it contains a Turnstile checkbox costs a few cheap
-    // queries and cannot misidentify anything: a frame either has that element or it does
-    // not. URL order is kept only so the likely one is asked first.
+    // "Cannot misidentify anything" was wrong, and this is where it bit: the MAIN frame is
+    // in `rest`, so the search walks the host page too — and a login form's own <label> is
+    // exactly the size of a Turnstile row. On betadash.lunes.host the form is ~303px wide,
+    // `label[for]` matched its "Email address" label at 302x20, and the click went there
+    // with viaFrame=true, which read as the most trustworthy result available. The widget
+    // was never touched, which is why the box never spun.
+    //
+    // The main frame is the host page BY DEFINITION — page.frames()[0] in Playwright — and
+    // the widget is never in it: Turnstile renders into a child frame or a shadow root, and
+    // the shadow-root case is handled by main-document geometry, not by this function.
+    const main = frames[0];
+    const childrenOnly = (fs: FrameAdapter[]) => fs.filter((f) => f !== main);
     return [
-      ...named.filter((f) => f.url().includes("/turnstile/")),
-      ...named.filter((f) => !f.url().includes("/turnstile/")),
-      ...rest,
+      ...childrenOnly(named.filter((f) => f.url().includes("/turnstile/"))),
+      ...childrenOnly(named.filter((f) => !f.url().includes("/turnstile/"))),
+      ...childrenOnly(rest),
     ];
   } catch {
     return [];
@@ -783,6 +792,36 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
     logger.debug("No frames at all to search for a Turnstile checkbox");
     return null;
   }
+  // Where the widget actually sits, so a candidate can be checked against it.
+  //
+  // Belt to the main frame's braces: whatever a selector matches, if its box is nowhere near
+  // the widget then it is not the widget's checkbox, and clicking it is worse than falling
+  // back to geometry. The aim probe was already REPORTING this ("label — OUTSIDE the widget's
+  // container") next to every failed click; it just had no say in the decision.
+  const hostRect = await evalBounded<{ x: number; y: number; w: number; h: number } | null>(
+    page,
+    () => {
+      const resp = document.querySelector(
+        'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      const host = (resp?.parentElement as Element | null) ?? document.querySelector(".cf-turnstile, [data-sitekey]");
+      if (!host) return null;
+      const r = host.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return null;
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    },
+    null,
+    3000,
+  );
+  const insideWidget = (b: { x: number; y: number; width: number; height: number }): boolean => {
+    if (!hostRect) return true; // nothing to check against — don't reject on ignorance
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
+    const m = 8; // a hair of slack for sub-pixel layout
+    return cx >= hostRect.x - m && cx <= hostRect.x + hostRect.w + m &&
+           cy >= hostRect.y - m && cy <= hostRect.y + hostRect.h + m;
+  };
+
   // Whole-search cap on top of the per-query one: enough for a responsive page, nowhere near
   // enough to matter to the caller's budget.
   const deadline = Date.now() + 10_000;
@@ -799,6 +838,13 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       // generic selectors: without it, a page-sized label in some unrelated frame could win
       // and the click would land nowhere near a Turnstile.
       if (!box || box.width < 8 || box.height < 8 || box.width > 320 || box.height > 320) continue;
+      if (!insideWidget(box)) {
+        logger.debug(
+          { sel, box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) } },
+          "Candidate matched but it is not inside the widget — ignoring it",
+        );
+        continue;
+      }
 
       // A CHECKBOX is roughly square and small. A wide, short box is the label ROW — the
       // "Verify you are human" line that spans the widget — and its centre is the middle of

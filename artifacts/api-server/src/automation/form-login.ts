@@ -198,7 +198,12 @@ import type { PageAdapter } from "./page-adapter";
   }
 
   /** How long a success criterion gets to show up before we call it absent. */
-  const CRITERION_WAIT_MS = Math.max(2000, Number(process.env.LOGIN_CRITERION_WAIT_MS ?? 10_000));
+  // 25s, not 10. The criterion describes the page login LANDS on, and a panel's landing page
+  // fetches its content after it renders: control.heavencloud.in reached the dashboard, the
+  // URL proved it, and the text the operator was waiting for arrived after we had already
+  // called the login a failure — then retried it twice more against a session that was
+  // working perfectly.
+  const CRITERION_WAIT_MS = Math.max(2000, Number(process.env.LOGIN_CRITERION_WAIT_MS ?? 25_000));
 
   /**
    * Wait for the caller's own definition of success — their text, their selector, or either.
@@ -941,7 +946,29 @@ import type { PageAdapter } from "./page-adapter";
       const scoped = await locateLoginFields(page);
       const usernameSel = scoped?.userSel ?? (await findSelector(page, USERNAME_SELECTORS));
       if (!usernameSel) {
-        return { success: false, captchaBlocked: false, message: "Could not find username/email input field on the page" };
+        // No login form. The interesting case is that there is nothing to log into BECAUSE
+        // WE ALREADY ARE — which is exactly what a retry looks like after a login that
+        // worked: the panel bounces /auth/login to the dashboard, no username field exists,
+        // and the run reports "Could not find username/email input field" about a perfectly
+        // good session. Ask the caller's own criterion before calling this a failure.
+        const wantText = successText?.trim();
+        const wantSelector = successSelector?.trim();
+        if (wantText || wantSelector) {
+          const found = await waitForSuccessCriterion(page, wantSelector, wantText, 8000);
+          if (found) {
+            logger.info({ targetUrl, url: page.url() }, "No login form — already signed in");
+            return { success: true, captchaBlocked: false, message: `Already signed in. ${found}` };
+          }
+        }
+        return {
+          success: false,
+          captchaBlocked: false,
+          message:
+            `Could not find username/email input field on the page. URL: ${page.url()}` +
+            (wantText || wantSelector
+              ? " — and the success criterion is not there either, so this is neither a login page nor a signed-in one."
+              : ""),
+        };
       }
       await jsFillInput(page, usernameSel, credentials.username);
 
