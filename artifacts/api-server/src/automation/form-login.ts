@@ -782,6 +782,21 @@ import type { PageAdapter } from "./page-adapter";
     }
   }
 
+  /** Is a two-factor code field on screen right now? */
+  async function otpFieldVisible(page: PageAdapter, selectors: string): Promise<boolean> {
+    try {
+      const el = await page.$(selectors);
+      if (!el) return false;
+      return (await el.evaluate((e: Element) => {
+        const s = window.getComputedStyle(e);
+        const r = e.getBoundingClientRect();
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0;
+      })) as boolean;
+    } catch {
+      return false;
+    }
+  }
+
   export async function formLogin(
     page: PageAdapter,
     targetUrl: string,
@@ -1007,24 +1022,65 @@ import type { PageAdapter } from "./page-adapter";
       // ── TOTP / 2FA auto-fill ──────────────────────────────────────────────
       // If a 2FA OTP input appeared after form submit, generate and fill the code.
       const effectiveTotpSecret = totpSecret ?? credentials.totpSecret;
+      const otpSelectors = [
+        "input[autocomplete='one-time-code']",
+        "input[name='otp']", "input[name='totp']",
+        "input[name='code']", "input[name='token']",
+        "input[id='code']",
+        "input[inputmode='numeric'][maxlength='6']",
+        "input[inputmode='numeric'][maxlength='8']",
+        "input[placeholder*='code' i]", "input[placeholder*='2fa' i]",
+      ].join(", ");
+      if (!effectiveTotpSecret) {
+        // Say so, instead of skipping in silence. Landing on a two-factor prompt with no
+        // secret configured is the single most likely reason a login "stops for no reason",
+        // and it used to produce no log line at all — the run failed later, on whatever
+        // generic check came next, describing a symptom instead of this.
+        if (await otpFieldVisible(page, otpSelectors)) {
+          logger.warn(
+            { targetUrl, url: page.url() },
+            "Stopped at a two-factor prompt and no TOTP secret is configured for this login — nothing will be filled",
+          );
+        }
+      }
       if (effectiveTotpSecret) {
-        const otpSelectors = [
-          "input[autocomplete='one-time-code']",
-          "input[name='otp']", "input[name='totp']",
-          "input[name='code']", "input[name='token']",
-          "input[inputmode='numeric'][maxlength='6']",
-          "input[inputmode='numeric'][maxlength='8']",
-          "input[placeholder*='code' i]", "input[placeholder*='2fa' i]",
-        ].join(", ");
         try {
-          const otpEl = await page.$(otpSelectors);
-          if (otpEl) {
-            const otpVisible = await otpEl.evaluate((e: Element) => {
-              const style = window.getComputedStyle(e);
-              const rect = e.getBoundingClientRect();
-              return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-            }) as boolean;
-            if (otpVisible) {
+          // WAIT for it, don't glance once.
+          //
+          // awaitLoginResolution returns the moment the login form goes away, which is before
+          // the 2FA screen exists: this panel lazy-loads the route's chunk, so the code field
+          // mounts a beat later. A single query lands in that gap, finds nothing, and the
+          // whole block is skipped without a word — which is what "the 2FA page is up and
+          // nothing was typed" looks like from the outside.
+          const otpDeadline = Date.now() + 10_000;
+          let otpVisible = false;
+          while (Date.now() < otpDeadline) {
+            if (await otpFieldVisible(page, otpSelectors)) { otpVisible = true; break; }
+            await sleep(400);
+          }
+          if (!otpVisible) {
+            // Our selector list did not match. Say what IS on the page so the next run names
+            // the field instead of leaving us to guess at it.
+            const fields = (await page
+              .evaluate(() =>
+                Array.from(document.querySelectorAll("input"))
+                  .filter((i) => {
+                    const r = i.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                  })
+                  .slice(0, 8)
+                  .map((i) => ({
+                    type: i.type, name: i.name, id: i.id,
+                    ph: i.placeholder, ac: i.autocomplete, ml: i.maxLength,
+                  })),
+              )
+              .catch(() => [])) as unknown[];
+            logger.warn(
+              { targetUrl, url: page.url(), visibleInputs: fields },
+              "A TOTP secret is configured but no 2FA code field matched our selectors — these are the fields that ARE on the page",
+            );
+          }
+          if (otpVisible) {
               logger.info({ targetUrl }, "2FA / OTP field detected — auto-filling TOTP code");
               const code = generateTOTP(effectiveTotpSecret);
               await page.click(otpSelectors);
@@ -1043,9 +1099,26 @@ import type { PageAdapter } from "./page-adapter";
               // now decisive — carrying it forward would fail a 2FA login that worked.
               submitError = await readLoginError(page);
               await dismissPopups(page);
-            }
           }
-        } catch { /* OTP detection failed — proceed to outcome detection */ }
+        } catch (otpErr) {
+          // Never silent. A throw here means the code was not filled, and the run then fails
+          // on some later check that has nothing to do with 2FA.
+          logger.warn({ targetUrl, otpErr }, "2FA handling threw — the code was not filled");
+        }
+      }
+
+      // Did we end up sitting on the two-factor screen? Asked once, here, so the verdict
+      // below can name that instead of reporting whichever generic check failed first.
+      const stuckOnOtp = await otpFieldVisible(page, otpSelectors);
+      if (stuckOnOtp) {
+        return {
+          success: false,
+          captchaBlocked: false,
+          message: effectiveTotpSecret
+            ? `Login reached the two-factor prompt and the generated code did not clear it — the secret may be wrong, or the code was rejected. URL: ${page.url()}` +
+              (submitError ? ` The site said: "${submitError}"` : "")
+            : `Login reached a two-factor prompt, and this login has no TOTP secret configured — fill in "TOTP 密钥" on the login step (or on the saved credential) so the code can be generated. URL: ${page.url()}`,
+        };
       }
 
       // Precise submit selector for the "is the login button still visible?"
