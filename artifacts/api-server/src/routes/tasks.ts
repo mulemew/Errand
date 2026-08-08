@@ -90,13 +90,66 @@ export type ExitGeo = {
   exitIp?: string; country?: string; countryCode?: string; region?: string; city?: string;
   isp?: string; timezone?: string; at?: string;
 };
-const GEO_URL =
-  "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone";
+/**
+ * Where to ask "which exit am I coming from", in the order we ask.
+ *
+ * HTTPS FIRST, and the reason matters: an https:// target is fetched through a CONNECT
+ * tunnel, which is how a browser uses the proxy. A plain http:// target is not — the proxy
+ * sees the request in the clear and is free to answer it itself. Plenty do: an https-only
+ * proxy handed a plaintext request replies with its own HTML page, JSON.parse chokes on the
+ * doctype, and a perfectly working proxy is reported as "检测失败: unexpected response:
+ * <!DOCTYPE html …>". Reported against https://31.32.19.111:8081, which browses fine.
+ *
+ * ip-api stays last rather than being removed: it is the only one of these with no rate
+ * limit worth worrying about, and its free tier is http-only.
+ */
+type GeoProbe = { url: string; parse: (raw: string) => IpApi };
+const GEO_PROBES: GeoProbe[] = [
+  {
+    url: "https://ifconfig.co/json",
+    parse: (raw) => {
+      const j = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        status: j.ip ? "success" : undefined,
+        query: j.ip as string | undefined,
+        country: j.country as string | undefined,
+        countryCode: j.country_iso as string | undefined,
+        regionName: j.region_name as string | undefined,
+        city: j.city as string | undefined,
+        isp: j.asn_org as string | undefined,
+        timezone: j.time_zone as string | undefined,
+      };
+    },
+  },
+  {
+    url: "https://ipinfo.io/json",
+    parse: (raw) => {
+      const j = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        status: j.ip ? "success" : undefined,
+        query: j.ip as string | undefined,
+        // ipinfo reports the ISO code here; the name is not in the free response, so the
+        // code stands in for it rather than showing nothing.
+        country: j.country as string | undefined,
+        countryCode: j.country as string | undefined,
+        regionName: j.region as string | undefined,
+        city: j.city as string | undefined,
+        isp: j.org as string | undefined,
+        timezone: j.timezone as string | undefined,
+      };
+    },
+  },
+  {
+    url: "http://ip-api.com/json/?fields=status,message,query,country,countryCode,regionName,city,isp,timezone",
+    parse: (raw) => JSON.parse(raw) as IpApi,
+  },
+];
 type IpApi = {
   status?: string; message?: string; query?: string; country?: string;
   countryCode?: string; regionName?: string; city?: string; isp?: string; timezone?: string;
 };
-function runGeoCurl(proxyArg?: string): Promise<IpApi> {
+/** One probe, one curl. Rejects with something worth reading. */
+function runGeoProbe(probe: GeoProbe, proxyArg?: string): Promise<IpApi> {
   // An https:// proxy means TLS to the PROXY itself, and curl verifies that certificate.
   // These are addressed by IP far more often than by hostname, so the certificate cannot
   // match and verification fails every single time — which is why every https proxy read as
@@ -113,7 +166,7 @@ function runGeoCurl(proxyArg?: string): Promise<IpApi> {
     "15",
     ...(isHttpsProxy ? ["--proxy-insecure"] : []),
     ...(proxyArg ? ["-x", proxyArg] : []),
-    GEO_URL,
+    probe.url,
   ];
   return new Promise((resolve, reject) => {
     // stderr was discarded, so a failure arrived as a bare exit code with nothing to act on.
@@ -124,12 +177,39 @@ function runGeoCurl(proxyArg?: string): Promise<IpApi> {
         return;
       }
       try {
-        resolve(JSON.parse(out) as IpApi);
+        resolve(probe.parse(out));
       } catch {
-        reject(new Error(`unexpected response: ${String(out).trim().slice(0, 120)}`));
+        const body = String(out).trim();
+        // Name the usual cause instead of pasting a doctype at the operator. A proxy that
+        // answers a PLAINTEXT request with its own page is not broken — it just does not
+        // serve http:// targets, and a browser would never ask it to.
+        const looksLikeHtml = /^\s*<(!doctype|html)/i.test(body);
+        reject(
+          new Error(
+            looksLikeHtml
+              ? `${probe.url} came back as an HTML page rather than JSON — the proxy answered the request itself instead of forwarding it`
+              : `unexpected response: ${body.slice(0, 120)}`,
+          ),
+        );
       }
     });
   });
+}
+
+/** Try each probe in turn; the first that answers wins. */
+async function runGeoCurl(proxyArg?: string): Promise<IpApi> {
+  let last: Error | null = null;
+  for (const probe of GEO_PROBES) {
+    try {
+      const res = await runGeoProbe(probe, proxyArg);
+      if (res.query) return res;
+      last = new Error(`${probe.url} answered without an IP`);
+    } catch (err) {
+      last = err instanceof Error ? err : new Error(String(err));
+      logger.debug({ url: probe.url, err: last.message }, "Geo probe failed — trying the next one");
+    }
+  }
+  throw last ?? new Error("no geo probe answered");
 }
 /** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy.
  *  Exported so the proxy-profiles route can resolve a profile's geo the same way. */
