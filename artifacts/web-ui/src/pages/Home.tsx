@@ -657,7 +657,13 @@ export default function Home() {
   const knownGroupIds = new Set(groupList.map((g) => g.id));
   type TaskRow = (typeof displayedTasks)[number] & { groupId?: number | null };
   const groupOf = (tk: TaskRow) => {
-    const gid = tk.groupId ?? null;
+    // The group this tab has just dragged/moved it into wins over the one the last fetch
+    // reported — see optimisticOrder. Without this the override carried ORDER but not
+    // MEMBERSHIP, so a task moved to another group first slid to the edge of the group it
+    // was leaving (new position, old section) and only jumped across when the refetch
+    // landed. Two visible steps for one action.
+    const override = groupOverride?.get(tk.id);
+    const gid = override !== undefined ? override : tk.groupId ?? null;
     return gid != null && knownGroupIds.has(gid) ? gid : null;
   };
   // Headers only appear once a group exists, so a user who never makes one sees exactly
@@ -676,22 +682,38 @@ export default function Home() {
    *
    * So the drag now updates this map synchronously and the request goes out behind it.
    */
-  const [optimisticOrder, setOptimisticOrder] = useState<number[] | null>(null);
+  //
+  // It carries GROUP as well as position. It used to be a bare list of ids, which is only
+  // half of what a move changes: the row was placed where the drag put it while still being
+  // filed under the group the last fetch reported, so moving one to another group showed it
+  // slide to the edge of the group it was leaving and jump across a moment later.
+  const [optimisticOrder, setOptimisticOrder] = useState<Array<{ id: number; groupId: number | null }> | null>(null);
   /** True for the moment a task changes group — see DraggableTaskRow's transition. */
   const [instantMove, setInstantMove] = useState(false);
   const orderIndex = useMemo(() => {
     if (!optimisticOrder) return null;
     const m = new Map<number, number>();
-    optimisticOrder.forEach((id, i) => m.set(id, i));
+    optimisticOrder.forEach((o, i) => m.set(o.id, i));
+    return m;
+  }, [optimisticOrder]);
+  /** Which group each moved task belongs to right now — read by groupOf. */
+  const groupOverride = useMemo(() => {
+    if (!optimisticOrder) return null;
+    const m = new Map<number, number | null>();
+    optimisticOrder.forEach((o) => m.set(o.id, o.groupId));
     return m;
   }, [optimisticOrder]);
 
-  /** Server order for the tasks we are showing — used to retire the override. */
-  const serverOrderKey = (displayedTasks as TaskRow[]).map((tk) => tk.id).join(",");
+  /** Server order AND grouping for the tasks we are showing — used to retire the override. */
+  const rowKey = (id: number, groupId: number | null | undefined) => `${id}:${groupId ?? ""}`;
+  const serverOrderKey = (displayedTasks as TaskRow[]).map((tk) => rowKey(tk.id, tk.groupId)).join(",");
   useEffect(() => {
-    // Once the fetched order matches what we dragged to, the override has nothing left to
-    // say. Dropping it also means an add/remove elsewhere is not fighting a stale list.
-    if (optimisticOrder && serverOrderKey === optimisticOrder.join(",")) setOptimisticOrder(null);
+    // Once the fetch agrees on both, the override has nothing left to say. Comparing order
+    // alone would retire it while the server still had the old group, putting the row back
+    // where it came from until the next fetch.
+    if (optimisticOrder && serverOrderKey === optimisticOrder.map((o) => rowKey(o.id, o.groupId)).join(",")) {
+      setOptimisticOrder(null);
+    }
   }, [serverOrderKey, optimisticOrder]);
 
   const applyOrder = (rows: TaskRow[]): TaskRow[] => {
@@ -754,7 +776,7 @@ export default function Home() {
     const next = [...before, ...moved, ...after];
     // Synchronously, so the very next pointer move is measured against the list the user
     // can already see. The PUT follows; the override retires itself when the fetch agrees.
-    setOptimisticOrder(next.map((o) => o.id));
+    setOptimisticOrder(next);
     void persistOrder(next);
   };
 
@@ -772,7 +794,7 @@ export default function Home() {
     // follows; after that dragging inside a list springs normally again.
     setInstantMove(true);
     window.setTimeout(() => setInstantMove(false), 600);
-    setOptimisticOrder(order.map((o) => o.id));
+    setOptimisticOrder(order);
     void persistOrder(order);
   };
 
