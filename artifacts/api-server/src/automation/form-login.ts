@@ -744,6 +744,44 @@ import type { PageAdapter } from "./page-adapter";
     } catch { return ""; }
   }
 
+  /**
+   * Submit the 2FA form — the one the code was typed into, not whichever form is first.
+   *
+   * This used to click `page.$("button[type='submit'], input[type='submit']")`, a document-
+   * wide query that returns the first match in DOCUMENT order. On a 2FA screen the login
+   * form is often still in the DOM (an SPA keeps it, or it is merely hidden), so the first
+   * submit button is the LOGIN button — and clicking it re-submits the credentials form
+   * whose CSRF token the first submit already consumed. The site answers "CSRF token
+   * mismatch" while the real verification code sits there unsent, which is exactly the
+   * combination reported: the login reached the 2FA screen AND an error appeared.
+   *
+   * jsClickSubmit already anchors on the password field's form for the same reason; this is
+   * the same trick for the OTP field. Falling back to Enter is safe: focus is in that field,
+   * so the browser submits the form it belongs to and no other.
+   */
+  async function jsSubmitOtpForm(page: PageAdapter): Promise<boolean> {
+    try {
+      return (await page.evaluate(() => {
+        const isVisible = (el: Element): boolean => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const s = getComputedStyle(el as HTMLElement);
+          return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+        };
+        const otp = document.querySelector("input[data-wa-otp='1']") as HTMLInputElement | null;
+        const form = (otp?.form ?? null) as HTMLFormElement | null;
+        if (!form) return false;
+        for (const el of Array.from(form.querySelectorAll<HTMLElement>("button[type='submit'], input[type='submit']"))) {
+          if (isVisible(el)) { el.click(); return true; }
+        }
+        // No button inside it — submit the form itself rather than reaching outside it.
+        if (typeof form.requestSubmit === "function") { form.requestSubmit(); return true; }
+        return false;
+      })) as boolean;
+    } catch {
+      return false;
+    }
+  }
+
   export async function formLogin(
     page: PageAdapter,
     targetUrl: string,
@@ -992,13 +1030,13 @@ import type { PageAdapter } from "./page-adapter";
               await page.click(otpSelectors);
               await page.evaluate((sel: unknown) => {
                 const el = document.querySelector<HTMLInputElement>(sel as string);
-                if (el) el.value = "";
+                // Mark the field we are actually typing into, so the submit below can find
+                // the form it belongs to rather than guessing at document level.
+                if (el) { el.value = ""; el.setAttribute("data-wa-otp", "1"); }
               }, otpSelectors as never);
               await page.keyboard.type(code, { delay: 80 });
               await sleep(500);
-              const otpSubmit = await page.$("button[type='submit'], input[type='submit']");
-              if (otpSubmit) await otpSubmit.click();
-              else await page.keyboard.press("Enter");
+              if (!(await jsSubmitOtpForm(page))) await page.keyboard.press("Enter");
               await waitForSettle(page, 12000);
               // REPLACE, never merge: the message from the credentials step ("a verification
               // code is required") describes a screen we have since passed, and an error is
