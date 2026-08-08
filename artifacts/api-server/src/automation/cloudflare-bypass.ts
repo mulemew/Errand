@@ -259,24 +259,49 @@ async function isFirefoxPage(page: PageAdapter): Promise<boolean> {
  * there, and then the widget does nothing — with no way to tell whether the press was
  * delivered, delivered somewhere else, or never dispatched at all.
  *
- * Read with the iframe boundary in mind, which is what makes the answer sharp:
- *   • moves recorded, NO mousedown  — the press went where the main document cannot see it,
- *     i.e. INTO the widget's cross-origin iframe. It landed; Turnstile refused it.
- *   • moves AND a mousedown at our coordinates — the press was delivered to the main
- *     document instead of the widget: the point is not over the iframe we think it is.
+ * Read the TARGET, not the presence of the event. The first version of this said a mousedown
+ * seen in the main document meant the press had missed the widget — which is only true when
+ * the widget is an IFRAME. Turnstile's checkbox here lives in a CLOSED SHADOW ROOT, and a
+ * press that lands on it correctly is retargeted to the host and shows up in this document
+ * too. That reading sent an entire evening after a phantom (site isolation, since disproven:
+ * fission.autostart went to false in the profile and nothing changed).
+ *
+ *   • mousedown received by the widget's host element — it landed ON the widget. Whatever
+ *     happens next is Turnstile's verdict, not our aim.
+ *   • mousedown received by something else — that element is what we actually hit, and its
+ *     name says where the aim really went.
  *   • nothing at all — synthesized input is not reaching this page, and no amount of
  *     coordinate work will fix that.
  */
 async function armInputProbe(page: PageAdapter): Promise<void> {
   await page
     .evaluate(() => {
-      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number }> };
+      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number; el: string }> };
       if (w.__waIn) { w.__waIn.length = 0; return; }
       w.__waIn = [];
+      const name = (n: EventTarget | null): string => {
+        const el = n as Element | null;
+        if (!el || !el.tagName) return "?";
+        return (
+          el.tagName.toLowerCase() +
+          (el.id ? `#${el.id}` : "") +
+          (typeof el.className === "string" && el.className ? `.${el.className.trim().split(/\s+/)[0]}` : "")
+        );
+      };
       const rec = (e: Event) => {
         const m = e as MouseEvent;
         if (w.__waIn && w.__waIn.length < 60) {
-          w.__waIn.push({ t: m.type, x: Math.round(m.clientX), y: Math.round(m.clientY) });
+          // WHAT received it, not just where. A closed shadow root retargets the event to
+          // its host, so a press that correctly hit the checkbox INSIDE the widget still
+          // surfaces here — as the widget's host element. The page background surfaces as
+          // something else entirely. Without this the two are indistinguishable, which is
+          // how "mousedown in the MAIN document" got read as "the click missed".
+          w.__waIn.push({
+            t: m.type,
+            x: Math.round(m.clientX),
+            y: Math.round(m.clientY),
+            el: name(m.target),
+          });
         }
       };
       for (const t of ["mousemove", "mousedown", "mouseup", "click"]) {
@@ -290,16 +315,30 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
   return evalBounded<string>(
     page,
     () => {
-      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number }> };
+      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number; el: string }> };
       const ev = w.__waIn ?? [];
       if (ev.length === 0) return "the page received NOTHING";
-      const moves = ev.filter((e) => e.t === "mousemove");
+      const moves = ev.filter((e) => e.t === "mousedown" ? false : e.t === "mousemove");
       const down = ev.find((e) => e.t === "mousedown");
       const last = moves[moves.length - 1];
+      // The TARGET is the discriminator, not the presence of the event. A closed shadow root
+      // retargets to its host, so a press that landed on the checkbox inside the widget shows
+      // up here as the widget's own element — the same place an empty-container press would
+      // NOT show up, because that one reports the page's layout div instead.
+      const resp = document.querySelector(
+        'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      const hostName = resp?.parentElement
+        ? (resp.parentElement.tagName.toLowerCase() +
+           (resp.parentElement.id ? `#${resp.parentElement.id}` : ""))
+        : "(no widget host)";
       return (
         `${moves.length} mousemove${moves.length === 1 ? "" : "s"}` +
-        (last ? ` (last at ${last.x},${last.y})` : "") +
-        (down ? `, mousedown at ${down.x},${down.y} — in the MAIN document, not the widget` : ", no mousedown here (it went into the iframe)")
+        (last ? ` (last at ${last.x},${last.y} on ${last.el})` : "") +
+        (down
+          ? `, mousedown at ${down.x},${down.y} received by ${down.el}`
+          : ", no mousedown reached this document") +
+        ` — the widget's host element is ${hostName}`
       );
     },
     "(probe unreadable)",
