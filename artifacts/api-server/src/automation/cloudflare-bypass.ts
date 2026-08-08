@@ -726,6 +726,42 @@ async function frameQuery(frame: FrameAdapter, sel: string, ms = 1200): Promise<
   ]);
 }
 
+/**
+ * Bring the widget into view before measuring it.
+ *
+ * getBoundingClientRect reports viewport-relative coordinates that may lie OUTSIDE the
+ * viewport, and mouse.move() cannot go there — the point gets clamped to the edge, so the
+ * cursor travels to the bottom of the screen instead of to the checkbox. Nothing in the logs
+ * looks wrong: the coordinates are computed from a real element and reported faithfully.
+ *
+ * Measured on betadash.lunes.host, whose login form puts the widget low: bottom edge at
+ * y=807. Fine in a 900+ tall viewport, off-screen in a 768 one. page.click(selector) scrolls
+ * for you; clicking raw coordinates does not, and that is what this module does.
+ */
+async function scrollWidgetIntoView(page: PageAdapter): Promise<boolean> {
+  const scrolled = await evalBounded<boolean>(
+    page,
+    () => {
+      const resp = document.querySelector(
+        'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+      );
+      const host = (resp?.parentElement as Element | null) ?? document.querySelector(".cf-turnstile, [data-sitekey]");
+      if (!host) return false;
+      const r = host.getBoundingClientRect();
+      if (r.top >= 0 && r.bottom <= window.innerHeight) return false;
+      host.scrollIntoView({ block: "center" });
+      return true;
+    },
+    false,
+    3000,
+  );
+  // Let the scroll land before anything measures. Re-measuring after it is the point:
+  // the same widget was seen at y=710 and y=738 seconds apart on that page as the form
+  // settled, and a target measured before a shift is a click on empty space after it.
+  if (scrolled) await sleep(400);
+  return scrolled;
+}
+
 async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarget | null> {
   const frames = cfWidgetFrames(page);
   if (frames.length === 0) {
@@ -1371,6 +1407,11 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       // Ask the widget's own document first: an exact position, already in main-frame
       // coordinates, with no assumption about the widget's internal padding. Only when the
       // frame will not answer do we fall back to guessing from container geometry.
+      // Scroll FIRST, measure after. Both orders "work" until the widget is off-screen or
+      // the form is still settling, and then the coordinates describe where it used to be.
+      const scrolled = await scrollWidgetIntoView(page);
+      if (scrolled) logger.debug("Widget was outside the viewport — scrolled it into view before measuring");
+
       let target = await locateCheckboxInCfFrame(page);
       if (!target) target = await locateTurnstileCheckbox(page);
       if (!target) {
@@ -1393,6 +1434,15 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
           // What is really there. Without this the next failure is another round of
           // inference from coordinates that LOOK right.
           under: await describeAimPoint(page, x, y),
+          // A point the mouse cannot reach. getBoundingClientRect happily reports a widget
+          // below the fold, and mouse.move() then clamps to the edge — the cursor ends up at
+          // the bottom of the screen and every log line still reads as if it aimed correctly.
+          ...(() => {
+            const vp = (() => { try { return page.viewport(); } catch { return null; } })();
+            if (!vp) return {};
+            const out = x < 0 || y < 0 || x > vp.width || y > vp.height;
+            return out ? { OUTSIDE_VIEWPORT: `${vp.width}x${vp.height} — this click cannot land` } : {};
+          })(),
         },
         "Clicking Turnstile checkbox",
       );
