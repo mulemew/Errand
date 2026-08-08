@@ -1537,21 +1537,12 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       );
       await armInputProbe(page);
 
-      // Prefer the REAL pointer when the backend has one.
-      //
-      // Everything below this line has been proven to arrive: correct coordinates, a cursor
-      // that visibly reaches the box, a well-formed mousedown/mouseup/click delivered to the
-      // widget's host. And the checkbox does not react, because Cloudflare's interactive
-      // challenge does not act on events the browser synthesised for itself. The camoufox
-      // sidecar can now drive its own X pointer, which is the same kind of input the
-      // SeleniumBase path has always used to clear this widget.
-      const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
-      let clickedNatively = false;
-      if (osClick) {
-        clickedNatively = await osClick(x, y);
-        logger.info({ clickedNatively }, clickedNatively ? "Clicked with the real X pointer" : "Real-pointer click unavailable — falling back to synthesised input");
-      }
-      if (!clickedNatively) await humanClickAt(page, x, y);
+      // The documented way first. Camoufox's docs click the Turnstile checkbox with
+      // page.mouse.click() — the catch is that it only works with COOP disabled, which the
+      // sidecar now does by default. With that in place a synthesised press reaches the
+      // element inside the cross-origin iframe, which is precisely what it could not do
+      // before, however right the coordinates were.
+      await humanClickAt(page, x, y);
       logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
 
       // Did the click LAND? This is the one question the logs could never answer.
@@ -1572,10 +1563,25 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
 
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
-      const settled = await waitForTurnstileSettled(
+      let settled = await waitForTurnstileSettled(
       page,
       Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000)),
     );
+
+      // Last resort: the sidecar's REAL X pointer.
+      //
+      // Only after the documented path has been given its full verdict window, and only when
+      // the widget is still sitting there — a press that is still verifying must not be
+      // disturbed. This exists because the synthesised press was watched arriving correctly
+      // and doing nothing for hours; if disabling COOP is the whole answer it will never run.
+      const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
+      if (!settled && osClick && !(await turnstileQuickState(page)).solved) {
+        logger.info("Synthesised click did not clear the widget — trying the real X pointer");
+        if (await osClick(x, y)) {
+          settled = await waitForTurnstileSettled(page, Math.max(3_000, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000)));
+          logger.info({ settled }, "Real-pointer click finished");
+        }
+      }
       // On failure, say WHAT the box shows. "Verify you are human" means the click missed;
       // "Verifying…" means it is still working and we gave up too early; "Verification
       // failed" means the click landed but was judged a bot. Three different fixes.

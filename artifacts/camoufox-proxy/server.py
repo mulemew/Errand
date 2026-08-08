@@ -81,7 +81,16 @@ def _build_options(body: dict) -> dict:
     # Extra camoufox knobs, opt-in via env (all off by default):
     if _envflag("CAMOUFOX_BLOCK_IMAGES", False):
         opts["block_images"] = True
-    if _envflag("CAMOUFOX_DISABLE_COOP", False):
+    # COOP OFF by default — this is the documented requirement for clicking Turnstile.
+    #
+    # Camoufox's own docs: "Disables the Cross-Origin-Opener-Policy (COOP). This allows
+    # elements in cross-origin iframes, such as the Turnstile checkbox, to be clicked", and
+    # their example does exactly that before page.mouse.click(). We had it opt-in and off,
+    # which matches every symptom we chased for hours: correct coordinates, a cursor that
+    # visibly arrives, a well-formed press delivered to the widget's host — and a checkbox
+    # that never reacts, because the element inside the cross-origin iframe cannot be clicked
+    # at all while COOP is in force.
+    if _envflag("CAMOUFOX_DISABLE_COOP", True):
         opts["disable_coop"] = True
     _os = (body.get("os") or "").strip().lower()
     if _os in ("windows", "macos", "mac", "linux"):
