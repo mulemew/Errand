@@ -488,11 +488,23 @@ async function ensureFocused(page: PageAdapter, where: string): Promise<void> {
     ]);
   }
   try {
+    // Three outcomes, not two. This used to resolve TRUE on timeout, so "we could not tell"
+    // was indistinguishable from "it has focus" — and silence read as a clean bill of health
+    // for the one condition that makes Turnstile ignore a click without saying anything.
     const focused = (await Promise.race([
       page.evaluate(() => document.hasFocus()),
-      new Promise<boolean>((r) => setTimeout(() => r(true), 2000)),
-    ])) as boolean;
-    if (!focused) logger.warn({ where, focusLock: CF_FOCUS_LOCK }, "Page does NOT have focus — Turnstile may refuse to complete");
+      new Promise<boolean | null>((r) => setTimeout(() => r(null), 2000)),
+    ])) as boolean | null;
+    if (focused === false) {
+      logger.warn(
+        { where, focusLock: CF_FOCUS_LOCK },
+        "Page does NOT have focus — Turnstile ignores clicks on an unfocused document. Set CF_FOCUS_LOCK=1 to raise the window first",
+      );
+    } else if (focused === null) {
+      logger.warn({ where, focusLock: CF_FOCUS_LOCK }, "Could not read document.hasFocus() — focus state unknown");
+    } else {
+      logger.info({ where }, "Page has focus");
+    }
   } catch { /* ignore */ }
 }
 
