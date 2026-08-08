@@ -1489,21 +1489,6 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       const scrolled = await scrollWidgetIntoView(page);
       if (scrolled) logger.debug("Widget was outside the viewport — scrolled it into view before measuring");
 
-      // Let the widget RENDER before clicking where it is going to be.
-      //
-      // Measured on the challenge page in a real browser: the container reports its full
-      // 896x69 at ~1ms, and the checkbox appears seconds later. detectCfChallenge keys off
-      // that container ("visibleWidget"), so from the first millisecond we believe there is
-      // something to click while the box does not exist yet — and a click on the empty
-      // container retargets to the same host div a real hit would, so it looks identical in
-      // every log we have.
-      //
-      // This used to be covered by accident: a debug-gated 5s state read plus a frame search
-      // that took 62s. Capping the search and running at info level removed both, which
-      // moved the click EARLIER — a regression I introduced while making the failure faster.
-      // So the wait is explicit now rather than a side effect of something slow.
-      await sleep(rand(2800, 4200));
-
       let target = await locateCheckboxInCfFrame(page);
       if (!target) target = await locateTurnstileCheckbox(page);
       if (!target) {
@@ -1526,10 +1511,6 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
           // What is really there. Without this the next failure is another round of
           // inference from coordinates that LOOK right.
           under: await describeAimPoint(page, x, y),
-          // How many frames exist at the moment of the click. On a page whose widget lives
-          // in a closed shadow root this is the only thing that might mark "the box has
-          // rendered" from outside — worth knowing whether it moves in step with the widget.
-          frames: (() => { try { return page.frames().length; } catch { return -1; } })(),
           // A point the mouse cannot reach. getBoundingClientRect happily reports a widget
           // below the fold, and mouse.move() then clamps to the edge — the cursor ends up at
           // the bottom of the screen and every log line still reads as if it aimed correctly.
