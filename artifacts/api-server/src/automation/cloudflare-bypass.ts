@@ -1,6 +1,7 @@
 import type { ElementAdapter, FrameAdapter, PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { execSync, execFileSync } from "child_process";
+import { createHash } from "crypto";
 
 type CfChallengeType = "js_challenge" | "turnstile_click" | "waf_blocked" | "none";
 
@@ -367,6 +368,49 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
     "(probe unreadable)",
     3000,
   );
+}
+
+/**
+ * A fingerprint of what the widget LOOKS like right now.
+ *
+ * The one question none of the other instrumentation can answer. A closed shadow root
+ * retargets events to its host, so a press that ticked the checkbox and a press that hit the
+ * empty container beside it report the same element, the same coordinates, the same
+ * everything — and every diagnosis so far has run aground on exactly that.
+ *
+ * Pixels do not have that problem. A checkbox that was clicked becomes a spinner and then a
+ * tick; a click that missed leaves the widget untouched. Screenshotting the widget's own
+ * element before and after and comparing the bytes says which happened, without reading into
+ * the shadow root and without anything a challenge could object to.
+ *
+ * Returns null when the widget cannot be found or captured — a diagnostic must never be the
+ * reason a click does not happen.
+ */
+async function widgetLooks(page: PageAdapter): Promise<string | null> {
+  try {
+    const marked = await evalBounded<boolean>(
+      page,
+      () => {
+        const resp = document.querySelector(
+          'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
+        );
+        const host = (resp?.parentElement as Element | null) ?? document.querySelector(".cf-turnstile, [data-sitekey]");
+        if (!host) return false;
+        host.setAttribute("data-wa-widget", "1");
+        return true;
+      },
+      false,
+      2500,
+    );
+    if (!marked) return null;
+    const el = await page.$("[data-wa-widget='1']");
+    if (!el) return null;
+    const shot = await el.screenshot({ encoding: "base64" }).catch(() => null);
+    if (!shot || typeof shot !== "string") return null;
+    return createHash("sha1").update(shot).digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
 }
 
 async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<void> {
@@ -1543,8 +1587,23 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
         "Clicking Turnstile checkbox",
       );
       await armInputProbe(page);
+      const looksBefore = await widgetLooks(page);
       await humanClickAt(page, x, y);
-      logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
+      // Give the widget a beat to react before looking. A tick or a spinner shows up within
+      // a few hundred ms of a press that landed.
+      await sleep(900);
+      const looksAfter = await widgetLooks(page);
+      logger.info(
+        {
+          received: await readInputProbe(page),
+          // The decisive one. Same pixels before and after means the press did NOT reach the
+          // checkbox, whatever the events say — and different pixels means it did, so a
+          // failure from there on is Cloudflare's verdict rather than our aim.
+          widgetReacted:
+            looksBefore && looksAfter ? (looksBefore !== looksAfter ? "YES — the widget changed" : "NO — the widget is pixel-identical") : "(could not capture the widget)",
+        },
+        "What the page saw while we clicked",
+      );
 
       // Did the click LAND? This is the one question the logs could never answer.
       //
