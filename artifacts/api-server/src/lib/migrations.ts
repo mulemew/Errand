@@ -38,7 +38,6 @@ import { pool } from "@workspace/db";
   ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "triggered_by" text;
   ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "duration_ms"  integer;
   ALTER TABLE "logs"  ADD COLUMN IF NOT EXISTS "step_logs"    jsonb;
-  ALTER TABLE "saved_credentials" ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "browser_config" jsonb;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "exit_geo" jsonb;
   ALTER TABLE "tasks" ADD COLUMN IF NOT EXISTS "retry_count" integer;
@@ -64,6 +63,17 @@ import { pool } from "@workspace/db";
     "created_at"     timestamptz NOT NULL DEFAULT now(),
     "updated_at"     timestamptz NOT NULL DEFAULT now()
   );
+  -- Moved down from among the tasks/logs ALTERs, where it ran BEFORE the table above
+  -- existed. ADD COLUMN IF NOT EXISTS guards the COLUMN, not the TABLE, so on an empty
+  -- database this raised 'relation "saved_credentials" does not exist' — and because the
+  -- whole script goes to the server as ONE multi-statement query, Postgres wrapped it in an
+  -- implicit transaction and rolled back every table created before it. A fresh
+  -- 'docker compose up -d' therefore came up with an empty schema and a server that would
+  -- not start; every existing deployment was fine only because its tables already existed.
+  --
+  -- The invariant this file lives by: a table's ALTERs go directly after its CREATE. Nothing
+  -- enforces it, so it is written down here.
+  ALTER TABLE "saved_credentials" ADD COLUMN IF NOT EXISTS "updated_at" timestamptz NOT NULL DEFAULT now();
   CREATE TABLE IF NOT EXISTS "browser_sessions" (
     "id"            serial      PRIMARY KEY,
     "task_id"       integer     NOT NULL,
