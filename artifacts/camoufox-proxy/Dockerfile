@@ -2,12 +2,17 @@ FROM python:3.11-slim-bookworm
 
 # Camoufox is a patched Firefox. It needs the usual GTK/X libs + Xvfb for its
 # "virtual" headful mode (headful-on-virtual-display is harder to detect than headless).
+# xdotool drives the REAL X pointer. Playwright's mouse only synthesises events inside the
+# browser, and Cloudflare's interactive challenge does not act on those — the cursor arrives
+# on the checkbox, the press is delivered to the widget's host, and the box never reacts.
+# OS-level input is what the SeleniumBase sidecar has always used to clear the same widget
+# (uc_gui_click_captcha), and it became possible here once every session got its own Xvfb.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb x11vnc novnc websockify \
+    xvfb x11vnc novnc websockify xdotool \
     libgtk-3-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \
     libasound2 libdbus-glib-1-2 libxt6 libpci3 fonts-liberation ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
-  && command -v x11vnc && command -v websockify && test -d /usr/share/novnc
+  && command -v x11vnc && command -v websockify && command -v xdotool && test -d /usr/share/novnc
 
 # Run as a NON-ROOT user (uid 1000, matching the cf-proxy sidecar so host-side ownership
 # is consistent). A browser is the most exposed process in this stack — it renders hostile

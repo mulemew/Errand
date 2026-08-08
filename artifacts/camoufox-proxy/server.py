@@ -659,6 +659,58 @@ def session_view(sid):
     return jsonify({"viewPort": entry.get("view_port"), "display": entry.get("display")})
 
 
+@app.post("/sessions/<sid>/os-click")
+def session_os_click(sid):
+    """Click with the REAL X pointer, on this session's own display.
+
+    Playwright's mouse synthesises events inside the browser. Cloudflare's interactive
+    challenge does not act on them: the cursor arrives, the press is delivered to the
+    widget's host element, and the checkbox never reacts — observed directly, repeatedly,
+    on a challenge whose widget lives in a closed shadow root. The SeleniumBase sidecar has
+    always cleared the same widget with OS-level input (uc_gui_click_captcha), and once every
+    session got its own Xvfb there was no reason this one could not do the same.
+
+    Coordinates are SCREEN coordinates on that display. The caller converts from viewport
+    space using Firefox's window.mozInnerScreenX/Y, which is exact — no guessing at the
+    height of the browser chrome.
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        x = int(round(float(body.get("x"))))
+        y = int(round(float(body.get("y"))))
+    except (TypeError, ValueError):
+        return jsonify({"error": "x and y are required"}), 400
+
+    with _lock:
+        entry = _servers.get(sid)
+    if not entry:
+        return jsonify({"error": "no such session"}), 404
+    disp = entry.get("display")
+    if disp is None:
+        # Sharing the container display: a click there would land in whatever else is on it.
+        return jsonify({"error": "session has no display of its own"}), 409
+
+    env = dict(os.environ)
+    env["DISPLAY"] = f":{disp}"
+    try:
+        # Approach, settle, press. --sync so each step is finished before the next: a press
+        # dispatched while the pointer is still travelling lands somewhere else entirely,
+        # which is the same trap the in-browser path fell into.
+        subprocess.run(["xdotool", "mousemove", "--sync", str(x - 12), str(y + 7)],
+                       env=env, timeout=5, check=True)
+        time.sleep(0.12)
+        subprocess.run(["xdotool", "mousemove", "--sync", str(x), str(y)],
+                       env=env, timeout=5, check=True)
+        time.sleep(0.18)
+        subprocess.run(["xdotool", "click", "--delay", "90", "1"], env=env, timeout=5, check=True)
+        print(f"[os-click] {sid} display=:{disp} at {x},{y}", flush=True)
+        return jsonify({"ok": True, "display": disp, "x": x, "y": y})
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": f"xdotool failed: {e}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.post("/release")
 def release():
     body = request.get_json(silent=True) or {}

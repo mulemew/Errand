@@ -891,6 +891,44 @@ class CamoufoxProvider implements BrowserProvider {
     });
 
     const adapter = makeAdapter(page);
+
+    /**
+     * Click with the sidecar's REAL X pointer, on this session's own display.
+     *
+     * Playwright's mouse only synthesises events inside the browser, and Cloudflare's
+     * interactive challenge does not act on them: the cursor arrives on the checkbox, the
+     * press is delivered to the widget's host element, and the box never reacts. That was
+     * watched happening, over and over, on a widget inside a closed shadow root.
+     *
+     * The conversion is exact rather than estimated. Firefox exposes mozInnerScreenX/Y — the
+     * viewport's own origin in screen coordinates — so there is nothing to assume about the
+     * height of the browser chrome, which is where this kind of thing usually goes wrong.
+     */
+    (adapter as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick =
+      async (x: number, y: number): Promise<boolean> => {
+        try {
+          const origin = (await page.evaluate(() => ({
+            x: (window as unknown as { mozInnerScreenX?: number }).mozInnerScreenX ?? 0,
+            y: (window as unknown as { mozInnerScreenY?: number }).mozInnerScreenY ?? 0,
+          }))) as { x: number; y: number };
+          if (!origin.x && !origin.y) return false; // not Firefox, or unreadable — caller falls back
+          const res = await fetch(`${this.baseUrl}/sessions/${encodeURIComponent(id)}/os-click`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ x: origin.x + x, y: origin.y + y }),
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!res.ok) {
+            logger.warn({ status: res.status, body: await res.text().catch(() => "") }, "Sidecar OS-level click failed");
+            return false;
+          }
+          return true;
+        } catch (err) {
+          logger.warn({ err }, "Sidecar OS-level click threw");
+          return false;
+        }
+      };
+
     let closed = false;
     adapter.close = async () => {
       if (closed) return; // the runner closes finalPage AND page; only tear down once

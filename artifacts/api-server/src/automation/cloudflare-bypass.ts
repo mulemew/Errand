@@ -1536,7 +1536,22 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
         "Clicking Turnstile checkbox",
       );
       await armInputProbe(page);
-      await humanClickAt(page, x, y);
+
+      // Prefer the REAL pointer when the backend has one.
+      //
+      // Everything below this line has been proven to arrive: correct coordinates, a cursor
+      // that visibly reaches the box, a well-formed mousedown/mouseup/click delivered to the
+      // widget's host. And the checkbox does not react, because Cloudflare's interactive
+      // challenge does not act on events the browser synthesised for itself. The camoufox
+      // sidecar can now drive its own X pointer, which is the same kind of input the
+      // SeleniumBase path has always used to clear this widget.
+      const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
+      let clickedNatively = false;
+      if (osClick) {
+        clickedNatively = await osClick(x, y);
+        logger.info({ clickedNatively }, clickedNatively ? "Clicked with the real X pointer" : "Real-pointer click unavailable — falling back to synthesised input");
+      }
+      if (!clickedNatively) await humanClickAt(page, x, y);
       logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
 
       // Did the click LAND? This is the one question the logs could never answer.
