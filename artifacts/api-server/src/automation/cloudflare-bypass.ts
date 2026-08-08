@@ -276,9 +276,13 @@ async function isFirefoxPage(page: PageAdapter): Promise<boolean> {
 async function armInputProbe(page: PageAdapter): Promise<void> {
   await page
     .evaluate(() => {
-      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number; el: string }> };
-      if (w.__waIn) { w.__waIn.length = 0; return; }
+      const w = window as unknown as {
+        __waIn?: Array<{ t: string; x: number; y: number; el: string }>;
+        __waMoves?: { n: number; x: number; y: number; el: string };
+      };
+      if (w.__waIn) { w.__waIn.length = 0; w.__waMoves = { n: 0, x: 0, y: 0, el: "?" }; return; }
       w.__waIn = [];
+      w.__waMoves = { n: 0, x: 0, y: 0, el: "?" };
       const name = (n: EventTarget | null): string => {
         const el = n as Element | null;
         if (!el || !el.tagName) return "?";
@@ -290,7 +294,16 @@ async function armInputProbe(page: PageAdapter): Promise<void> {
       };
       const rec = (e: Event) => {
         const m = e as MouseEvent;
-        if (w.__waIn && w.__waIn.length < 60) {
+        // The press must ALWAYS get a slot. A humanized move emits dozens of mousemoves —
+        // enough to fill a shared buffer before the button goes down — and the report then
+        // says "NO mousedown, NO CLICK EVENT" about a click that may well have happened.
+        // That is a lie the probe told about itself, so moves are counted, not stored:
+        // only the most recent one is kept, and everything else is recorded in full.
+        if (m.type === "mousemove") {
+          if (w.__waMoves) { w.__waMoves.n++; w.__waMoves.x = Math.round(m.clientX); w.__waMoves.y = Math.round(m.clientY); w.__waMoves.el = name(m.target); }
+          return;
+        }
+        if (w.__waIn && w.__waIn.length < 40) {
           // WHAT received it, not just where. A closed shadow root retargets the event to
           // its host, so a press that correctly hit the checkbox INSIDE the widget still
           // surfaces here — as the widget's host element. The page background surfaces as
@@ -315,14 +328,16 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
   return evalBounded<string>(
     page,
     () => {
-      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number; el: string }> };
+      const w = window as unknown as {
+        __waIn?: Array<{ t: string; x: number; y: number; el: string }>;
+        __waMoves?: { n: number; x: number; y: number; el: string };
+      };
       const ev = w.__waIn ?? [];
-      if (ev.length === 0) return "the page received NOTHING";
-      const moves = ev.filter((e) => e.t === "mousemove");
+      const mv = w.__waMoves ?? { n: 0, x: 0, y: 0, el: "?" };
+      if (ev.length === 0 && mv.n === 0) return "the page received NOTHING";
       const down = ev.find((e) => e.t === "mousedown");
       const up = ev.find((e) => e.t === "mouseup");
       const clicked = ev.find((e) => e.t === "click");
-      const last = moves[moves.length - 1];
       // The TARGET is the discriminator, not the presence of the event. A closed shadow root
       // retargets to its host, so a press that landed on the checkbox inside the widget shows
       // up here as the widget's own element — the same place an empty-container press would
@@ -341,8 +356,8 @@ async function readInputProbe(page: PageAdapter): Promise<string> {
       // that drift apart produce every event below EXCEPT click, and the widget stays
       // untouched without anything having gone wrong that a coordinate can explain.
       return (
-        `${moves.length} mousemove${moves.length === 1 ? "" : "s"}` +
-        (last ? ` (last at ${last.x},${last.y} on ${last.el})` : "") +
+        `${mv.n} mousemove${mv.n === 1 ? "" : "s"}` +
+        (mv.n ? ` (last at ${mv.x},${mv.y} on ${mv.el})` : "") +
         (down ? `, mousedown ${down.x},${down.y} on ${down.el}` : ", NO mousedown") +
         (up ? `, mouseup ${up.x},${up.y} on ${up.el}` : ", NO mouseup") +
         (clicked ? `, click on ${clicked.el}` : ", NO CLICK EVENT") +
@@ -784,16 +799,32 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       // generic selectors: without it, a page-sized label in some unrelated frame could win
       // and the click would land nowhere near a Turnstile.
       if (!box || box.width < 8 || box.height < 8 || box.width > 320 || box.height > 320) continue;
-      // Playwright reports this in MAIN-FRAME viewport coordinates, so it needs no offset
-      // arithmetic and no assumption about the widget's padding.
+
+      // A CHECKBOX is roughly square and small. A wide, short box is the label ROW — the
+      // "Verify you are human" line that spans the widget — and its centre is the middle of
+      // that text, a good hundred pixels right of the control.
+      //
+      // Measured on betadash.lunes.host, where `label[for]` matched at 302x20 and the click
+      // went to its centre: x = 809 + 302/2 = 960. viaFrame said true, the coordinates came
+      // from the widget's own document, and every one of them was wrong — the most confident
+      // kind of miss there is.
+      const squarish = box.width <= 64 && box.height <= 64;
+      // Playwright reports these in MAIN-FRAME viewport coordinates, so no offset arithmetic
+      // is needed for the control itself; a row still needs the fixed inset, same as any
+      // other rectangle that merely CONTAINS the checkbox.
       logger.debug(
-        { frameUrl: (() => { try { return frame.url(); } catch { return "?"; } })(), sel },
+        {
+          frameUrl: (() => { try { return frame.url(); } catch { return "?"; } })(),
+          sel,
+          box: { w: Math.round(box.width), h: Math.round(box.height) },
+          aimedAt: squarish ? "its centre (this IS the control)" : "22px in (this is a row containing it)",
+        },
         "Turnstile checkbox located inside a frame",
       );
       return {
-        x: box.x + box.width / 2,
+        x: squarish ? box.x + box.width / 2 : box.x + Math.min(Math.max(box.width - 8, 8), 22),
         y: box.y + box.height / 2,
-        from: "frame:" + sel,
+        from: "frame:" + sel + (squarish ? "" : ":row"),
         box: { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) },
       };
     }
