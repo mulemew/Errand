@@ -252,6 +252,61 @@ async function isFirefoxPage(page: PageAdapter): Promise<boolean> {
  * no human produces, and one of the cheapest bot signals Turnstile can read. Falls back
  * to click() on adapters without down/up (cf-proxy drives the real OS mouse itself).
  */
+/**
+ * Watch what the PAGE receives while we click it.
+ *
+ * The missing half of the picture. We know what we aimed at and we can see the cursor get
+ * there, and then the widget does nothing — with no way to tell whether the press was
+ * delivered, delivered somewhere else, or never dispatched at all.
+ *
+ * Read with the iframe boundary in mind, which is what makes the answer sharp:
+ *   • moves recorded, NO mousedown  — the press went where the main document cannot see it,
+ *     i.e. INTO the widget's cross-origin iframe. It landed; Turnstile refused it.
+ *   • moves AND a mousedown at our coordinates — the press was delivered to the main
+ *     document instead of the widget: the point is not over the iframe we think it is.
+ *   • nothing at all — synthesized input is not reaching this page, and no amount of
+ *     coordinate work will fix that.
+ */
+async function armInputProbe(page: PageAdapter): Promise<void> {
+  await page
+    .evaluate(() => {
+      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number }> };
+      if (w.__waIn) { w.__waIn.length = 0; return; }
+      w.__waIn = [];
+      const rec = (e: Event) => {
+        const m = e as MouseEvent;
+        if (w.__waIn && w.__waIn.length < 60) {
+          w.__waIn.push({ t: m.type, x: Math.round(m.clientX), y: Math.round(m.clientY) });
+        }
+      };
+      for (const t of ["mousemove", "mousedown", "mouseup", "click"]) {
+        window.addEventListener(t, rec, true);
+      }
+    })
+    .catch(() => {});
+}
+
+async function readInputProbe(page: PageAdapter): Promise<string> {
+  return evalBounded<string>(
+    page,
+    () => {
+      const w = window as unknown as { __waIn?: Array<{ t: string; x: number; y: number }> };
+      const ev = w.__waIn ?? [];
+      if (ev.length === 0) return "the page received NOTHING";
+      const moves = ev.filter((e) => e.t === "mousemove");
+      const down = ev.find((e) => e.t === "mousedown");
+      const last = moves[moves.length - 1];
+      return (
+        `${moves.length} mousemove${moves.length === 1 ? "" : "s"}` +
+        (last ? ` (last at ${last.x},${last.y})` : "") +
+        (down ? `, mousedown at ${down.x},${down.y} — in the MAIN document, not the widget` : ", no mousedown here (it went into the iframe)")
+      );
+    },
+    "(probe unreadable)",
+    3000,
+  );
+}
+
 async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<void> {
   // Approach from slightly off-target so the widget sees pointer movement arriving,
   // not a cursor teleporting onto the checkbox. On camoufox `humanize` turns each of
@@ -280,12 +335,28 @@ async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<vo
   const humanized = await isFirefoxPage(page).catch(() => false);
   await sleep(humanized ? rand(1600, 2100) : rand(120, 350));
 
-  if (page.mouse.down && page.mouse.up) {
-    await page.mouse.down();
-    await sleep(rand(60, 140)); // press duration
-    await page.mouse.up();
-  } else {
-    await page.mouse.click(x, y);
+  // Press at EXPLICIT coordinates.
+  //
+  // down()/up() take none — they act wherever the cursor is, and "wherever the cursor is"
+  // stopped being knowable the moment camoufox's humanize took over movement: it drives a
+  // real cursor (you can watch it travel in the VNC view), and nothing tells us that
+  // Playwright's own idea of the pointer position followed it there. A run where the cursor
+  // visibly arrives on the checkbox and the press does nothing is exactly what that looks
+  // like, so the ambiguity is removed rather than reasoned about.
+  //
+  // click(x, y, {delay}) binds the press to the point we computed AND keeps the human-length
+  // hold — mousedown and mouseup in the same millisecond is itself something Turnstile
+  // scores. The cursor is already here from the move above, so the hop inside click() is
+  // zero-distance and humanize has nothing to interpolate.
+  try {
+    await page.mouse.click(x, y, { delay: rand(60, 140) });
+  } catch {
+    // Older adapters ignore the options argument; a press is still better than nothing.
+    if (page.mouse.down && page.mouse.up) {
+      await page.mouse.down();
+      await sleep(rand(60, 140));
+      await page.mouse.up();
+    }
   }
 }
 
@@ -1255,7 +1326,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
         },
         "Clicking Turnstile checkbox",
       );
+      await armInputProbe(page);
       await humanClickAt(page, x, y);
+      logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
 
       // Did the click LAND? This is the one question the logs could never answer.
       //

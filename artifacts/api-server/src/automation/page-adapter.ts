@@ -32,9 +32,12 @@ export interface KeyboardAdapter {
 
 export interface MouseAdapter {
   move(x: number, y: number): Promise<void>;
-  click(x: number, y: number): Promise<void>;
-  /** Separate press/release so a click can hold for a human-length time. `click()`
-   *  fires mousedown+mouseup in the same millisecond, which Turnstile scores as a bot.
+  /** `delay` holds the button down for a human-length time; without it mousedown and
+   *  mouseup land in the same millisecond, which Turnstile scores as a bot. Preferred over
+   *  down()/up() because the press is bound to EXPLICIT coordinates — see humanClickAt. */
+  click(x: number, y: number, opts?: { delay?: number }): Promise<void>;
+  /** Separate press/release. Note these take no coordinates: they act wherever the cursor
+   *  currently is, which is only knowable if nothing else moves it.
    *  Optional: the cf-proxy adapter drives the real OS mouse and has no equivalent. */
   down?(): Promise<void>;
   up?(): Promise<void>;
@@ -178,7 +181,7 @@ export function wrapPuppeteerPage(page: PuppeteerPage): PageAdapter {
     },
     mouse: {
       move: (x, y) => page.mouse.move(x, y),
-      click: (x, y) => page.mouse.click(x, y),
+      click: (x, y, opts) => page.mouse.click(x, y, opts),
       down: () => page.mouse.down(),
       up: () => page.mouse.up(),
     },
@@ -312,7 +315,7 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
     },
     mouse: {
       move: (x, y) => page.mouse.move(x, y),
-      click: (x, y) => page.mouse.click(x, y),
+      click: (x, y, opts) => page.mouse.click(x, y, opts),
       down: () => page.mouse.down(),
       up: () => page.mouse.up(),
     },
