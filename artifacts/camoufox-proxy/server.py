@@ -738,33 +738,10 @@ def session_os_click(sid):
             sx, sy = int(cur.get("X", x)), int(cur.get("Y", y))
         except ValueError:
             sx, sy = x, y
-        origin_x, origin_y = sx, sy
-        # WANDER FIRST, WITH THE REAL POINTER.
-        #
-        # To the X server the pointer had been perfectly still since the page loaded, then
-        # travelled for 350ms and clicked. A hand has been drifting around the page for
-        # seconds before it arrives anywhere. That difference we were handing over for free:
-        # the pre-click "human presence" pass could not cover it, because it moves
-        # PLAYWRIGHT's cursor — the page was told the pointer was at one place while the real
-        # one sat somewhere else entirely, so the widget got two contradictory pointer
-        # histories, which is a worse story than one honest one. That pass is now skipped
-        # whenever this endpoint is available, and the drift happens here instead, on the
-        # pointer that will actually do the pressing.
-        #
-        # This also subsumes the old "back off if we are already on the target" step: there is
-        # always travel now, and it is travel that started somewhere the pointer really was.
-        legs = []
-        wx, wy = float(sx), float(sy)
-        for _ in range(random.randint(2, 4)):
-            # Kept loosely around the target — a hand approaching a checkbox is already in
-            # that part of the page — and on-screen, since xdotool clamps and a clamped path
-            # rides the screen edge in a dead straight line.
-            wx = min(max(wx + random.uniform(-320, 320), 2.0), float(max(x + 400, 2)))
-            wy = min(max(wy + random.uniform(-220, 220), 2.0), float(max(y + 300, 2)))
-            legs.append((wx, wy, random.uniform(0.25, 0.7)))
-        # The approach proper starts from wherever the wandering ended.
-        if legs:
-            sx, sy = int(round(legs[-1][0])), int(round(legs[-1][1]))
+        # If the pointer is already on top of the target there is nothing to travel, so back
+        # off to somewhere plausible first — but as part of the same gesture, not a teleport.
+        if abs(sx - x) < 40 and abs(sy - y) < 40:
+            sx, sy = x - random.randint(150, 320), y + random.randint(-120, 120)
 
         dist = max(1.0, ((x - sx) ** 2 + (y - sy) ** 2) ** 0.5)
         # ~110Hz, and long enough that the distance is covered at a hand's pace rather than
@@ -777,21 +754,6 @@ def session_os_click(sid):
         cy = (sy + y) / 2 + random.uniform(-0.14, 0.14) * dist
 
         cmd = ["xdotool"]
-        # The wandering legs, at the same rate as everything else — one continuous stream,
-        # starting from where the pointer genuinely is.
-        px0, py0 = float(origin_x), float(origin_y)
-        for (lx, ly, ldur) in legs:
-            lsteps = max(8, int(ldur * 110))
-            for i in range(1, lsteps + 1):
-                t = i / lsteps
-                e = 3 * t * t - 2 * t * t * t
-                cmd += ["mousemove", "--sync",
-                        str(int(round(px0 + (lx - px0) * e))),
-                        str(int(round(py0 + (ly - py0) * e))),
-                        "sleep", f"{ldur / lsteps:.3f}"]
-            px0, py0 = lx, ly
-            cmd += ["sleep", f"{random.uniform(0.08, 0.3):.3f}"]  # a pause, the way a hand rests
-
         for i in range(1, steps + 1):
             t = i / steps
             e = 3 * t * t - 2 * t * t * t          # ease-in-out

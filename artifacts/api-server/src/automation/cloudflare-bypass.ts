@@ -1309,25 +1309,16 @@ async function simulateHumanScroll(page: PageAdapter): Promise<void> {
  * page: moving the widget under the cursor both restarts it and invalidates coordinates
  * we are about to click.
  *
- * SKIPPED ENTIRELY when the session can drive the real X pointer. These moves are
- * SYNTHESISED — they tell the page the cursor is at a point the actual pointer has never
- * been — while the click that follows comes from the real pointer, which until then has
- * not moved since the page loaded. That is two contradictory pointer histories arriving at
- * one widget, and the contradiction is a stronger signal than either stream alone. With a
- * real pointer available the wandering belongs on IT (the sidecar's click gesture opens
- * with a few seconds of real drift), so there is nothing left for this to add.
+ * DO NOT "optimise" this away on the real-pointer path. It was once skipped there, on the
+ * theory that its SYNTHESISED moves tell the page the cursor is somewhere the real pointer
+ * has never been, and that one honest pointer history beats two contradictory ones. That
+ * theory is untested — and the skip broke clicking outright, because under camoufox each
+ * humanized move takes up to ~1.5 s and this call was therefore quietly worth 1.5-3 s of
+ * settling. Returning instantly took that away: the widget was looked for one second after
+ * the challenge was detected, its iframe was still about:blank, and the press landed on a
+ * page with nothing there to receive it — the box did not even start spinning.
  */
 async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?: boolean }): Promise<void> {
-  if ((page as unknown as { osClick?: unknown }).osClick) {
-    // Keep the TIME, though. Under camoufox each humanized move takes up to ~1.5 s, so this
-    // call was quietly worth 1.5-3 s of settling before anything looked for the widget —
-    // and returning instantly took that away: the checkbox was searched for one second after
-    // the challenge was detected, no frame existed yet, and the click fell back to the
-    // container's geometry and hit nothing. Nobody wrote that dependency down; it was a side
-    // effect of a slow function, which is why deleting the moves broke the clicking.
-    await sleep(1_400 + Math.random() * 1_400);
-    return;
-  }
   await simulateHumanMouseMovement(page);
   if (!opts?.widgetPresent && Math.random() < 0.5) await simulateHumanScroll(page);
 }
@@ -1965,10 +1956,8 @@ export async function bypassCloudflareChallenge(
     }
 
     // Wander before going for it — heading straight for the checkbox is the unnatural
-    // version. Which cursor does the wandering depends on how the press will be delivered:
-    // with a real pointer available this call returns immediately and the drift happens in
-    // the sidecar's gesture instead, so the page sees ONE pointer history rather than a
-    // synthesised one that disagrees with the pointer that presses.
+    // version. This also buys the widget's iframe the seconds it needs to load before
+    // anything measures it; see simulateHumanPresence on why that must not be skipped.
     await simulateHumanPresence(page, { widgetPresent: true });
     await sleep(600 + Math.random() * 900);
 
