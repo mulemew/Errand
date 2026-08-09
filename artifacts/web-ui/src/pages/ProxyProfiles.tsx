@@ -8,6 +8,7 @@ import { useLang } from "@/contexts/lang-context";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -145,7 +146,6 @@ export default function ProxyProfiles() {
   };
 
   // Hide the password portion of a proxy URL when displaying it.
-  const maskUrl = (u: string) => u.replace(/(:\/\/[^:@/]+:)[^@/]+@/, "$1••••@");
 
   // Country flag as an <img> (flagcdn) — Windows browsers don't render flag emoji.
   const GeoLine = ({ geo }: { geo?: ExitGeo | null }) => {
@@ -178,16 +178,36 @@ export default function ProxyProfiles() {
    *  falls back to no proxy — but the blast radius should be visible first. */
   const UsageLine = ({ tasks }: { tasks?: TaskRef[] }) => {
     if (!tasks?.length) return <span className="text-[11px] text-muted-foreground">{t.notInUse}</span>;
-    const shown = tasks.slice(0, 3).map((x) => x.name).join(", ");
-    const rest = tasks.length - 3;
+    // The count is what a list row can usefully say; the names go in a popover.
+    //
+    // Three names and "and N more" was the worst of both: too little to answer "which
+    // tasks?", and long enough to be truncated by the row anyway — so the visible part was
+    // an arbitrary prefix of an arbitrary subset. A count reads at a glance and the full
+    // list is one click away, complete and scrollable.
     return (
-      <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1 min-w-0 max-w-full">
-        <Link2 className="h-3 w-3 shrink-0" />
-        <span className="truncate">
-          {fill(t.inUseByTasks, { n: tasks.length })}: {shown}
-          {rest > 0 ? ` ${fill(t.andNMore, { n: rest })}` : ""}
-        </span>
-      </span>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="text-[11px] text-muted-foreground inline-flex items-center gap-1 hover:text-foreground hover:underline underline-offset-2"
+          >
+            <Link2 className="h-3 w-3 shrink-0" />
+            {fill(t.inUseByTasks, { n: tasks.length })}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-64 p-0">
+          <div className="px-3 py-2 border-b border-border text-xs font-medium">
+            {fill(t.inUseByTasks, { n: tasks.length })}
+          </div>
+          <div className="max-h-56 overflow-y-auto py-1">
+            {tasks.map((x) => (
+              <div key={x.id} className="px-3 py-1 text-xs truncate" title={x.name}>
+                {x.name}
+              </div>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
     );
   };
 
@@ -228,7 +248,10 @@ export default function ProxyProfiles() {
               <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4 gap-3">
                 <div className="min-w-0 space-y-1">
                   <CardTitle className="text-sm font-semibold">{p.name}</CardTitle>
-                  <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
+                  {/* The URL is not repeated here. It is long, it is the one field that
+                      carries credentials, and the edit dialog shows it in full the moment
+                      anyone actually needs it. The exit geo below identifies the proxy far
+                      better than a truncated vless:// string does. */}
                   <GeoLine geo={p.exitGeo} />
                   <UsageLine tasks={p.usedBy} />
                 </div>
@@ -277,9 +300,11 @@ export default function ProxyProfiles() {
               {deleteTarget && deleteTarget.usedBy && deleteTarget.usedBy.length > 0 && (
                 <span className="mt-2 block text-amber-600 dark:text-amber-400">
                   {t.deleteInUseWarning}
-                  <span className="mt-1 block font-mono text-xs">
-                    {deleteTarget.usedBy.slice(0, 8).map((x) => x.name).join(", ")}
-                    {deleteTarget.usedBy.length > 8 ? ` ${fill(t.andNMore, { n: deleteTarget.usedBy.length - 8 })}` : ""}
+                  {/* All of them, scrolled — this is the confirmation for an action that
+                      touches every one of these tasks, so "and 14 more" is the wrong place
+                      to economise. */}
+                  <span className="mt-1 block max-h-40 overflow-y-auto font-mono text-xs">
+                    {deleteTarget.usedBy.map((x) => x.name).join(", ")}
                   </span>
                 </span>
               )}
