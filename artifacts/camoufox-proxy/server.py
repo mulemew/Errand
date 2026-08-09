@@ -82,16 +82,24 @@ def _build_options(body: dict) -> dict:
     # Extra camoufox knobs, opt-in via env (all off by default):
     if _envflag("CAMOUFOX_BLOCK_IMAGES", False):
         opts["block_images"] = True
-    # COOP OFF by default — this is the documented requirement for clicking Turnstile.
+    # COOP left ALONE by default, which is also camoufox's own default.
     #
-    # Camoufox's own docs: "Disables the Cross-Origin-Opener-Policy (COOP). This allows
-    # elements in cross-origin iframes, such as the Turnstile checkbox, to be clicked", and
-    # their example does exactly that before page.mouse.click(). We had it opt-in and off,
-    # which matches every symptom we chased for hours: correct coordinates, a cursor that
-    # visibly arrives, a well-formed press delivered to the widget's host — and a checkbox
-    # that never reacts, because the element inside the cross-origin iframe cannot be clicked
-    # at all while COOP is in force.
-    if _envflag("CAMOUFOX_DISABLE_COOP", True):
+    # disable_coop makes the browser ignore a site's Cross-Origin-Opener-Policy header, so
+    # cross-origin windows keep references that the header exists to sever. Camoufox
+    # documents it for clicking a Turnstile checkbox inside a cross-origin iframe, and I
+    # turned it on for that reason.
+    #
+    # That reason is gone: the checkbox is clicked with the sidecar's real X pointer now, so
+    # the press arrives as genuine input from the window system and never touches the DOM or
+    # any cross-origin check. What remains is a browser that behaves unlike a stock Firefox
+    # in a way a page can notice — window.crossOriginIsolated, or a popup whose opener is not
+    # null when it should be — which is the opposite of what an anti-detect build is for, and
+    # is why camoufox ships it off.
+    #
+    # Whether Cloudflare actually looks, I do not know and have no evidence either way. The
+    # switch goes back to its default because its justification went away, not as a guess at
+    # the cause.
+    if _envflag("CAMOUFOX_DISABLE_COOP", False):
         opts["disable_coop"] = True
     _os = (body.get("os") or "").strip().lower()
     if _os in ("windows", "macos", "mac", "linux"):
