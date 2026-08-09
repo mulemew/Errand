@@ -256,8 +256,15 @@ function clearRandomTimeouts(taskId: number): void {
  *
  * Derived by COUNTING runs into consecutive chunks of N. That grouping is the only reading
  * which survives a reset: runs 1-2 belong to window 1, 3-4 to window 2, and a run OPENS the
- * window after the chunk it closes. Retries are excluded — a retry is the same run trying
- * again, and letting one consume a slot would mean two failures quietly eat a window.
+ * window after the chunk it closes.
+ *
+ * What counts, and why:
+ *   cron, manual, webhook  — yes. A run is a run: pressing the button really did visit the
+ *                            site, so it really did spend a slot. Asked for explicitly.
+ *   retry                  — no. It is the SAME run trying again, so two failures would
+ *                            quietly eat a whole window.
+ *   dry_run                — no. A rehearsal is not an execution, and it should not be able
+ *                            to postpone a real one.
  */
 export async function describeRandomWindow(
   taskId: number,
@@ -275,7 +282,7 @@ export async function describeRandomWindow(
       .from(logsTable)
       .where(and(
         eq(logsTable.taskId, taskId),
-        sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
+        sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} NOT IN ('retry', 'dry_run'))`,
       ))) as Array<{ n: number }>;
     const total = Number(n) || 0;
     if (total > 0) {
@@ -289,7 +296,7 @@ export async function describeRandomWindow(
         .from(logsTable)
         .where(and(
           eq(logsTable.taskId, taskId),
-          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
+          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} NOT IN ('retry', 'dry_run'))`,
         ))
         .orderBy(sql`${logsTable.runAt} desc`)
         .limit(back);
