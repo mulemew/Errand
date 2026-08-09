@@ -1537,12 +1537,31 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       );
       await armInputProbe(page);
 
-      // The documented way first. Camoufox's docs click the Turnstile checkbox with
-      // page.mouse.click() — the catch is that it only works with COOP disabled, which the
-      // sidecar now does by default. With that in place a synthesised press reaches the
-      // element inside the cross-origin iframe, which is precisely what it could not do
-      // before, however right the coordinates were.
-      await humanClickAt(page, x, y);
+      // The REAL pointer first, when the backend has one.
+      //
+      // Settled by experiment rather than argument: on the page that keeps failing, a human
+      // moving the mouse in the VNC view and clicking the box PASSES, while our click —
+      // same IP, same browser, same session, same page — is judged a bot. VNC injects into
+      // the X server, so what the browser receives is genuine OS-level input; Playwright's
+      // mouse synthesises events through the automation protocol. xdotool is the same kind
+      // of input as the VNC click that works.
+      //
+      // Which also explains why only the full-page challenge fails while embedded widgets
+      // pass: an embedded Turnstile sits in a cross-origin iframe and cannot see pointer
+      // activity on the host page, so only the press inside it counts. A full-page challenge
+      // runs in the main document and watches everything we do.
+      const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
+      let clickedNatively = false;
+      if (osClick) clickedNatively = await osClick(x, y);
+      if (clickedNatively) {
+        logger.info("Clicked with the real X pointer");
+      } else {
+        // Camoufox's docs click the checkbox with page.mouse.click(), which needs COOP
+        // disabled — the sidecar does that by default now. Still the right fallback for any
+        // backend without a display of its own.
+        if (osClick) logger.info("Real-pointer click unavailable — falling back to synthesised input");
+        await humanClickAt(page, x, y);
+      }
       logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
 
       // Did the click LAND? This is the one question the logs could never answer.
@@ -1574,8 +1593,10 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       // the widget is still sitting there — a press that is still verifying must not be
       // disturbed. This exists because the synthesised press was watched arriving correctly
       // and doing nothing for hours; if disabling COOP is the whole answer it will never run.
-      const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
-      if (!settled && osClick && !(await turnstileQuickState(page)).solved) {
+      // Only when the press came from the synthesised path — the real pointer has already
+      // had its turn above. Re-clicking a widget that has just been judged is what turns a
+      // near miss into "Verification failed".
+      if (!settled && !clickedNatively && osClick && !(await turnstileQuickState(page)).solved) {
         logger.info("Synthesised click did not clear the widget — trying the real X pointer");
         if (await osClick(x, y)) {
           settled = await waitForTurnstileSettled(page, Math.max(3_000, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000)));
@@ -1733,7 +1754,16 @@ export async function bypassCloudflareChallenge(
       return "failed";
     }
 
-    await simulateHumanPresence(page, { widgetPresent: true });
+    // Don't mix synthesised movement into a real-pointer click.
+    //
+    // A full-page challenge runs in the main document and sees every pointer event on the
+    // page, and this liveness pass jumps the cursor to two arbitrary points before heading
+    // for the widget — synthetic teleports followed by a genuine OS-level press, which reads
+    // worse than either on its own. When the sidecar can drive the real pointer, its own
+    // approach (move, settle, move, press) is the only movement, and all of it is real.
+    if (!(page as unknown as { osClick?: unknown }).osClick) {
+      await simulateHumanPresence(page, { widgetPresent: true });
+    }
     await sleep(600 + Math.random() * 900);
 
     // Full verdict wait, NOT clamped to the remaining budget: having clicked, the only
