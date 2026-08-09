@@ -1428,6 +1428,49 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
  * a second click on a widget that is mid-verification is exactly what turns it into
  * "Verification failed". So: one click, then poll patiently, and never re-click here.
  */
+/**
+ * The pass-through redirect has started. Let it finish.
+ *
+ * A passed full-page challenge is THREE steps — /path → /path?__cf_chl_tk=… → /path — and
+ * the middle one is transient. Treating it as the finish line reported success while the
+ * navigation was still in flight, and everything the caller does next (script injection,
+ * popup dismissal, captcha probing) then landed on a document mid-redirect. The redirect
+ * loses that race and the challenge comes back unticked, which reads as a click that was
+ * judged a bot when it was in fact a click that WON and was then trampled.
+ *
+ * Watching costs nothing observable — page.url() is a local property read — so this waits
+ * for the url to leave __cf_chl_tk and hold still, and only then looks at the DOM once.
+ *
+ * It is allowed to outlive the caller's deadline. That deadline exists to stop us waiting
+ * on a challenge that will never pass; this one already has, and throwing away a confirmed
+ * pass to save ten seconds is the worse trade by a wide margin.
+ */
+async function waitForPassThroughToLand(page: PageAdapter, deadline: number): Promise<boolean> {
+  const url = () => { try { return page.url(); } catch { return ""; } };
+  const until = Math.max(deadline, Date.now() + 20_000);
+  let lastUrl = url();
+  let stableMs = 0;
+  while (Date.now() < until) {
+    await sleep(250);
+    const here = url();
+    if (here !== lastUrl) { lastUrl = here; stableMs = 0; continue; }
+    // Still on the intermediate hop — it has not landed yet, however still the url is.
+    if (here.includes("__cf_chl_tk")) continue;
+    stableMs += 250;
+    if (stableMs >= 1_000) break;
+  }
+  // One look, at the end, to tell "landed on the real page" from "bounced back to the
+  // challenge". Its own failure is not a verdict — we saw the pass-through, so an
+  // unanswerable page (mid-load, detached) is reported as the pass it almost certainly is.
+  const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
+  if (stillChallenged === "none") {
+    logger.info({ landedOn: lastUrl.slice(0, 120) }, "Challenge pass-through landed");
+    return true;
+  }
+  logger.warn({ url: lastUrl.slice(0, 120), stillChallenged }, "Pass-through redirect started but the challenge came back");
+  return false;
+}
+
 async function waitForTurnstileSettled(
   page: PageAdapter,
   budgetMs: number,
@@ -1465,12 +1508,24 @@ async function waitForTurnstileSettled(
       // strips its own query with history.replaceState, so "the url changed" can be false at
       // both ends of a success and true only in the middle.
       if (here.includes("__cf_chl_tk")) {
-        logger.debug({ to: here.slice(0, 120) }, "Challenge issued its pass-through redirect");
-        return true;
+        // The click WORKED — this url only exists on a passed challenge. But it is the
+        // MIDDLE of a three-step pass-through, not the end, and returning here reported
+        // success while the redirect was still in flight: the caller resumed immediately and
+        // went back to handling the page (url polling, dismissPopups injecting and clicking,
+        // detectAndHandleCaptcha probing the DOM) on a document that was navigating. That is
+        // the reported "url flashes, then it spins and drops back to an unticked box", and
+        // the timing matches to the second — 4 s of silence plus one poll is the ~5 s after
+        // the click when the box was seen reverting.
+        //
+        // So: having seen it, stay quiet and let it land.
+        logger.debug({ to: here.slice(0, 120) }, "Challenge issued its pass-through redirect — waiting for it to land");
+        return await waitForPassThroughToLand(page, deadline);
       }
       if (here && here !== startUrl) {
-        logger.debug({ from: startUrl, to: here }, "Challenge page navigated away — passed");
-        return true;
+        // Same reasoning as above: a navigation seen is a navigation STARTED. Let it settle
+        // before telling the caller it may touch the page again.
+        logger.debug({ from: startUrl, to: here }, "Challenge page navigated away — waiting for it to settle");
+        return await waitForPassThroughToLand(page, deadline);
       }
       // 250ms, because page.url() is a local property read — no protocol round-trip, nothing
       // injected, nothing the page can observe. The only cost of looking often is that the
