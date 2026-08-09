@@ -764,6 +764,45 @@ def session_os_click(sid):
                 py += random.uniform(-0.7, 0.7)
             cmd += ["mousemove", "--sync", str(int(round(px))), str(int(round(py))),
                     "sleep", f"{step_delay:.3f}"]
+        # DWELL INSIDE THE WIDGET BEFORE PRESSING.
+        #
+        # Turnstile lives in a CROSS-ORIGIN iframe, so the only pointer activity it can
+        # observe is what happens inside its own ~300x65 box — everything on the host page is
+        # invisible to it. (That is the same rule that stops the host document from seeing
+        # the mousedown we deliver into it.) Read the other way round, it says where all the
+        # effort has been going wrong: page-wide wandering and the shape of the approach are
+        # both almost entirely OUTSIDE the box, so nothing about them can have reached the
+        # thing doing the judging. What it does see, today, is: pointer appears, holds still
+        # 0.2s, twitches one pixel, clicks. Two or three events in total.
+        #
+        # A hand clicking the same box in the VNC view spends a second or two inside it —
+        # arriving, drifting, correcting, settling — and leaves dozens. That is the one
+        # difference that is both large and visible to the widget, so this is where the
+        # movement belongs.
+        #
+        # Bounds are relative to the aim point, which sits 22px from the widget's left edge
+        # and vertically centred: -14..+60 across and ±18 down still lands well inside a
+        # 300x65 control, with margin for the caller's ±2px of jitter.
+        dwell = []
+        dwx, dwy = float(x), float(y)
+        for _ in range(random.randint(3, 6)):
+            dwx = min(max(dwx + random.uniform(-26, 34), x - 14), x + 60)
+            dwy = min(max(dwy + random.uniform(-14, 14), y - 18), y + 18)
+            dwell.append((dwx, dwy, random.uniform(0.12, 0.35)))
+        dwell.append((float(x), float(y), random.uniform(0.12, 0.22)))  # back onto the checkbox
+        pdx, pdy = float(x), float(y)
+        for (tx_, ty_, tdur) in dwell:
+            tsteps = max(6, int(tdur * 110))
+            for i in range(1, tsteps + 1):
+                t = i / tsteps
+                e = 3 * t * t - 2 * t * t * t
+                cmd += ["mousemove", "--sync",
+                        str(int(round(pdx + (tx_ - pdx) * e))),
+                        str(int(round(pdy + (ty_ - pdy) * e))),
+                        "sleep", f"{tdur / tsteps:.3f}"]
+            pdx, pdy = tx_, ty_
+            cmd += ["sleep", f"{random.uniform(0.06, 0.2):.3f}"]
+
         # Settle, a pixel of tremor, press, hold, release — still one process.
         cmd += ["sleep", f"{random.uniform(0.18, 0.32):.3f}",
                 "mousemove", "--sync", str(x + random.choice((-1, 0, 1))), str(y + random.choice((-1, 0, 1))),
