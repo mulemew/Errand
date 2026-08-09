@@ -198,18 +198,29 @@ function runGeoProbe(probe: GeoProbe, proxyArg?: string): Promise<IpApi> {
 
 /** Try each probe in turn; the first that answers wins. */
 async function runGeoCurl(proxyArg?: string): Promise<IpApi> {
-  let last: Error | null = null;
+  // Report EVERY probe's failure, not just the last one.
+  //
+  // Reporting only the last meant the message always came from ip-api — the http fallback,
+  // and the least informative of the three. "The proxy answered the request itself" is true
+  // of a plaintext request and says nothing about why the two HTTPS probes before it failed,
+  // which is the part worth knowing: those go through CONNECT, the way a browser uses the
+  // proxy, so their errors are the ones that describe the proxy's real behaviour (auth
+  // required, tunnel refused, host unreachable).
+  const failures: string[] = [];
   for (const probe of GEO_PROBES) {
+    const host = (() => { try { return new URL(probe.url).host; } catch { return probe.url; } })();
+    const scheme = probe.url.startsWith("https") ? "https" : "http";
     try {
       const res = await runGeoProbe(probe, proxyArg);
       if (res.query) return res;
-      last = new Error(`${probe.url} answered without an IP`);
+      failures.push(`${scheme}://${host}: answered without an IP`);
     } catch (err) {
-      last = err instanceof Error ? err : new Error(String(err));
-      logger.debug({ url: probe.url, err: last.message }, "Geo probe failed — trying the next one");
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`${scheme}://${host}: ${msg.slice(0, 160)}`);
+      logger.debug({ url: probe.url, err: msg }, "Geo probe failed — trying the next one");
     }
   }
-  throw last ?? new Error("no geo probe answered");
+  throw new Error(failures.length ? failures.join(" | ") : "no geo probe answered");
 }
 /** Resolve exit IP + geo for a task's browserConfig — proxy exit, or host IP when no proxy.
  *  Exported so the proxy-profiles route can resolve a profile's geo the same way. */
