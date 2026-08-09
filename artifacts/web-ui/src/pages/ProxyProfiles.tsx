@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { UsedByTasks } from "@/components/UsedByTasks";
+import { Badge } from "@/components/ui/badge";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -49,6 +50,18 @@ export default function ProxyProfiles() {
 
   const fill = (template: string, vars: Record<string, string | number>) =>
     Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), template);
+
+  /** The protocol, read off the URL rather than stored.
+   *
+   *  There is no type column, and adding one would mean a second source of truth that can
+   *  disagree with the URL after an edit. The scheme IS the type — it is what the server
+   *  infers from too — so deriving it costs nothing and cannot drift. socks5h is shown as
+   *  itself rather than folded into socks5: the difference is where DNS resolves, which is
+   *  the kind of thing worth seeing at a glance. */
+  const schemeOf = (url: string): string => {
+    const m = /^([a-z0-9+.-]+):\/\//i.exec(url.trim());
+    return m ? m[1]!.toLowerCase() : "?";
+  };
 
   const load = () => {
     setLoading(true);
@@ -211,7 +224,12 @@ export default function ProxyProfiles() {
             <Card key={p.id} className="border-border shadow-sm">
               <CardHeader className="pb-2 bg-muted/20 border-b border-border flex-row items-center justify-between py-3 px-4 gap-3">
                 <div className="min-w-0 space-y-1">
-                  <CardTitle className="text-sm font-semibold">{p.name}</CardTitle>
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2 min-w-0">
+                    <span className="truncate">{p.name}</span>
+                    <Badge variant="secondary" className="shrink-0 font-mono text-[10px] uppercase tracking-wide">
+                      {schemeOf(p.url)}
+                    </Badge>
+                  </CardTitle>
                   {/* The URL is not repeated here. It is long, it is the one field that
                       carries credentials, and the edit dialog shows it in full the moment
                       anyone actually needs it. The exit geo below identifies the proxy far
