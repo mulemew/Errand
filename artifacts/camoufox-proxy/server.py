@@ -790,6 +790,64 @@ def session_os_click(sid):
         return jsonify({"error": str(e)}), 500
 
 
+@app.get("/record-input")
+def record_input():
+    """Record the raw pointer events on the newest session's display.
+
+    A debugging aid with one job: make "a human's click" and "our click" comparable as DATA
+    instead of as descriptions. Both arrive at the same X server on the same display, so
+    whatever separates them is in these events — timing, step size, which events exist at
+    all — and reading them beats another round of reasoning about what a hand does.
+
+    No arguments to look up. It picks the most recent session itself, because the display
+    number is an implementation detail nobody debugging this should have to go hunting for.
+    """
+    seconds = min(60, max(3, int(request.args.get("seconds", "20"))))
+    with _lock:
+        entries = [e for e in _servers.values() if e.get("display") is not None]
+        entry = max(entries, key=lambda e: e.get("started", 0)) if entries else None
+    if not entry:
+        return jsonify({"error": "no session with a display of its own is running"}), 404
+    disp = entry["display"]
+
+    try:
+        out = subprocess.run(
+            ["xev", "-root", "-event", "button", "-event", "motion"],
+            env={**os.environ, "DISPLAY": f":{disp}"},
+            timeout=seconds, capture_output=True, text=True,
+        ).stdout
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # Condense to one line per event: type, ms since the previous one, position.
+    events = []
+    prev_t = None
+    for m in re.finditer(r"(MotionNotify|ButtonPress|ButtonRelease) event.*?time (\d+),.*?\(([\d-]+),([\d-]+)\)", out, re.S):
+        kind, t, ex, ey = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        events.append({"t": kind[0:4], "dt": None if prev_t is None else t - prev_t, "x": ex, "y": ey})
+        prev_t = t
+
+    moves = [e for e in events if e["t"] == "Moti"]
+    gaps = [e["dt"] for e in moves if e["dt"] is not None]
+    steps = []
+    for i in range(1, len(moves)):
+        steps.append(round(((moves[i]["x"] - moves[i-1]["x"]) ** 2 + (moves[i]["y"] - moves[i-1]["y"]) ** 2) ** 0.5, 1))
+    summary = {
+        "display": disp,
+        "seconds": seconds,
+        "events": len(events),
+        "motions": len(moves),
+        "buttons": [e["t"] for e in events if e["t"] != "Moti"],
+        "gap_ms": {"min": min(gaps), "median": sorted(gaps)[len(gaps)//2], "max": max(gaps)} if gaps else None,
+        "step_px": {"min": min(steps), "median": sorted(steps)[len(steps)//2], "max": max(steps)} if steps else None,
+        "rate_hz": round(1000 / (sorted(gaps)[len(gaps)//2]), 1) if gaps and sorted(gaps)[len(gaps)//2] > 0 else None,
+        "tail": events[-25:],
+    }
+    return jsonify(summary)
+
+
 @app.post("/release")
 def release():
     body = request.get_json(silent=True) or {}
