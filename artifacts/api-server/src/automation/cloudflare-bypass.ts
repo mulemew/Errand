@@ -1450,11 +1450,23 @@ async function waitForTurnstileSettled(
     const startUrl = (() => { try { return page.url(); } catch { return ""; } })();
     while (Date.now() < deadline) {
       const here = (() => { try { return page.url(); } catch { return startUrl; } })();
+      // __cf_chl_tk is the redirect a PASSED challenge issues — observed on the live site,
+      // which goes /auth/login → /auth/login?__cf_chl_tk=… → the real login page. Naming it
+      // matters because the third step lands back on the ORIGINAL url: the challenge script
+      // strips its own query with history.replaceState, so "the url changed" can be false at
+      // both ends of a success and true only in the middle.
+      if (here.includes("__cf_chl_tk")) {
+        logger.debug({ to: here.slice(0, 120) }, "Challenge issued its pass-through redirect");
+        return true;
+      }
       if (here && here !== startUrl) {
         logger.debug({ from: startUrl, to: here }, "Challenge page navigated away — passed");
         return true;
       }
-      await sleep(1_000); // free: no evaluate, no frame read
+      // 250ms, because page.url() is a local property read — no protocol round-trip, nothing
+      // injected, nothing the page can observe. The only cost of looking often is that the
+      // transient url above is not missed.
+      await sleep(250);
     }
     // One look, once, rather than thirty.
     const state = await turnstileQuickState(page);
