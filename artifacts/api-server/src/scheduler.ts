@@ -288,7 +288,20 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
       logger.warn({ taskId, err }, "Could not read the last run — scheduling from now");
     }
 
-    const jitter = 0.5 + Math.random(); // uniform in [0.5, 1.5) — mean 1
+    // Uniform in [0.5, 1.0) — so the gap is never MORE than one slot.
+    //
+    // The UI states the contract: "上次运行完成后，下次运行会在 3 天内的某个随机时刻执行" —
+    // within the window, from the last run. It was [0.5, 1.5), which overshoots by up to half
+    // a window: for "3 days, once" the next run landed anywhere from 1.5 to 4.5 days out, so
+    // roughly a third of the time the promise was simply false.
+    //
+    // That matters beyond tidiness. These schedules are used to renew things that expire —
+    // "every 36h" means the credential dies at 36h — and a gap of 1.5x the window misses the
+    // deadline it was set to meet, silently, one time in three.
+    //
+    // Capping at 1.0 keeps the randomness where it is useful (the run is still unpredictable
+    // within the window) and puts the ceiling where the interface always said it was.
+    const jitter = 0.5 + Math.random() * 0.5;
     let nextRunMs = lastRunMs > 0 ? lastRunMs + slotMs * jitter : now + Math.random() * slotMs;
     if (nextRunMs <= now) {
       // Overdue: the process was down, or the task was just enabled. Go soon, but not
