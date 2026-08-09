@@ -914,11 +914,31 @@ class CamoufoxProvider implements BrowserProvider {
     (adapter as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick =
       async (x: number, y: number): Promise<boolean> => {
         try {
-          const origin = (await page.evaluate(() => ({
-            x: (window as unknown as { mozInnerScreenX?: number }).mozInnerScreenX ?? 0,
-            y: (window as unknown as { mozInnerScreenY?: number }).mozInnerScreenY ?? 0,
-          }))) as { x: number; y: number };
-          if (!origin.x && !origin.y) return false; // not Firefox, or unreadable — caller falls back
+          // The viewport's origin on screen, READ ONCE and remembered.
+          //
+          // It cannot change during a session — the window does not move — and asking the
+          // page for it every click made the real pointer unavailable at exactly the wrong
+          // moment: a challenge page navigating or re-arming destroys the execution context,
+          // page.evaluate throws, and the click silently downgraded to synthesised input,
+          // which is the mode that does not pass. "Real-pointer click unavailable" in the
+          // logs was this, not a missing display — the sidecar had allocated one every time.
+          let origin = _screenOrigin.get(page as object);
+          if (!origin) {
+            for (let attempt = 0; attempt < 2 && !origin; attempt++) {
+              const read = (await page
+                .evaluate(() => ({
+                  x: (window as unknown as { mozInnerScreenX?: number }).mozInnerScreenX ?? 0,
+                  y: (window as unknown as { mozInnerScreenY?: number }).mozInnerScreenY ?? 0,
+                }))
+                .catch(() => null)) as { x: number; y: number } | null;
+              // mozInnerScreenY is the viewport top, which sits below the browser chrome, so
+              // it is never 0 on a real window — a zero pair means we did not get an answer.
+              if (read && (read.x || read.y)) origin = read;
+              else if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+            }
+            if (origin) _screenOrigin.set(page as object, origin);
+          }
+          if (!origin) return false; // not Firefox, or the page would not answer at all
           const res = await fetch(`${this.baseUrl}/sessions/${encodeURIComponent(id)}/os-click`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -995,6 +1015,10 @@ class CamoufoxProvider implements BrowserProvider {
    *
    * Stealth and ad blocking for Playwright are handled entirely client-side.
    */
+/** Viewport origin in screen coordinates, per page. Read once — the window does not move —
+ *  so a click never has to ask a page that may be mid-navigation. See osClick. */
+const _screenOrigin = new WeakMap<object, { x: number; y: number }>();
+
 /**
  * Refuse an https:// proxy whose certificate does not validate.
  *

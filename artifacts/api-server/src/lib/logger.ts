@@ -64,6 +64,33 @@ function logMethod(this: unknown, args: unknown[], method: (...a: unknown[]) => 
   } catch {
     /* never let logging break the caller */
   }
+
+  // Stamp the task on the RECORD as well, not just on the live stream.
+  //
+  // Modules that log from inside a run — the Cloudflare bypass especially — pass no taskId,
+  // because they have no idea which task they are serving. That was fine while someone was
+  // watching one run in the UI, and useless afterwards: `docker logs` showed a wall of
+  // "Clicked with the real X pointer" with nothing to attribute it to, and with two tasks
+  // running at once the lines interleave with no way to tell them apart.
+  //
+  // The context is already here — the block above reads it for the same reason — so the id
+  // goes onto the object pino serialises. An explicit taskId in the call always wins.
+  try {
+    const taskId = currentTaskId();
+    if (taskId != null) {
+      const [first] = args;
+      if (typeof first === "object" && first !== null && !Array.isArray(first)) {
+        if ((first as Record<string, unknown>).taskId === undefined) {
+          (first as Record<string, unknown>).taskId = taskId;
+        }
+      } else if (typeof first === "string") {
+        args = [{ taskId }, ...args];
+      }
+    }
+  } catch {
+    /* same rule: never let logging break the caller */
+  }
+
   return method.apply(this, args as never[]);
 }
 
