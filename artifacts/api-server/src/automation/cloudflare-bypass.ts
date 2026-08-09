@@ -1308,8 +1308,17 @@ async function simulateHumanScroll(page: PageAdapter): Promise<void> {
  * why the checkbox "kept spinning". Scrolling is likewise skipped once a widget is on the
  * page: moving the widget under the cursor both restarts it and invalidates coordinates
  * we are about to click.
+ *
+ * SKIPPED ENTIRELY when the session can drive the real X pointer. These moves are
+ * SYNTHESISED — they tell the page the cursor is at a point the actual pointer has never
+ * been — while the click that follows comes from the real pointer, which until then has
+ * not moved since the page loaded. That is two contradictory pointer histories arriving at
+ * one widget, and the contradiction is a stronger signal than either stream alone. With a
+ * real pointer available the wandering belongs on IT (the sidecar's click gesture opens
+ * with a few seconds of real drift), so there is nothing left for this to add.
  */
 async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?: boolean }): Promise<void> {
+  if ((page as unknown as { osClick?: unknown }).osClick) return;
   await simulateHumanMouseMovement(page);
   if (!opts?.widgetPresent && Math.random() < 0.5) await simulateHumanScroll(page);
 }
@@ -1864,10 +1873,11 @@ export async function bypassCloudflareChallenge(
       return "failed";
     }
 
-    // Wander before going for it. Camoufox's humanize turns each of these moves into a real
-    // interpolated trajectory — watched in the VNC view, the cursor drifts around the page
-    // the way a hand does. Heading straight for the checkbox is the unnatural version, so
-    // this stays regardless of how the press itself is delivered.
+    // Wander before going for it — heading straight for the checkbox is the unnatural
+    // version. Which cursor does the wandering depends on how the press will be delivered:
+    // with a real pointer available this call returns immediately and the drift happens in
+    // the sidecar's gesture instead, so the page sees ONE pointer history rather than a
+    // synthesised one that disagrees with the pointer that presses.
     await simulateHumanPresence(page, { widgetPresent: true });
     await sleep(600 + Math.random() * 900);
 
