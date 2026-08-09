@@ -3,7 +3,7 @@ import type { PageAdapter } from "./page-adapter";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { detectAndHandleCaptcha } from "./captcha";
   import { clearCloudflareInterstitial, describeTurnstileState } from "./cloudflare-bypass";
-  import { gotoTolerant } from "./login-verify";
+  import { gotoTolerant, detectLoginState } from "./login-verify";
   import { normalizeTotpSecret } from "../lib/totp";
   import type { CaptchaSolver } from "./captcha-solver";
   import crypto from "crypto";
@@ -960,11 +960,57 @@ import type { PageAdapter } from "./page-adapter";
             return { success: true, captchaBlocked: false, message: `Already signed in. ${found}` };
           }
         }
+
+        // No criterion configured, or it did not match — ask the page itself.
+        //
+        // Requiring a success text to notice an existing session was a regression I put here:
+        // the check only ran when one was set, so a task without one reported "Could not find
+        // username/email input field" about a session that was working, from a URL that was
+        // plainly not a login page. detectLoginState answers this without configuration, and
+        // only its POSITIVE verdict counts — a visible sign-out or account affordance. An
+        // "unknown" page is still a failure, because guessing success from the absence of a
+        // login form is how a run ends up reporting a login that never happened.
+        const { verdict, evidence } = await detectLoginState(page);
+        if (verdict === "logged_in") {
+          logger.info({ targetUrl, url: page.url(), evidence }, "No login form — already signed in");
+          return { success: true, captchaBlocked: false, message: `Already signed in (${evidence}). URL: ${page.url()}` };
+        }
+
+        // Second signal, for panels whose markup carries no word detectLoginState knows.
+        //
+        // We navigated to the login URL and were NOT shown a login form — no username field,
+        // no password field, no "sign in with". A site that wanted us to log in would have
+        // put one in front of us; being let through to a real page instead is what an
+        // existing session looks like. Reported from betadash.lunes.host, which leaves an
+        // authenticated request on /servers/<id> and bounces an anonymous one to /login.
+        //
+        // Guarded against the way this could lie: a page that failed to load has no login
+        // form either. So the URL must not itself look like a login page, and there has to
+        // be real content on it.
+        if (verdict === "unknown") {
+          const here = page.url();
+          const looksLikeLoginUrl = /\/(login|signin|sign-in|auth)(\/|\?|#|$)/i.test(here);
+          const bodyLen = (await page
+            .evaluate(() => (document.body?.innerText ?? "").trim().length)
+            .catch(() => 0)) as number;
+          if (!looksLikeLoginUrl && bodyLen > 200) {
+            logger.info(
+              { targetUrl, url: here, bodyLen },
+              "No login form and no login page — treating this as an existing session",
+            );
+            return {
+              success: true,
+              captchaBlocked: false,
+              message: `Already signed in — the site served ${here} without asking to log in.`,
+            };
+          }
+        }
+
         return {
           success: false,
           captchaBlocked: false,
           message:
-            `Could not find username/email input field on the page. URL: ${page.url()}` +
+            `Could not find username/email input field on the page (${evidence}). URL: ${page.url()}` +
             (wantText || wantSelector
               ? " — and the success criterion is not there either, so this is neither a login page nor a signed-in one."
               : ""),
