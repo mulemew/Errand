@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/contexts/lang-context";
+import { UsedByTasks } from "@/components/UsedByTasks";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
@@ -187,22 +188,6 @@ export default function Providers() {
   const HealthDot = ({ h }: { h: boolean | null }) =>
     h === true ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : h === false ? <XCircle className="h-4 w-4 text-destructive" /> : <HelpCircle className="h-4 w-4 text-muted-foreground" />;
 
-  /** Tasks bound to this provider. Deleting is safe — the reference is stripped and the
-   *  runner falls back — but you should be able to SEE the blast radius first. */
-  const UsageLine = ({ tasks }: { tasks: TaskRef[] }) => {
-    if (!tasks?.length) return <span className="text-[11px] text-muted-foreground">{t.notInUse}</span>;
-    const shown = tasks.slice(0, 3).map((x) => x.name).join(", ");
-    const rest = tasks.length - 3;
-    return (
-      <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1 min-w-0 max-w-full">
-        <Link2 className="h-3 w-3 shrink-0" />
-        <span className="truncate">
-          {fill(t.inUseByTasks, { n: tasks.length })}: {shown}
-          {rest > 0 ? ` ${fill(t.andNMore, { n: rest })}` : ""}
-        </span>
-      </span>
-    );
-  };
 
   const deleteTarget = rows.find((r) => r.id === deleteId) ?? null;
 
@@ -258,7 +243,7 @@ export default function Providers() {
                     )}
                   </CardTitle>
                   <p className="text-xs text-muted-foreground font-mono truncate">{maskUrl(p.url)}</p>
-                  <UsageLine tasks={p.usedBy} />
+                  <UsedByTasks tasks={p.usedBy} />
                   {p.healthy === false && p.lastError && <p className="text-[11px] text-destructive truncate">{t.healthCheckFailed}: {p.lastError}</p>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -421,9 +406,8 @@ export default function Providers() {
               {deleteTarget && deleteTarget.usedBy.length > 0 && (
                 <span className="mt-2 block text-amber-600 dark:text-amber-400">
                   {t.deleteInUseWarning}
-                  <span className="mt-1 block font-mono text-xs">
-                    {deleteTarget.usedBy.slice(0, 8).map((x) => x.name).join(", ")}
-                    {deleteTarget.usedBy.length > 8 ? ` ${fill(t.andNMore, { n: deleteTarget.usedBy.length - 8 })}` : ""}
+                  <span className="mt-1 block max-h-40 overflow-y-auto font-mono text-xs">
+                    {deleteTarget.usedBy.map((x) => x.name).join(", ")}
                   </span>
                 </span>
               )}

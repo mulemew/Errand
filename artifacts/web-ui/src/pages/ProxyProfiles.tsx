@@ -8,7 +8,7 @@ import { useLang } from "@/contexts/lang-context";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { UsedByTasks } from "@/components/UsedByTasks";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -174,42 +174,6 @@ export default function ProxyProfiles() {
     );
   };
 
-  /** Tasks bound to this proxy. Deleting is safe — the reference is stripped and the run
-   *  falls back to no proxy — but the blast radius should be visible first. */
-  const UsageLine = ({ tasks }: { tasks?: TaskRef[] }) => {
-    if (!tasks?.length) return <span className="text-[11px] text-muted-foreground">{t.notInUse}</span>;
-    // The count is what a list row can usefully say; the names go in a popover.
-    //
-    // Three names and "and N more" was the worst of both: too little to answer "which
-    // tasks?", and long enough to be truncated by the row anyway — so the visible part was
-    // an arbitrary prefix of an arbitrary subset. A count reads at a glance and the full
-    // list is one click away, complete and scrollable.
-    return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="text-[11px] text-muted-foreground inline-flex items-center gap-1 hover:text-foreground hover:underline underline-offset-2"
-          >
-            <Link2 className="h-3 w-3 shrink-0" />
-            {fill(t.inUseByTasks, { n: tasks.length })}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-64 p-0">
-          <div className="px-3 py-2 border-b border-border text-xs font-medium">
-            {fill(t.inUseByTasks, { n: tasks.length })}
-          </div>
-          <div className="max-h-56 overflow-y-auto py-1">
-            {tasks.map((x) => (
-              <div key={x.id} className="px-3 py-1 text-xs truncate" title={x.name}>
-                {x.name}
-              </div>
-            ))}
-          </div>
-        </PopoverContent>
-      </Popover>
-    );
-  };
 
   const deleteTarget = rows.find((r) => r.id === deleteId) ?? null;
 
@@ -253,7 +217,7 @@ export default function ProxyProfiles() {
                       anyone actually needs it. The exit geo below identifies the proxy far
                       better than a truncated vless:// string does. */}
                   <GeoLine geo={p.exitGeo} />
-                  <UsageLine tasks={p.usedBy} />
+                  <UsedByTasks tasks={p.usedBy} />
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <Button variant="ghost" size="icon" className="h-7 w-7" title={t.refreshExitOne} onClick={() => refreshOne(p.id)} disabled={refreshingId === p.id || refreshingAll}>
