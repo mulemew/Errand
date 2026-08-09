@@ -1421,8 +1421,14 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
  */
 async function waitForTurnstileSettled(page: PageAdapter, budgetMs: number): Promise<boolean> {
   const deadline = Date.now() + budgetMs;
+  // Poll GENTLY. Each pass is a page.evaluate, and this module's own comments keep saying
+  // that injecting scripts inside Cloudflare's watch window is itself scored — then this
+  // loop did it every 700ms, thirty-odd times per verdict. Nobody clicking a checkbox by
+  // hand runs a script every second afterwards. The verdict takes seconds either way, so
+  // checking five times instead of thirty costs nothing worth having.
+  const POLL_MS = 2_500;
   while (Date.now() < deadline) {
-    await sleep(700);
+    await sleep(POLL_MS);
     // Cheap poll: ONE evaluate covering both success shapes.
     //
     // The second signal is "the widget is GONE", NOT detectCfChallenge() === "none".
@@ -1631,10 +1637,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       //   "Verification failed"   → it landed and was judged a bot
       // Debug-gated: it costs a frame read plus ~800 ms, so it only happens while someone
       // is actually watching the run.
-      if (logger.isLevelEnabled("debug")) {
-        await sleep(800);
-        logger.debug({ widget: await describeTurnstileState(page) }, "Turnstile state right AFTER the click");
-      }
+      // The "state right after the click" read is gone. It cost a cross-origin frame read
+      // one second into the verdict — the most sensitive moment there is — and on the page
+      // this matters for it never returned anything but "no turnstile frame" anyway.
 
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
