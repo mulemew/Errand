@@ -1028,6 +1028,24 @@ class CamoufoxProvider implements BrowserProvider {
         if (config.ignoreHTTPS) extraArgs.push("--ignore-certificate-errors");
       }
 
+      // The PROXY's own certificate, which is a launch-time concern on every backend.
+      //
+      // An https:// proxy means TLS to the proxy itself, and these are addressed by IP far
+      // more often than by hostname, so their certificates are self-signed — Chromium then
+      // refuses the connection outright with ERR_PROXY_CERTIFICATE_INVALID, before a page is
+      // ever fetched. The task's "ignore HTTPS errors" setting does not cover this: that is
+      // ignoreHTTPSErrors, which excuses the TARGET site's certificate, one layer later.
+      //
+      // Deliberately OUTSIDE the includeChromeFlags block. The Playwright CDP provider passes
+      // false there because its proxy and ignoreHTTPS are context-level options — but a
+      // context option cannot excuse a certificate the browser rejects at the transport, so
+      // that path needs this flag too, and only this one. Same exemption curl needs
+      // (--proxy-insecure), on the same condition: only when the proxy is itself https, so
+      // nothing is loosened for the http:// and socks5:// setups that never hit this.
+      if (/^https:\/\//i.test(config.proxyUrl ?? "") && !extraArgs.includes("--ignore-certificate-errors")) {
+        extraArgs.push("--ignore-certificate-errors");
+      }
+
       if (extraArgs.length > 0 && !url.searchParams.has("launch")) {
         url.searchParams.set("launch", JSON.stringify({ args: extraArgs }));
       }
