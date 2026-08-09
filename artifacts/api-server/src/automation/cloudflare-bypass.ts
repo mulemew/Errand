@@ -172,62 +172,6 @@ async function evalBounded<T>(page: PageAdapter, fn: unknown, fallback: T, ms = 
   }
 }
 
-/**
- * What is actually under the point we are about to click?
- *
- * The one question the logs could never answer. We log the coordinates we AIMED at, and the
- * box we derived them from, and then nothing — so when a widget does not react there is no
- * way to tell a click that landed on the checkbox from one that landed on the page
- * background ten pixels to its right, or on an overlay sitting on top of the widget. Every
- * diagnosis past that point has been inference.
- *
- * document.elementFromPoint is most of the answer, with one trap that has to be spelled out:
- * hit-testing retargets through a closed shadow root to its HOST, and that host is the
- * oversized CONTAINER (896x69, 740x71 on the two sites seen), not the 300x65 widget. So the
- * container coming back does NOT mean the point is on the widget — every point across that
- * whole width returns it, including the empty space beside the widget. Verified on
- * nodeseek's login form: offsets 20 and 30 both "hit" the host, and so would offset 400.
- *
- * What it CAN say for certain is the negative: anything other than the container means we
- * are outside the widget's container entirely. Reported as such, in those words, rather than
- * as a confirmation it cannot give.
- *
- * Diagnostics only: bounded, never throws, and its answer is not acted on.
- */
-async function describeAimPoint(page: PageAdapter, x: number, y: number): Promise<string> {
-  try {
-    return (await Promise.race([
-      page.evaluate(
-        ((arg: unknown) => {
-          const { x: ax, y: ay } = arg as { x: number; y: number };
-          const el = document.elementFromPoint(ax, ay);
-          if (!el) return "nothing (outside the viewport?)";
-          const name =
-            el.tagName.toLowerCase() +
-            (el.id ? `#${el.id}` : "") +
-            (typeof el.className === "string" && el.className ? `.${el.className.trim().split(/\s+/)[0]}` : "");
-          const resp = document.querySelector(
-            'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
-          );
-          const host = resp?.parentElement ?? null;
-          if (host && (el === host || host.contains(el))) {
-            const h = host.getBoundingClientRect();
-            // Say how far in we are, and how wide the thing is. A widget is ~300 wide, so an
-            // offset of 30 into a 740-wide host is the only part of this that is diagnostic.
-            return `${name} — inside the widget's CONTAINER (${Math.round(h.width)}x${Math.round(h.height)}), ${Math.round(ax - h.x)}px from its left edge; whether that is the widget itself this cannot tell`;
-          }
-          const r = el.getBoundingClientRect();
-          return `${name} — OUTSIDE the widget's container (its box: ${Math.round(r.x)},${Math.round(r.y)} ${Math.round(r.width)}x${Math.round(r.height)})`;
-        }) as never,
-        { x, y } as never,
-      ),
-      new Promise<string>((r) => setTimeout(() => r("(aim probe timed out)"), 3000)),
-    ])) as string;
-  } catch {
-    return "(aim probe failed)";
-  }
-}
-
 // ── Backend flavour ───────────────────────────────────────────────────────────
 
 /** Camoufox is a patched FIREFOX. Chromium-only tricks (window.chrome, the Network
@@ -245,129 +189,11 @@ async function isFirefoxPage(page: PageAdapter): Promise<boolean> {
   return v;
 }
 
-/**
- * Click like a hand does: land on the point, dwell, press, hold, release.
- *
- * `mouse.click()` fires mousedown and mouseup in the SAME millisecond — a press duration
- * no human produces, and one of the cheapest bot signals Turnstile can read. Falls back
- * to click() on adapters without down/up (cf-proxy drives the real OS mouse itself).
- */
-/**
- * Watch what the PAGE receives while we click it.
- *
- * The missing half of the picture. We know what we aimed at and we can see the cursor get
- * there, and then the widget does nothing — with no way to tell whether the press was
- * delivered, delivered somewhere else, or never dispatched at all.
- *
- * Read the TARGET, not the presence of the event. The first version of this said a mousedown
- * seen in the main document meant the press had missed the widget — which is only true when
- * the widget is an IFRAME. Turnstile's checkbox here lives in a CLOSED SHADOW ROOT, and a
- * press that lands on it correctly is retargeted to the host and shows up in this document
- * too. That reading sent an entire evening after a phantom (site isolation, since disproven:
- * fission.autostart went to false in the profile and nothing changed).
- *
- *   • mousedown received by the widget's host element — it landed ON the widget. Whatever
- *     happens next is Turnstile's verdict, not our aim.
- *   • mousedown received by something else — that element is what we actually hit, and its
- *     name says where the aim really went.
- *   • nothing at all — synthesized input is not reaching this page, and no amount of
- *     coordinate work will fix that.
- */
-async function armInputProbe(page: PageAdapter): Promise<void> {
-  await page
-    .evaluate(() => {
-      const w = window as unknown as {
-        __waIn?: Array<{ t: string; x: number; y: number; el: string }>;
-        __waMoves?: { n: number; x: number; y: number; el: string };
-      };
-      if (w.__waIn) { w.__waIn.length = 0; w.__waMoves = { n: 0, x: 0, y: 0, el: "?" }; return; }
-      w.__waIn = [];
-      w.__waMoves = { n: 0, x: 0, y: 0, el: "?" };
-      const name = (n: EventTarget | null): string => {
-        const el = n as Element | null;
-        if (!el || !el.tagName) return "?";
-        return (
-          el.tagName.toLowerCase() +
-          (el.id ? `#${el.id}` : "") +
-          (typeof el.className === "string" && el.className ? `.${el.className.trim().split(/\s+/)[0]}` : "")
-        );
-      };
-      const rec = (e: Event) => {
-        const m = e as MouseEvent;
-        // The press must ALWAYS get a slot. A humanized move emits dozens of mousemoves —
-        // enough to fill a shared buffer before the button goes down — and the report then
-        // says "NO mousedown, NO CLICK EVENT" about a click that may well have happened.
-        // That is a lie the probe told about itself, so moves are counted, not stored:
-        // only the most recent one is kept, and everything else is recorded in full.
-        if (m.type === "mousemove") {
-          if (w.__waMoves) { w.__waMoves.n++; w.__waMoves.x = Math.round(m.clientX); w.__waMoves.y = Math.round(m.clientY); w.__waMoves.el = name(m.target); }
-          return;
-        }
-        if (w.__waIn && w.__waIn.length < 40) {
-          // WHAT received it, not just where. A closed shadow root retargets the event to
-          // its host, so a press that correctly hit the checkbox INSIDE the widget still
-          // surfaces here — as the widget's host element. The page background surfaces as
-          // something else entirely. Without this the two are indistinguishable, which is
-          // how "mousedown in the MAIN document" got read as "the click missed".
-          w.__waIn.push({
-            t: m.type,
-            x: Math.round(m.clientX),
-            y: Math.round(m.clientY),
-            el: name(m.target),
-          });
-        }
-      };
-      for (const t of ["mousemove", "mousedown", "mouseup", "click"]) {
-        window.addEventListener(t, rec, true);
-      }
-    })
-    .catch(() => {});
-}
-
-async function readInputProbe(page: PageAdapter): Promise<string> {
-  return evalBounded<string>(
-    page,
-    () => {
-      const w = window as unknown as {
-        __waIn?: Array<{ t: string; x: number; y: number; el: string }>;
-        __waMoves?: { n: number; x: number; y: number; el: string };
-      };
-      const ev = w.__waIn ?? [];
-      const mv = w.__waMoves ?? { n: 0, x: 0, y: 0, el: "?" };
-      if (ev.length === 0 && mv.n === 0) return "the page received NOTHING";
-      const down = ev.find((e) => e.t === "mousedown");
-      const up = ev.find((e) => e.t === "mouseup");
-      const clicked = ev.find((e) => e.t === "click");
-      // The TARGET is the discriminator, not the presence of the event. A closed shadow root
-      // retargets to its host, so a press that landed on the checkbox inside the widget shows
-      // up here as the widget's own element — the same place an empty-container press would
-      // NOT show up, because that one reports the page's layout div instead.
-      const resp = document.querySelector(
-        'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
-      );
-      const hostName = resp?.parentElement
-        ? (resp.parentElement.tagName.toLowerCase() +
-           (resp.parentElement.id ? `#${resp.parentElement.id}` : ""))
-        : "(no widget host)";
-      // The WHOLE sequence. A browser only synthesises `click` when mousedown and mouseup
-      // land on the same element — and `click` (or pointerdown) is what a checkbox listens
-      // for, not a bare mousedown. So "mousedown arrived" is not the same as "it was
-      // clicked", and reporting only the mousedown hid the difference: a press and release
-      // that drift apart produce every event below EXCEPT click, and the widget stays
-      // untouched without anything having gone wrong that a coordinate can explain.
-      return (
-        `${mv.n} mousemove${mv.n === 1 ? "" : "s"}` +
-        (mv.n ? ` (last at ${mv.x},${mv.y} on ${mv.el})` : "") +
-        (down ? `, mousedown ${down.x},${down.y} on ${down.el}` : ", NO mousedown") +
-        (up ? `, mouseup ${up.x},${up.y} on ${up.el}` : ", NO mouseup") +
-        (clicked ? `, click on ${clicked.el}` : ", NO CLICK EVENT") +
-        ` — widget host is ${hostName}`
-      );
-    },
-    "(probe unreadable)",
-    3000,
-  );
-}
+// The aim-point describer and the input probe used to live here. They are GONE, not
+// disabled: all three were page.evaluate calls wrapped around the press, and being
+// debug-gated made them look free when debug logging is precisely what is switched on
+// while anyone is investigating a click that will not pass. A click made by hand in the
+// same VNC session injects nothing at all. See the note at the press itself.
 
 async function humanClickAt(page: PageAdapter, x: number, y: number): Promise<void> {
   // Approach from slightly off-target so the widget sees pointer movement arriving,
@@ -1713,12 +1539,6 @@ export async function clickTurnstileCheckbox(
           from: target.from,
           box: target.box,
           viaFrame: target.from.indexOf("frame:") === 0,
-          // What is really there. Without this the next failure is another round of
-          // inference from coordinates that LOOK right.
-          // Diagnostics only, and only when someone is watching. Both of these are
-          // page.evaluate calls moments before the press, inside the window Cloudflare is
-          // scoring — a cost worth paying to find a bug, not to run normally.
-          ...(logger.isLevelEnabled("debug") ? { under: await describeAimPoint(page, x, y) } : {}),
           // A point the mouse cannot reach. getBoundingClientRect happily reports a widget
           // below the fold, and mouse.move() then clamps to the edge — the cursor ends up at
           // the bottom of the screen and every log line still reads as if it aimed correctly.
@@ -1731,7 +1551,22 @@ export async function clickTurnstileCheckbox(
         },
         "Clicking Turnstile checkbox",
       );
-      if (logger.isLevelEnabled("debug")) await armInputProbe(page);
+      // NOTHING RUNS IN THE PAGE AROUND THE PRESS. Not even under debug logging.
+      //
+      // There used to be three page.evaluate calls here: describeAimPoint just above (what
+      // is under the aim point), armInputProbe on this line (install listeners), and a read
+      // of those listeners immediately after the click. All were debug-gated, which felt
+      // safe — but debug logging is exactly what is on while anyone is investigating this,
+      // so in practice every automated click was wrapped in script injection, and a click by
+      // hand in the same VNC session never was. That is the last remaining difference
+      // between the click that passes and the click that does not, and it sits inside the
+      // window Cloudflare is scoring.
+      //
+      // They also could not answer the question they were added for: the press lands inside
+      // a CROSS-ORIGIN iframe, so the main document cannot see its mousedown by definition,
+      // and the probe reported "NO CLICK EVENT" for clicks that demonstrably reached the
+      // widget. A diagnostic that cannot be right is not worth one byte of injected script
+      // here.
 
       // The REAL pointer first, when the backend has one.
       //
@@ -1758,9 +1593,6 @@ export async function clickTurnstileCheckbox(
         // backend without a display of its own.
         if (osClick) logger.info("Real-pointer click unavailable — falling back to synthesised input");
         await humanClickAt(page, x, y);
-      }
-      if (logger.isLevelEnabled("debug")) {
-        logger.debug({ received: await readInputProbe(page) }, "What the page saw while we clicked");
       }
 
       // Did the click LAND? This is the one question the logs could never answer.
