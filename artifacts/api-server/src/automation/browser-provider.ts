@@ -5,6 +5,8 @@ import { SeleniumBaseProvider } from "./seleniumbase-adapter";
 import { wrapPuppeteerPage, wrapPlaywrightPage, puppeteer, chromium, firefox } from "./page-adapter";
 import type { PageAdapter } from "./page-adapter";
 import { startLocalProxy, type ProxyType, type ResolvedProxy } from "./proxy-manager";
+import tls from "tls";
+import { createHash } from "crypto";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -551,6 +553,9 @@ class PuppeteerCDPProvider implements BrowserProvider {
       // Resolve advanced proxy types (warp/vless/…) to a local SOCKS5 first.
       const _resolvedProxy = await resolveProxyForConfig(this.config, true);
       const _cfg = _resolvedProxy ? { ...this.config, proxyUrl: _resolvedProxy.serverUrl } : this.config;
+      // Read the proxy's certificate first, so buildWsUrl can pin it rather than turning
+      // certificate checking off wholesale.
+      if (/^https:\/\//i.test(_cfg.proxyUrl ?? "")) await proxyCertificateSpki(_cfg.proxyUrl!);
       const ws = buildWsUrl(_cfg, true);
       const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
       logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Puppeteer)");
@@ -632,6 +637,9 @@ class PlaywrightCDPProvider implements BrowserProvider {
     async newPage(): Promise<PageAdapter> {
       // For Playwright providers, proxy and ignoreHTTPS are context-level options —
       // they work universally regardless of which remote service is in use.
+      // Read the proxy's certificate first, so buildWsUrl can pin it rather than turning
+      // certificate checking off wholesale.
+      if (/^https:\/\//i.test(this.config.proxyUrl ?? "")) await proxyCertificateSpki(this.config.proxyUrl!);
       const ws = buildWsUrl(this.config, false);
       const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
       logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Playwright connectOverCDP)");
@@ -988,6 +996,67 @@ class CamoufoxProvider implements BrowserProvider {
    *
    * Stealth and ad blocking for Playwright are handled entirely client-side.
    */
+/**
+ * The public-key fingerprint of an https:// proxy's own certificate.
+ *
+ * Exists so the browser can be told to accept THAT ONE certificate rather than to stop
+ * checking certificates altogether.
+ *
+ * --ignore-certificate-errors is a global switch: it has no per-connection scope, so
+ * excusing a self-signed proxy with it also excuses a forged certificate for the site you
+ * are logging into. The proxy could then terminate your TLS, read the plaintext, and open
+ * its own connection onward — with the browser showing nothing, because it was told not to
+ * look. Encrypted, but no longer to anyone in particular.
+ *
+ * --ignore-certificate-errors-spki-list pins the exemption to one public key. The proxy's
+ * self-signed certificate is accepted; every other certificate is validated exactly as
+ * before, so that substitution fails the way it should.
+ *
+ * Read from the proxy itself at connect time — nothing to configure, and it follows the
+ * proxy if its certificate is rotated. Cached per host:port for the process's lifetime.
+ */
+const _proxySpkiCache = new Map<string, string | null>();
+async function proxyCertificateSpki(proxyUrl: string): Promise<string | null> {
+  let host: string;
+  let port: number;
+  try {
+    const u = new URL(proxyUrl);
+    host = u.hostname;
+    port = Number(u.port || 443);
+  } catch {
+    return null;
+  }
+  const key = `${host}:${port}`;
+  const cached = _proxySpkiCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const spki = await new Promise<string | null>((resolve) => {
+    const done = (v: string | null) => { try { sock.destroy(); } catch { /* ignore */ } resolve(v); };
+    // rejectUnauthorized:false is the point — we are here BECAUSE the certificate does not
+    // validate, and we only want to read it. Nothing is sent over this socket.
+    const sock = tls.connect({ host, port, rejectUnauthorized: false, servername: host }, () => {
+      try {
+        const cert = sock.getPeerCertificate();
+        const pub = (cert as unknown as { pubkey?: Buffer }).pubkey;
+        done(pub ? createHash("sha256").update(pub).digest("base64") : null);
+      } catch {
+        done(null);
+      }
+    });
+    sock.setTimeout(6000, () => done(null));
+    sock.on("error", () => done(null));
+  });
+
+  _proxySpkiCache.set(key, spki);
+  logger.info(
+    { proxy: key, pinned: !!spki },
+    spki
+      ? "Read the proxy's certificate — pinning that key instead of disabling certificate checks"
+      : "Could not read the proxy's certificate — falling back to disabling certificate checks for this session",
+  );
+  return spki;
+}
+
   function buildWsUrl(config: BrowserProviderConfig, includeChromeFlags: boolean): string {
     const wsEndpoint = config.wsEndpoint ?? "";
     try {
@@ -1043,7 +1112,14 @@ class CamoufoxProvider implements BrowserProvider {
       // (--proxy-insecure), on the same condition: only when the proxy is itself https, so
       // nothing is loosened for the http:// and socks5:// setups that never hit this.
       if (/^https:\/\//i.test(config.proxyUrl ?? "") && !extraArgs.includes("--ignore-certificate-errors")) {
-        extraArgs.push("--ignore-certificate-errors");
+        // Prefer pinning the proxy's own key (see proxyCertificateSpki). The blanket switch
+        // is the fallback for when its certificate could not be read, and it is the one that
+        // would otherwise let a forged certificate for the TARGET site through unnoticed.
+        const spki = _proxySpkiCache.get(
+          (() => { try { const u = new URL(config.proxyUrl!); return `${u.hostname}:${Number(u.port || 443)}`; } catch { return ""; } })(),
+        );
+        if (spki) extraArgs.push(`--ignore-certificate-errors-spki-list=${spki}`);
+        else extraArgs.push("--ignore-certificate-errors");
       }
 
       if (extraArgs.length > 0 && !url.searchParams.has("launch")) {
