@@ -1624,7 +1624,10 @@ export async function clickTurnstileCheckbox(
           viaFrame: target.from.indexOf("frame:") === 0,
           // What is really there. Without this the next failure is another round of
           // inference from coordinates that LOOK right.
-          under: await describeAimPoint(page, x, y),
+          // Diagnostics only, and only when someone is watching. Both of these are
+          // page.evaluate calls moments before the press, inside the window Cloudflare is
+          // scoring — a cost worth paying to find a bug, not to run normally.
+          ...(logger.isLevelEnabled("debug") ? { under: await describeAimPoint(page, x, y) } : {}),
           // A point the mouse cannot reach. getBoundingClientRect happily reports a widget
           // below the fold, and mouse.move() then clamps to the edge — the cursor ends up at
           // the bottom of the screen and every log line still reads as if it aimed correctly.
@@ -1637,7 +1640,7 @@ export async function clickTurnstileCheckbox(
         },
         "Clicking Turnstile checkbox",
       );
-      await armInputProbe(page);
+      if (logger.isLevelEnabled("debug")) await armInputProbe(page);
 
       // The REAL pointer first, when the backend has one.
       //
@@ -1665,7 +1668,9 @@ export async function clickTurnstileCheckbox(
         if (osClick) logger.info("Real-pointer click unavailable — falling back to synthesised input");
         await humanClickAt(page, x, y);
       }
-      logger.info({ received: await readInputProbe(page) }, "What the page saw while we clicked");
+      if (logger.isLevelEnabled("debug")) {
+        logger.debug({ received: await readInputProbe(page) }, "What the page saw while we clicked");
+      }
 
       // Did the click LAND? This is the one question the logs could never answer.
       //
