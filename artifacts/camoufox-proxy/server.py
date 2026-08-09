@@ -16,6 +16,7 @@ Endpoints:
 """
 import json
 import os
+import random
 import re
 import signal
 import subprocess
@@ -702,16 +703,44 @@ def session_os_click(sid):
     env = dict(os.environ)
     env["DISPLAY"] = f":{disp}"
     try:
-        # Approach, settle, press. --sync so each step is finished before the next: a press
-        # dispatched while the pointer is still travelling lands somewhere else entirely,
-        # which is the same trap the in-browser path fell into.
-        subprocess.run(["xdotool", "mousemove", "--sync", str(x - 12), str(y + 7)],
+        # TRAVEL to the target, do not teleport to it.
+        #
+        # `xdotool mousemove` jumps: the pointer is at A, then it is at B, and nothing exists
+        # in between. A human dragging the same mouse across a VNC session emits dozens of
+        # intermediate positions with acceleration, drift and a settling wobble — and a human
+        # doing exactly that on this page passes the challenge that our two-jump version
+        # fails, from the same IP. Turnstile scores pointer behaviour, so the jump is a
+        # signal in itself.
+        #
+        # So the path is interpolated: eased along a slight curve, sub-pixel jitter, a small
+        # overshoot near the end, then a pause before the press. Each step is its own event
+        # to the X server, which is what the widget observes.
+        start = (x - random.randint(140, 260), y + random.randint(-90, 90))
+        subprocess.run(["xdotool", "mousemove", "--sync", str(start[0]), str(start[1])],
                        env=env, timeout=5, check=True)
-        time.sleep(0.12)
-        subprocess.run(["xdotool", "mousemove", "--sync", str(x), str(y)],
+        time.sleep(0.05 + random.random() * 0.08)
+
+        steps = random.randint(26, 42)
+        # A control point off the straight line, so the path bows the way a wrist does.
+        cx = (start[0] + x) / 2 + random.uniform(-40, 40)
+        cy = (start[1] + y) / 2 + random.uniform(-30, 30)
+        for i in range(1, steps + 1):
+            t = i / steps
+            # ease-in-out: slow to start, quick in the middle, slow onto the target
+            e = 3 * t * t - 2 * t * t * t
+            px = (1 - e) ** 2 * start[0] + 2 * (1 - e) * e * cx + e * e * x
+            py = (1 - e) ** 2 * start[1] + 2 * (1 - e) * e * cy + e * e * y
+            if i < steps:  # never jitter the final position
+                px += random.uniform(-1.2, 1.2)
+                py += random.uniform(-1.2, 1.2)
+            subprocess.run(["xdotool", "mousemove", "--sync", str(int(round(px))), str(int(round(py)))],
+                           env=env, timeout=5, check=True)
+            time.sleep(random.uniform(0.006, 0.022))
+
+        # Settle on the control before pressing, the way a hand does.
+        time.sleep(0.18 + random.random() * 0.25)
+        subprocess.run(["xdotool", "click", "--delay", str(random.randint(70, 130)), "1"],
                        env=env, timeout=5, check=True)
-        time.sleep(0.18)
-        subprocess.run(["xdotool", "click", "--delay", "90", "1"], env=env, timeout=5, check=True)
         print(f"[os-click] {sid} display=:{disp} at {x},{y}", flush=True)
         return jsonify({"ok": True, "display": disp, "x": x, "y": y})
     except subprocess.CalledProcessError as e:

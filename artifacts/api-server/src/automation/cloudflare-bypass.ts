@@ -1432,7 +1432,25 @@ async function waitForTurnstileSettled(page: PageAdapter, budgetMs: number): Pro
     // click — cutting short the very wait this function exists to provide.
     const state = await turnstileQuickState(page);
     if (state.solved) return true;
-    if (!state.widgetPresent) return true; // full-page challenge passed and navigated away
+    if (!state.widgetPresent) {
+      // The widget being absent is not the same as the challenge being passed.
+      //
+      // A rejected click does not always say "Verification failed" — when the score is
+      // borderline Turnstile simply RESETS, tearing the widget down and building a fresh
+      // unchecked one. For the moment in between there is no widget, which this used to read
+      // as success: settled=true, "challenge bypassed", and then the login form never
+      // appears because the page is still the interstitial. That is exactly the reported
+      // "it spins and goes back to a checkbox".
+      //
+      // So absence only counts on a FULL-PAGE challenge, where passing means the page itself
+      // goes away — confirmed by asking, not assumed. An embedded widget cannot use this
+      // signal at all (detectCfChallenge answers "none" for those by design, via the
+      // site-content guard), so it waits for the token, which is the only honest answer
+      // available to it.
+      const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
+      if (stillChallenged === "none") return true;
+      logger.debug({ stillChallenged }, "Widget vanished but the challenge is still up — it reset rather than passed");
+    }
   }
   return (await turnstileQuickState(page)).solved;
 }
