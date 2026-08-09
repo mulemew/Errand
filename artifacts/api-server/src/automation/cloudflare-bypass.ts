@@ -1754,16 +1754,11 @@ export async function bypassCloudflareChallenge(
       return "failed";
     }
 
-    // Don't mix synthesised movement into a real-pointer click.
-    //
-    // A full-page challenge runs in the main document and sees every pointer event on the
-    // page, and this liveness pass jumps the cursor to two arbitrary points before heading
-    // for the widget — synthetic teleports followed by a genuine OS-level press, which reads
-    // worse than either on its own. When the sidecar can drive the real pointer, its own
-    // approach (move, settle, move, press) is the only movement, and all of it is real.
-    if (!(page as unknown as { osClick?: unknown }).osClick) {
-      await simulateHumanPresence(page, { widgetPresent: true });
-    }
+    // Wander before going for it. Camoufox's humanize turns each of these moves into a real
+    // interpolated trajectory — watched in the VNC view, the cursor drifts around the page
+    // the way a hand does. Heading straight for the checkbox is the unnatural version, so
+    // this stays regardless of how the press itself is delivered.
+    await simulateHumanPresence(page, { widgetPresent: true });
     await sleep(600 + Math.random() * 900);
 
     // Full verdict wait, NOT clamped to the remaining budget: having clicked, the only
