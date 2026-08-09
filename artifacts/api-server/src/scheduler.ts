@@ -248,65 +248,102 @@ function clearRandomTimeouts(taskId: number): void {
 function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow: number): void {
   clearRandomTimeouts(taskId);
   const windowMs = windowMinutes * 60 * 1000;
-  // "N runs per window" is really "one run every window/N, give or take". Scheduling by SLOT
-  // rather than by window quota is what makes that true.
+  // A WINDOW QUOTA that resets when it is spent — the behaviour the setting describes, and
+  // the one asked for: N runs inside one window; once N have happened, a fresh window starts
+  // from the last of them.
   //
-  // The old code anchored a window to the last run, counted the runs already inside it, and
-  // spread the remainder uniformly across whatever was left. Two things went wrong:
+  // This replaces slot spacing (next = lastRun + window/N x jitter), which gets the average
+  // rate right and caps nothing: "twice a month" ran every 7.5-15 days, so a month could hold
+  // four runs. A quota is the only thing that makes "at most twice" true, and anchoring the
+  // reset on the last run is what stops the boundary drifting.
   //
-  //   • the anchor run itself sat inside its own window and used up a slot, so every run
-  //     reset the quota — the rate was never actually limited
-  //   • once the quota was met it waited for the window to end and then picked uniformly
-  //     across the NEXT full window, so the expected gap was 1.5x the window and the worst
-  //     case 2x. "Every 90 minutes" ran roughly every 135, sometimes 180 — the doubling
-  //     that got reported.
-  //
-  // One run at a time, at lastRun + slot * uniform(0.5, 1.5): the mean gap is exactly the
-  // slot, the spread is still unpredictable, and no run can be more than 1.5 slots after
-  // the one before it.
-  const slotMs = windowMs / Math.max(1, runsPerWindow);
+  // Derived from the run log rather than stored, so it survives restarts AND counts runs this
+  // scheduler did not start — pressing Run by hand spends the quota, which is the point of
+  // asking for a limit. Retries are excluded: a retry is the same run trying again, and
+  // letting one consume a slot would mean two failures could quietly eat a window.
 
   async function scheduleWindow(): Promise<void> {
     const now = Date.now();
     const timeouts: ReturnType<typeof setTimeout>[] = [];
 
-    let lastRunMs = 0;
+    // Where the current window starts, and how much of it is spent.
+    //
+    // Derived by COUNTING, not by asking whether the recent runs happen to sit close
+    // together. Grouping runs into consecutive chunks of N is the only reading that
+    // survives a reset: run 1 and 2 belong to window 1, run 3 and 4 to window 2, and the
+    // window a run OPENS is the one after the chunk it closes.
+    //
+    // Getting this wrong is the classic failure here and I reproduced it once already: if
+    // "the last N runs fall within one window" counts as spent, then every run re-spends the
+    // window and resets it, the quota never binds, and a month meant to hold two runs held
+    // ten in simulation.
+    let windowStartMs = now;
+    let used = 0;
+    let runs0Ms = 0; // the most recent run, for the minimum-gap floor below
     try {
-      const [lastRun] = await db
-        .select({ runAt: logsTable.runAt })
+      const [{ n }] = (await db
+        .select({ n: sql<number>`count(*)::int` })
         .from(logsTable)
         .where(and(
           eq(logsTable.taskId, taskId),
-          // A retry is not a scheduled run; letting one reset the clock would push the
-          // real schedule back every time a run failed.
+          // A retry is the same run trying again. Letting one consume a slot would mean two
+          // failures could quietly eat a window.
           sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
-        ))
-        .orderBy(sql`${logsTable.runAt} desc`)
-        .limit(1);
-      lastRunMs = lastRun ? new Date(lastRun.runAt).getTime() : 0;
+        ))) as Array<{ n: number }>;
+      const total = Number(n) || 0;
+      if (total > 0) {
+        used = total % runsPerWindow;
+        // used === 0 → the window is spent; it restarts at the newest run.
+        // used  >  0 → we are inside a window that opened at the run which closed the last
+        //              complete chunk, i.e. the (used + 1)th most recent run.
+        const back = used === 0 ? 1 : used + 1;
+        const rows = await db
+          .select({ runAt: logsTable.runAt })
+          .from(logsTable)
+          .where(and(
+            eq(logsTable.taskId, taskId),
+            sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
+          ))
+          .orderBy(sql`${logsTable.runAt} desc`)
+          .limit(back);
+        const anchor = rows[rows.length - 1];
+        if (anchor) windowStartMs = new Date(anchor.runAt).getTime();
+        if (rows[0]) runs0Ms = new Date(rows[0].runAt).getTime();
+      }
     } catch (err) {
-      logger.warn({ taskId, err }, "Could not read the last run — scheduling from now");
+      logger.warn({ taskId, err }, "Could not read the run history — scheduling from now");
     }
 
-    // Uniform in [0.5, 1.0) — so the gap is never MORE than one slot.
+    const windowEndMs = windowStartMs + windowMs;
+    const remaining = Math.max(1, runsPerWindow - used);
+
+    // Random inside what is LEFT of the window rather than inside the whole of it, so run 2
+    // of 2 lands in the time still available instead of being pushed past the end. Divided by
+    // the runs still owed so that several of them do not all crowd the tail.
+    const from = Math.max(now, windowStartMs);
+    const span = Math.max(0, windowEndMs - from);
+    let nextRunMs = from + Math.random() * (span / remaining);
+
+    // A floor on the gap, because a window that restarts at the last run lets the next one
+    // begin immediately: the random point can land at the very start of the new window, so
+    // runs bunch across the boundary. Simulated over five years of "twice a month":
     //
-    // The UI states the contract: "上次运行完成后，下次运行会在 3 天内的某个随机时刻执行" —
-    // within the window, from the last run. It was [0.5, 1.5), which overshoots by up to half
-    // a window: for "3 days, once" the next run landed anywhere from 1.5 to 4.5 days out, so
-    // roughly a third of the time the promise was simply false.
+    //     min gap  0.0d → up to 7 runs in some 30-day stretch
+    //     min gap  7.5d → up to 4
+    //     min gap 15.0d → exactly 2, but the gaps collapse to 15.0-15.6d
     //
-    // That matters beyond tidiness. These schedules are used to renew things that expire —
-    // "every 36h" means the credential dies at 36h — and a gap of 1.5x the window misses the
-    // deadline it was set to meet, silently, one time in three.
-    //
-    // Capping at 1.0 keeps the randomness where it is useful (the run is still unpredictable
-    // within the window) and puts the ceiling where the interface always said it was.
-    const jitter = 0.5 + Math.random() * 0.5;
-    let nextRunMs = lastRunMs > 0 ? lastRunMs + slotMs * jitter : now + Math.random() * slotMs;
+    // The last line is the whole trade-off, and it is arithmetic rather than a bug: capping
+    // a SLIDING window at N forces every gap above window/N, while "never later than the
+    // window" forces every gap below it. Both at once leaves one value and no randomness.
+    // Half a slot keeps the schedule genuinely unpredictable and stops the pathological
+    // clustering; raise HARD_MIN_GAP_FRACTION to 1 if the cap matters more than the spread.
+    const HARD_MIN_GAP_FRACTION = 0.5;
+    const slotMs = windowMs / Math.max(1, runsPerWindow);
+    if (runs0Ms > 0) nextRunMs = Math.max(nextRunMs, runs0Ms + slotMs * HARD_MIN_GAP_FRACTION);
     if (nextRunMs <= now) {
       // Overdue: the process was down, or the task was just enabled. Go soon, but not
       // instantly — a restart should not look like a trigger.
-      nextRunMs = now + 5_000 + Math.random() * Math.min(slotMs * 0.25, 5 * 60 * 1000);
+      nextRunMs = now + 5_000 + Math.random() * Math.min(windowMs * 0.05, 5 * 60 * 1000);
     }
 
     db.update(tasksTable).set({ nextRunAt: new Date(nextRunMs) }).where(eq(tasksTable.id, taskId)).catch(() => {});
@@ -315,7 +352,11 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
         taskId,
         windowMinutes,
         runsPerWindow,
-        slotMinutes: Math.round(slotMs / 60000),
+        // The window this run belongs to, and how much of its quota is already gone —
+        // enough to answer "why then?" without reading the scheduler.
+        windowStart: new Date(windowStartMs).toISOString(),
+        windowEnd: new Date(windowEndMs).toISOString(),
+        usedInWindow: used,
         nextRunAt: new Date(nextRunMs).toISOString(),
       },
       "Random-interval task scheduled",
