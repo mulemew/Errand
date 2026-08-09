@@ -1318,7 +1318,16 @@ async function simulateHumanScroll(page: PageAdapter): Promise<void> {
  * with a few seconds of real drift), so there is nothing left for this to add.
  */
 async function simulateHumanPresence(page: PageAdapter, opts?: { widgetPresent?: boolean }): Promise<void> {
-  if ((page as unknown as { osClick?: unknown }).osClick) return;
+  if ((page as unknown as { osClick?: unknown }).osClick) {
+    // Keep the TIME, though. Under camoufox each humanized move takes up to ~1.5 s, so this
+    // call was quietly worth 1.5-3 s of settling before anything looked for the widget —
+    // and returning instantly took that away: the checkbox was searched for one second after
+    // the challenge was detected, no frame existed yet, and the click fell back to the
+    // container's geometry and hit nothing. Nobody wrote that dependency down; it was a side
+    // effect of a slow function, which is why deleting the moves broke the clicking.
+    await sleep(1_400 + Math.random() * 1_400);
+    return;
+  }
   await simulateHumanMouseMovement(page);
   if (!opts?.widgetPresent && Math.random() < 0.5) await simulateHumanScroll(page);
 }
@@ -1667,7 +1676,34 @@ export async function clickTurnstileCheckbox(
       const scrolled = await scrollWidgetIntoView(page);
       if (scrolled) logger.debug("Widget was outside the viewport — scrolled it into view before measuring");
 
+      // The widget's frame may not have loaded yet — wait for it, explicitly.
+      //
+      // The frame path gives the widget's OWN rectangle; the main-document fallback guesses
+      // from a container, which on this site is an 896x68 wrapper around a 300x65 control, so
+      // falling back early is a click into empty space. Until now nothing waited: the click
+      // was simply preceded by a "human presence" pass that took 1.5-3 s under camoufox, and
+      // the iframe finished loading inside it. That was an accident of a slow function, not a
+      // guarantee, and it broke the moment the function stopped being slow — the frames were
+      // there but still at about:blank, and the click went to the wrapper.
+      //
+      // Bounded, and only for as long as waiting can still help: once every candidate frame
+      // has a real url it is loaded, and if it still yields no checkbox then more time
+      // changes nothing, so this exits immediately in that case (and on every page where the
+      // frame answers on the first ask, which is all of them today).
       let target = await locateCheckboxInCfFrame(page);
+      if (!target) {
+        const until = Date.now() + 6_000;
+        while (!target && Date.now() < until) {
+          const candidates = cfWidgetFrames(page);
+          const stillLoading =
+            candidates.length === 0 ||
+            candidates.some((f) => { try { const u = f.url(); return !u || u === "about:blank"; } catch { return false; } });
+          if (!stillLoading) break;
+          await sleep(400);
+          target = await locateCheckboxInCfFrame(page);
+        }
+        if (target) logger.debug("Widget frame was still loading — found the checkbox after waiting for it");
+      }
       if (!target) target = await locateTurnstileCheckbox(page);
       if (!target) {
         logger.warn({ widget: await describeTurnstileState(page) }, "Turnstile widget is on the page but its checkbox could not be located");
