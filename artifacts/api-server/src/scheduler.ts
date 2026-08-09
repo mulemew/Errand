@@ -3,7 +3,7 @@ import { db, tasksTable, logsTable, eq, isNotNull, and, gte, lt, lte, sql } from
 import { logger } from "./lib/logger";
 import { runTask } from "./automation/runner";
 import { purgeExpiredSessions } from "./lib/sessions";
-import { loadRetentionConfig } from "./lib/appSettings";
+import { loadRetentionConfig, loadTaskTimeoutConfig } from "./lib/appSettings";
 import path from "path";
 import fs from "fs";
 
@@ -315,55 +315,41 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
     }
 
     const windowEndMs = windowStartMs + windowMs;
-    const remaining = Math.max(1, runsPerWindow - used);
 
-    // Random inside what is LEFT of the window rather than inside the whole of it, so run 2
-    // of 2 lands in the time still available instead of being pushed past the end. Divided by
-    // the runs still owed so that several of them do not all crowd the tail.
+    // Uniform across what is LEFT of the window. Not divided among the runs still owed:
+    // where they fall inside the window is not the scheduler's business — two runs landing
+    // near the end of the month is a perfectly good outcome, and anyone wanting them spread
+    // differently should change the window, not have density imposed here. The contract is
+    // N runs inside the window, nothing about their spacing.
     const from = Math.max(now, windowStartMs);
     const span = Math.max(0, windowEndMs - from);
-    let nextRunMs = from + Math.random() * (span / remaining);
+    let nextRunMs = from + Math.random() * span;
 
-    // A floor on the gap, for two independent reasons.
+    // The gap has one job: do not schedule a run while the previous one can still be going.
     //
-    // The RETRY CHAIN, which decides the number. A failed run retries retryCount times at
-    // retryIntervalMinutes, so for that long the task is still working on the previous run —
-    // and a scheduled run landing inside that stretch is skipped by the "already running"
-    // guard, which wastes the slot and leaves the window owing a run it has to squeeze into
-    // whatever remains. The chain plus one interval of slack is therefore the minimum any
-    // two scheduled runs may be apart, taken from the task's own retry settings rather than
-    // guessed at.
+    // Two things decide how long that is, and both are knowable rather than matters of taste:
+    // the run itself may occupy up to the task timeout, and a failed run then retries
+    // retryCount times at retryIntervalMinutes. A run scheduled inside either stretch is
+    // turned away by the "already running" guard, which costs a slot the window still owes
+    // and has to squeeze in later.
     //
-    // And SPREAD, which is why there is still a floor without retries configured. A window
-    // that restarts at the last run lets the next one begin immediately — the random point
-    // can land at the very start — so runs bunch across the boundary. Five years of "twice a
-    // month", simulated:
-    //
-    //     min gap  0.0d → up to 7 runs in some 30-day stretch
-    //     min gap  7.5d → up to 4
-    //     min gap 15.0d → exactly 2, and the gaps collapse to 15.0-15.6d
-    //
-    // That last line is arithmetic, not a defect: bounding a SLIDING window at N forces every
-    // gap above window/N, while "never later than the window" forces every gap below it.
-    // Both at once leaves a single value and no randomness. Half a slot is the default.
-    //
-    // The larger of the two wins. A short retry chain must not license bunching, and a long
-    // one must not be walked into.
-    const slotMs = windowMs / Math.max(1, runsPerWindow);
-    let minGapMs = slotMs * 0.5;
+    // Nothing else. Spacing WITHIN the window is not a scheduling concern — two runs near
+    // the end of the month is a fine outcome, and a different density is a different window.
+    let minGapMs = 0;
     try {
       const [cfg] = await db
         .select({ retryCount: tasksTable.retryCount, retryIntervalMinutes: tasksTable.retryIntervalMinutes })
         .from(tasksTable)
         .where(eq(tasksTable.id, taskId));
+      const timeoutCfg = await loadTaskTimeoutConfig();
+      const timeoutMs = Math.max(0, Number(timeoutCfg.timeoutMinutes ?? 0)) * 60 * 1000;
       const retries = Number(cfg?.retryCount ?? 0);
       const intervalMin = Number(cfg?.retryIntervalMinutes ?? 0);
-      if (retries > 0 && intervalMin > 0) {
-        const chainMs = (retries + 1) * intervalMin * 60 * 1000; // +1 interval of slack
-        minGapMs = Math.max(minGapMs, chainMs);
-      }
+      // A retry chain is retries x interval, and each attempt can itself run to the timeout.
+      const chainMs = retries > 0 && intervalMin > 0 ? retries * (intervalMin * 60 * 1000 + timeoutMs) : 0;
+      minGapMs = Math.max(timeoutMs, chainMs);
     } catch (err) {
-      logger.warn({ taskId, err }, "Could not read the retry settings — using the default minimum gap");
+      logger.warn({ taskId, err }, "Could not read the retry/timeout settings — no minimum gap applied");
     }
     if (runs0Ms > 0) nextRunMs = Math.max(nextRunMs, runs0Ms + minGapMs);
     if (nextRunMs <= now) {
