@@ -711,66 +711,77 @@ def session_os_click(sid):
     env = dict(os.environ)
     env["DISPLAY"] = f":{disp}"
     try:
-        # TRAVEL to the target, do not teleport to it.
+        # ONE xdotool invocation for the whole gesture, starting from where the pointer
+        # already is.
         #
-        # `xdotool mousemove` jumps: the pointer is at A, then it is at B, and nothing exists
-        # in between. A human dragging the same mouse across a VNC session emits dozens of
-        # intermediate positions with acceleration, drift and a settling wobble — and a human
-        # doing exactly that on this page passes the challenge that our two-jump version
-        # fails, from the same IP. Turnstile scores pointer behaviour, so the jump is a
-        # signal in itself.
+        # Three things separated our input from a hand moving the same mouse through VNC,
+        # now that nothing else touches the page and a human passes this challenge where we
+        # do not:
         #
-        # So the path is interpolated: eased along a slight curve, sub-pixel jitter, a small
-        # overshoot near the end, then a pause before the press. Each step is its own event
-        # to the X server, which is what the widget observes.
-        start = (x - random.randint(140, 260), y + random.randint(-90, 90))
-        subprocess.run(["xdotool", "mousemove", "--sync", str(start[0]), str(start[1])],
-                       env=env, timeout=5, check=True)
-        time.sleep(0.05 + random.random() * 0.08)
+        #   · we teleported to the start. The path was interpolated, but the jump TO its
+        #     first point was a single mousemove — so the first thing observed was a
+        #     discontinuity no mouse can produce. It starts from getmouselocation now.
+        #   · the event rate was ~25Hz. A real mouse reports at 100-125Hz, and the gap is
+        #     visible in the deltas: ours moved several pixels per event, a hand moves one.
+        #   · every step was its own subprocess. Process startup in a container is tens of
+        #     milliseconds and varies wildly, so the intended 8ms cadence was neither 8ms nor
+        #     regular. xdotool chains commands in one invocation, which is one process and
+        #     one X connection for the entire gesture.
+        loc = subprocess.run(["xdotool", "getmouselocation", "--shell"],
+                             env=env, timeout=5, check=True, capture_output=True, text=True)
+        cur = {}
+        for line in loc.stdout.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                cur[k.strip()] = v.strip()
+        try:
+            sx, sy = int(cur.get("X", x)), int(cur.get("Y", y))
+        except ValueError:
+            sx, sy = x, y
+        # If the pointer is already on top of the target there is nothing to travel, so back
+        # off to somewhere plausible first — but as part of the same gesture, not a teleport.
+        if abs(sx - x) < 40 and abs(sy - y) < 40:
+            sx, sy = x - random.randint(150, 320), y + random.randint(-120, 120)
 
-        steps = random.randint(26, 42)
-        # A control point off the straight line, so the path bows the way a wrist does.
-        cx = (start[0] + x) / 2 + random.uniform(-40, 40)
-        cy = (start[1] + y) / 2 + random.uniform(-30, 30)
+        dist = max(1.0, ((x - sx) ** 2 + (y - sy) ** 2) ** 0.5)
+        # ~110Hz, and long enough that the distance is covered at a hand's pace rather than
+        # a jump: roughly 900-1600 px/s.
+        duration = min(1.6, max(0.35, dist / random.uniform(900, 1600)))
+        steps = max(20, int(duration * 110))
+        step_delay = duration / steps
+
+        cx = (sx + x) / 2 + random.uniform(-0.18, 0.18) * dist
+        cy = (sy + y) / 2 + random.uniform(-0.14, 0.14) * dist
+
+        cmd = ["xdotool"]
         for i in range(1, steps + 1):
             t = i / steps
-            # ease-in-out: slow to start, quick in the middle, slow onto the target
-            e = 3 * t * t - 2 * t * t * t
-            px = (1 - e) ** 2 * start[0] + 2 * (1 - e) * e * cx + e * e * x
-            py = (1 - e) ** 2 * start[1] + 2 * (1 - e) * e * cy + e * e * y
-            if i < steps:  # never jitter the final position
-                px += random.uniform(-1.2, 1.2)
-                py += random.uniform(-1.2, 1.2)
-            subprocess.run(["xdotool", "mousemove", "--sync", str(int(round(px))), str(int(round(py)))],
-                           env=env, timeout=5, check=True)
-            time.sleep(random.uniform(0.006, 0.022))
-
-        # Settle on the control before pressing, the way a hand does.
-        time.sleep(0.18 + random.random() * 0.25)
-
-        # A hand does not hold still on the target, and it does not press and release on the
-        # same pixel. xdotool click does both: perfectly static, perfectly repeatable. So the
-        # press is built out of its parts, with a pixel of tremor between them.
-        subprocess.run(["xdotool", "mousemove", "--sync", str(x + random.choice((-1, 0, 1))),
-                        str(y + random.choice((-1, 0, 1)))], env=env, timeout=5, check=True)
-        time.sleep(random.uniform(0.03, 0.09))
-        subprocess.run(["xdotool", "mousedown", "1"], env=env, timeout=5, check=True)
-        time.sleep(random.uniform(0.07, 0.14))  # press duration
-        subprocess.run(["xdotool", "mouseup", "1"], env=env, timeout=5, check=True)
-
-        # And it does not freeze the instant it clicks. Turnstile keeps watching while it
-        # verifies, and a pointer that stops dead at the exact moment of the press — then
-        # never moves again — is not something a hand does. A short drift away, the way one
-        # relaxes off a button.
-        time.sleep(random.uniform(0.08, 0.16))
+            e = 3 * t * t - 2 * t * t * t          # ease-in-out
+            px = (1 - e) ** 2 * sx + 2 * (1 - e) * e * cx + e * e * x
+            py = (1 - e) ** 2 * sy + 2 * (1 - e) * e * cy + e * e * y
+            if i < steps:                           # never jitter the landing point
+                px += random.uniform(-0.7, 0.7)
+                py += random.uniform(-0.7, 0.7)
+            cmd += ["mousemove", "--sync", str(int(round(px))), str(int(round(py))),
+                    "sleep", f"{step_delay:.3f}"]
+        # Settle, a pixel of tremor, press, hold, release — still one process.
+        cmd += ["sleep", f"{random.uniform(0.18, 0.32):.3f}",
+                "mousemove", "--sync", str(x + random.choice((-1, 0, 1))), str(y + random.choice((-1, 0, 1))),
+                "sleep", f"{random.uniform(0.04, 0.09):.3f}",
+                "mousedown", "1",
+                "sleep", f"{random.uniform(0.07, 0.14):.3f}",
+                "mouseup", "1"]
+        # And do not stop dead the instant the button comes up.
         dx, dy = random.choice(((1, 1), (1, -1), (-1, 1), (-1, -1)))
         px, py = float(x), float(y)
-        for _ in range(random.randint(6, 12)):
-            px += dx * random.uniform(0.8, 3.2)
-            py += dy * random.uniform(0.4, 2.4)
-            subprocess.run(["xdotool", "mousemove", "--sync", str(int(round(px))), str(int(round(py)))],
-                           env=env, timeout=5, check=True)
-            time.sleep(random.uniform(0.02, 0.06))
+        cmd += ["sleep", f"{random.uniform(0.08, 0.16):.3f}"]
+        for _ in range(random.randint(10, 18)):
+            px += dx * random.uniform(0.6, 2.0)
+            py += dy * random.uniform(0.3, 1.6)
+            cmd += ["mousemove", "--sync", str(int(round(px))), str(int(round(py))),
+                    "sleep", f"{random.uniform(0.012, 0.03):.3f}"]
+
+        subprocess.run(cmd, env=env, timeout=30, check=True)
         print(f"[os-click] {sid} display=:{disp} at {x},{y}", flush=True)
         return jsonify({"ok": True, "display": disp, "x": x, "y": y})
     except subprocess.CalledProcessError as e:
