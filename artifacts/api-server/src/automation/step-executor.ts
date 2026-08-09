@@ -320,7 +320,16 @@ async function executeStep(
       // page instead of the real content. Clear it up-front, at parity with the
       // SeleniumBase/cf-proxy backend's per-navigation uc_open_with_reconnect.
       try {
-        await clearCloudflareInterstitial(page, { url: step.url });
+        // Hard cap, because page.goto's timeout covers the NAVIGATION and nothing after it.
+        // A task was observed stuck on this step for 1789 seconds, ending only when the
+        // 30-minute task timeout fired — an unbounded call in here can spend a whole task,
+        // and clearing an interstitial is a courtesy to the steps that follow, not the point
+        // of the run. Its own budget is 60s; this is the backstop for when something inside
+        // never returns at all.
+        await Promise.race([
+          clearCloudflareInterstitial(page, { url: step.url }),
+          new Promise<void>((r) => setTimeout(r, 120_000)),
+        ]);
       } catch (cfErr) {
         logger.warn({ url: step.url, cfErr }, "Cloudflare interstitial clear on navigate threw — continuing");
       }

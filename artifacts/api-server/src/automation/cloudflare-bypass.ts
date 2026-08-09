@@ -450,9 +450,12 @@ async function _describeTurnstileState(page: PageAdapter): Promise<string> {
     for (const frame of cfWidgetFrames(page)) {
       const body = await frameQuery(frame, "body");
       if (!body) continue;
-      const text = (await body
-        .evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120))
-        .catch(() => "")) as string;
+      const text = (await frameAsk(
+        Promise.resolve(
+          body.evaluate((e: Element) => ((e as HTMLElement).innerText || "").trim().replace(/\s+/g, " ").slice(0, 120)),
+        ),
+        "",
+      )) as string;
       if (!text) continue;
       if (VERDICT.test(text)) return text;
       firstNonEmpty ??= text;
@@ -763,6 +766,26 @@ async function frameQuery(frame: FrameAdapter, sel: string, ms = 1200): Promise<
 }
 
 /**
+ * Anything asked OF a frame element, bounded.
+ *
+ * frameQuery bounds the lookup and stops there, which is only half the job: boundingBox()
+ * and evaluate() on the handle it returns are separate round-trips to the same unreachable
+ * frame, and those have no timeout at all. On camoufox the widget's frames are exactly that
+ * — listed with empty urls, every read timing out — so a boundingBox() against one can
+ * simply never come back.
+ *
+ * It did. A navigate step sat for 1789 SECONDS and only ended when the task's 30-minute
+ * timeout fired, because page.goto's own timeout covers the navigation and nothing after it.
+ * Bounding the query but not the follow-up calls was mine.
+ */
+async function frameAsk<T>(work: Promise<T>, fallback: T, ms = 1500): Promise<T> {
+  return Promise.race([
+    work.catch(() => fallback),
+    new Promise<T>((r) => setTimeout(() => r(fallback), ms)),
+  ]);
+}
+
+/**
  * Bring the widget into view before measuring it.
  *
  * getBoundingClientRect reports viewport-relative coordinates that may lie OUTSIDE the
@@ -845,7 +868,7 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
       }
       const el = await frameQuery(frame, sel);
       if (!el) continue;
-      const box = await el.boundingBox?.().catch(() => null);
+      const box = await frameAsk(Promise.resolve(el.boundingBox?.()), null);
       // A checkbox is small. The upper bound matters now that every frame is searched with
       // generic selectors: without it, a page-sized label in some unrelated frame could win
       // and the click would land nowhere near a Turnstile.
@@ -901,7 +924,7 @@ async function locateCheckboxInCfFrame(page: PageAdapter): Promise<CheckboxTarge
   for (const frame of frames) {
     const body = await frameQuery(frame, "body");
     if (!body) continue;
-    const box = await body.boundingBox?.().catch(() => null);
+    const box = await frameAsk(Promise.resolve(body.boundingBox?.()), null);
     // Turnstile is a fixed-size control: ~300x65 normal, ~150x140 compact. Anything else is
     // some other frame's document, and aiming into it would be worse than the fallback.
     if (!box || box.width < 140 || box.width > 520 || box.height < 40 || box.height > 200) continue;
