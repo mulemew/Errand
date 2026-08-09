@@ -739,8 +739,30 @@ def session_os_click(sid):
 
         # Settle on the control before pressing, the way a hand does.
         time.sleep(0.18 + random.random() * 0.25)
-        subprocess.run(["xdotool", "click", "--delay", str(random.randint(70, 130)), "1"],
-                       env=env, timeout=5, check=True)
+
+        # A hand does not hold still on the target, and it does not press and release on the
+        # same pixel. xdotool click does both: perfectly static, perfectly repeatable. So the
+        # press is built out of its parts, with a pixel of tremor between them.
+        subprocess.run(["xdotool", "mousemove", "--sync", str(x + random.choice((-1, 0, 1))),
+                        str(y + random.choice((-1, 0, 1)))], env=env, timeout=5, check=True)
+        time.sleep(random.uniform(0.03, 0.09))
+        subprocess.run(["xdotool", "mousedown", "1"], env=env, timeout=5, check=True)
+        time.sleep(random.uniform(0.07, 0.14))  # press duration
+        subprocess.run(["xdotool", "mouseup", "1"], env=env, timeout=5, check=True)
+
+        # And it does not freeze the instant it clicks. Turnstile keeps watching while it
+        # verifies, and a pointer that stops dead at the exact moment of the press — then
+        # never moves again — is not something a hand does. A short drift away, the way one
+        # relaxes off a button.
+        time.sleep(random.uniform(0.08, 0.16))
+        dx, dy = random.choice(((1, 1), (1, -1), (-1, 1), (-1, -1)))
+        px, py = float(x), float(y)
+        for _ in range(random.randint(6, 12)):
+            px += dx * random.uniform(0.8, 3.2)
+            py += dy * random.uniform(0.4, 2.4)
+            subprocess.run(["xdotool", "mousemove", "--sync", str(int(round(px))), str(int(round(py)))],
+                           env=env, timeout=5, check=True)
+            time.sleep(random.uniform(0.02, 0.06))
         print(f"[os-click] {sid} display=:{disp} at {x},{y}", flush=True)
         return jsonify({"ok": True, "display": disp, "x": x, "y": y})
     except subprocess.CalledProcessError as e:
