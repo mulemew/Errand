@@ -1419,47 +1419,70 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
  * a second click on a widget that is mid-verification is exactly what turns it into
  * "Verification failed". So: one click, then poll patiently, and never re-click here.
  */
-async function waitForTurnstileSettled(page: PageAdapter, budgetMs: number): Promise<boolean> {
-  const deadline = Date.now() + budgetMs;
-  // Poll GENTLY. Each pass is a page.evaluate, and this module's own comments keep saying
-  // that injecting scripts inside Cloudflare's watch window is itself scored — then this
-  // loop did it every 700ms, thirty-odd times per verdict. Nobody clicking a checkbox by
-  // hand runs a script every second afterwards. The verdict takes seconds either way, so
-  // checking five times instead of thirty costs nothing worth having.
-  const POLL_MS = 2_500;
-  while (Date.now() < deadline) {
-    await sleep(POLL_MS);
-    // Cheap poll: ONE evaluate covering both success shapes.
-    //
-    // The second signal is "the widget is GONE", NOT detectCfChallenge() === "none".
-    // detectCfChallenge deliberately answers "none" for a widget embedded in a login form
-    // (the site-content guard keeps embedded widgets out of the full-page path), so using
-    // it here would report every embedded widget as settled a couple of seconds after the
-    // click — cutting short the very wait this function exists to provide.
+async function waitForTurnstileSettled(
+  page: PageAdapter,
+  budgetMs: number,
+  mode: "fullpage" | "embedded" = "embedded",
+): Promise<boolean> {
+  // Click, then LEAVE IT ALONE.
+  //
+  // Cloudflare watches the page while it decides, and this used to answer by injecting a
+  // script every 700ms — thirty-odd evaluates inside the window the module's own comments
+  // say is scored for exactly that. Nobody clicking a checkbox by hand runs a script every
+  // second afterwards.
+  //
+  // A full-page challenge does not need any of it. Passing means the page NAVIGATES, and
+  // page.url() is a local property read: no protocol round-trip, nothing injected, nothing
+  // observable. So that path waits quietly and watches the URL, and only reads the DOM once,
+  // at the very end, to distinguish "still on the challenge" from "passed but the URL
+  // happens to match".
+  //
+  // An embedded widget has no such signal — it never navigates, it just fills a hidden
+  // input — so it still has to look. It gets a quiet spell first and then a slow poll, which
+  // is the most that can be taken away from it without taking away the answer.
+  const startedAt = Date.now();
+  const deadline = startedAt + budgetMs;
+
+  // Silence right after the press, when the verdict is actually being formed.
+  await sleep(mode === "fullpage" ? 4_000 : 3_000);
+
+  if (mode === "fullpage") {
+    const startUrl = (() => { try { return page.url(); } catch { return ""; } })();
+    while (Date.now() < deadline) {
+      const here = (() => { try { return page.url(); } catch { return startUrl; } })();
+      if (here && here !== startUrl) {
+        logger.debug({ from: startUrl, to: here }, "Challenge page navigated away — passed");
+        return true;
+      }
+      await sleep(1_000); // free: no evaluate, no frame read
+    }
+    // One look, once, rather than thirty.
     const state = await turnstileQuickState(page);
     if (state.solved) return true;
     if (!state.widgetPresent) {
-      // The widget being absent is not the same as the challenge being passed.
-      //
-      // A rejected click does not always say "Verification failed" — when the score is
-      // borderline Turnstile simply RESETS, tearing the widget down and building a fresh
-      // unchecked one. For the moment in between there is no widget, which this used to read
-      // as success: settled=true, "challenge bypassed", and then the login form never
-      // appears because the page is still the interstitial. That is exactly the reported
-      // "it spins and goes back to a checkbox".
-      //
-      // So absence only counts on a FULL-PAGE challenge, where passing means the page itself
-      // goes away — confirmed by asking, not assumed. An embedded widget cannot use this
-      // signal at all (detectCfChallenge answers "none" for those by design, via the
-      // site-content guard), so it waits for the token, which is the only honest answer
-      // available to it.
+      const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
+      return stillChallenged === "none";
+    }
+    return false;
+  }
+
+  // Embedded: the token is the only answer, so poll for it — slowly.
+  const POLL_MS = 2_500;
+  while (Date.now() < deadline) {
+    const state = await turnstileQuickState(page);
+    if (state.solved) return true;
+    if (!state.widgetPresent) {
+      // Absence is not success: a rejected click makes Turnstile tear the widget down and
+      // build a fresh unchecked one, and for that moment there is nothing there.
       const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
       if (stillChallenged === "none") return true;
       logger.debug({ stillChallenged }, "Widget vanished but the challenge is still up — it reset rather than passed");
     }
+    await sleep(POLL_MS);
   }
   return (await turnstileQuickState(page)).solved;
 }
+
 
 /** Token present / widget still on screen, in ONE evaluate. Used by the settle poll, so
  *  it must stay cheap: injecting scripts on a tight loop while CF watches is a signal. */
@@ -1508,7 +1531,13 @@ async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean
  */
 const _lastClickAt = new WeakMap<object, number>();
 
-export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: number): Promise<boolean> {
+export async function clickTurnstileCheckbox(
+  page: PageAdapter,
+  settleMs?: number,
+  /** A full-page challenge navigates when it passes; an embedded widget only fills a hidden
+   *  input. That decides whether the verdict can be watched for free or has to be read. */
+  mode: "fullpage" | "embedded" = "embedded",
+): Promise<boolean> {
   try {
     // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
     // cf-proxy has access to uc_gui_click_captcha (PyAutoGUI) and xdotool,
@@ -1644,11 +1673,12 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       // Patience, and NO second click: re-clicking a widget that is still verifying is what
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
       let settled = await waitForTurnstileSettled(
-      page,
-      // 25s, not 12. Turnstile takes its time on a profile it is unsure about, and the old
-      // budget expired mid-verdict — which then looked like failure and triggered a reload.
-      Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000)),
-    );
+        page,
+        // 25s, not 12. Turnstile takes its time on a profile it is unsure about, and the old
+        // budget expired mid-verdict — which then looked like failure and triggered a reload.
+        Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000)),
+        mode,
+      );
 
       // Last resort: the sidecar's REAL X pointer.
       //
@@ -1765,7 +1795,7 @@ export async function bypassCloudflareChallenge(
         await simulateHumanPresence(page, { widgetPresent: true });
         await sleep(500 + Math.random() * 500);
         clickedOnce = true;
-        if (await clickTurnstileCheckbox(page)) {
+        if (await clickTurnstileCheckbox(page, undefined, "fullpage")) {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
@@ -1827,7 +1857,7 @@ export async function bypassCloudflareChallenge(
     // Full verdict wait, NOT clamped to the remaining budget: having clicked, the only
     // useful thing left is to wait for the answer. Worst case this overshoots the clear
     // budget by CF_TOKEN_WAIT_MS (12 s by default) — cheaper than throwing the click away.
-    const clicked = await clickTurnstileCheckbox(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000));
+    const clicked = await clickTurnstileCheckbox(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000), "fullpage");
     if (clicked) {
       logger.info("Cloudflare Turnstile click challenge bypassed");
       return "passed";
