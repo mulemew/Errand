@@ -64,6 +64,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # curl — /tasks/:id/proxy-geo queries the exit IP's geolocation THROUGH the
     # configured proxy (handles socks5:// and http:// uniformly, unlike undici).
     curl \
+    # ca-certificates — without it curl cannot make ANY https request from this
+    # container: it fails before connecting, with
+    #   curl: (77) error setting certificate file: /etc/ssl/certs/ca-certificates.crt
+    # The slim base does not ship a CA bundle, and nothing noticed because the geo
+    # check only ever fetched an http:// URL. The moment it preferred https targets —
+    # which is how a browser uses a proxy, over CONNECT — every probe failed inside
+    # the container while the identical curl worked from the host. The proxy was fine
+    # throughout; this image simply could not speak TLS.
+    ca-certificates \
     # tini — PID-1 init that reaps orphaned sing-box helpers
     tini \
   && rm -rf /var/lib/apt/lists/*
