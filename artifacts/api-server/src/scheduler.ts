@@ -296,43 +296,6 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
       nextRunMs = now + 5_000 + Math.random() * Math.min(slotMs * 0.25, 5 * 60 * 1000);
     }
 
-    // ── The quota, which the slot spacing alone does not enforce ──────────────
-    //
-    // Slots give the right AVERAGE rate and pleasant spacing, and that is all they give.
-    // "30 hours, twice" also means at most twice in any 30 hours, and runs that did not come
-    // from this scheduler — you pressing run — are still runs. Two manual ones and the next
-    // slot lands 16 hours out, inside a window that has already been spent.
-    //
-    // So: if the window already holds its full quota, the earliest the next run may happen is
-    // when the OLDEST of those falls out of it. A sliding window, which is what the setting
-    // reads like, and which cannot drift the way a fixed one does.
-    //
-    // The two are complementary, not alternatives — the reason the previous quota attempt was
-    // removed was that it REPLACED the spacing (waiting for the window to end and then
-    // picking uniformly across the next one, mean gap 1.5x window: the "runs every 135
-    // minutes instead of 90" report). This one is only ever a floor.
-    let quotaFloorMs = 0;
-    try {
-      const recent = await db
-        .select({ runAt: logsTable.runAt })
-        .from(logsTable)
-        .where(and(
-          eq(logsTable.taskId, taskId),
-          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
-          gte(logsTable.runAt, new Date(now - windowMs)),
-        ))
-        .orderBy(sql`${logsTable.runAt} desc`)
-        .limit(runsPerWindow);
-      if (recent.length >= runsPerWindow) {
-        const oldestInQuota = new Date(recent[recent.length - 1]!.runAt).getTime();
-        quotaFloorMs = oldestInQuota + windowMs;
-      }
-    } catch (err) {
-      logger.warn({ taskId, err }, "Could not count runs in the window — scheduling on slot spacing alone");
-    }
-    const heldBackByQuota = quotaFloorMs > nextRunMs;
-    if (heldBackByQuota) nextRunMs = quotaFloorMs;
-
     db.update(tasksTable).set({ nextRunAt: new Date(nextRunMs) }).where(eq(tasksTable.id, taskId)).catch(() => {});
     logger.info(
       {
@@ -341,9 +304,6 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
         runsPerWindow,
         slotMinutes: Math.round(slotMs / 60000),
         nextRunAt: new Date(nextRunMs).toISOString(),
-        // Says WHY, so "why is it 16 hours and not 22" is answerable from the log rather
-        // than by reading the scheduler.
-        heldBackByQuota: heldBackByQuota || undefined,
       },
       "Random-interval task scheduled",
     );
