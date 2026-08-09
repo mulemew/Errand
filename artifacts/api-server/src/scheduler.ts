@@ -324,22 +324,48 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
     const span = Math.max(0, windowEndMs - from);
     let nextRunMs = from + Math.random() * (span / remaining);
 
-    // A floor on the gap, because a window that restarts at the last run lets the next one
-    // begin immediately: the random point can land at the very start of the new window, so
-    // runs bunch across the boundary. Simulated over five years of "twice a month":
+    // A floor on the gap, for two independent reasons.
+    //
+    // The RETRY CHAIN, which decides the number. A failed run retries retryCount times at
+    // retryIntervalMinutes, so for that long the task is still working on the previous run —
+    // and a scheduled run landing inside that stretch is skipped by the "already running"
+    // guard, which wastes the slot and leaves the window owing a run it has to squeeze into
+    // whatever remains. The chain plus one interval of slack is therefore the minimum any
+    // two scheduled runs may be apart, taken from the task's own retry settings rather than
+    // guessed at.
+    //
+    // And SPREAD, which is why there is still a floor without retries configured. A window
+    // that restarts at the last run lets the next one begin immediately — the random point
+    // can land at the very start — so runs bunch across the boundary. Five years of "twice a
+    // month", simulated:
     //
     //     min gap  0.0d → up to 7 runs in some 30-day stretch
     //     min gap  7.5d → up to 4
-    //     min gap 15.0d → exactly 2, but the gaps collapse to 15.0-15.6d
+    //     min gap 15.0d → exactly 2, and the gaps collapse to 15.0-15.6d
     //
-    // The last line is the whole trade-off, and it is arithmetic rather than a bug: capping
-    // a SLIDING window at N forces every gap above window/N, while "never later than the
-    // window" forces every gap below it. Both at once leaves one value and no randomness.
-    // Half a slot keeps the schedule genuinely unpredictable and stops the pathological
-    // clustering; raise HARD_MIN_GAP_FRACTION to 1 if the cap matters more than the spread.
-    const HARD_MIN_GAP_FRACTION = 0.5;
+    // That last line is arithmetic, not a defect: bounding a SLIDING window at N forces every
+    // gap above window/N, while "never later than the window" forces every gap below it.
+    // Both at once leaves a single value and no randomness. Half a slot is the default.
+    //
+    // The larger of the two wins. A short retry chain must not license bunching, and a long
+    // one must not be walked into.
     const slotMs = windowMs / Math.max(1, runsPerWindow);
-    if (runs0Ms > 0) nextRunMs = Math.max(nextRunMs, runs0Ms + slotMs * HARD_MIN_GAP_FRACTION);
+    let minGapMs = slotMs * 0.5;
+    try {
+      const [cfg] = await db
+        .select({ retryCount: tasksTable.retryCount, retryIntervalMinutes: tasksTable.retryIntervalMinutes })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, taskId));
+      const retries = Number(cfg?.retryCount ?? 0);
+      const intervalMin = Number(cfg?.retryIntervalMinutes ?? 0);
+      if (retries > 0 && intervalMin > 0) {
+        const chainMs = (retries + 1) * intervalMin * 60 * 1000; // +1 interval of slack
+        minGapMs = Math.max(minGapMs, chainMs);
+      }
+    } catch (err) {
+      logger.warn({ taskId, err }, "Could not read the retry settings — using the default minimum gap");
+    }
+    if (runs0Ms > 0) nextRunMs = Math.max(nextRunMs, runs0Ms + minGapMs);
     if (nextRunMs <= now) {
       // Overdue: the process was down, or the task was just enabled. Go soon, but not
       // instantly — a restart should not look like a trigger.
@@ -357,6 +383,7 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
         windowStart: new Date(windowStartMs).toISOString(),
         windowEnd: new Date(windowEndMs).toISOString(),
         usedInWindow: used,
+        minGapMinutes: Math.round(minGapMs / 60000),
         nextRunAt: new Date(nextRunMs).toISOString(),
       },
       "Random-interval task scheduled",
