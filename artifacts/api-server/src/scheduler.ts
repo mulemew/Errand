@@ -245,6 +245,64 @@ function clearRandomTimeouts(taskId: number): void {
   if (existing) { existing.forEach(clearTimeout); randomScheduleTimeouts.delete(taskId); }
 }
 
+/**
+ * Where a @random task's current window starts, and how much of it is spent.
+ *
+ * Exported because the UI has to answer the same question, and answering it separately is
+ * how "3 runs of 2" appeared on screen beside a scheduler that thought the window still owed
+ * one. That endpoint bucketed wall-clock time — floor(now / windowMs), a grid laid out from
+ * the epoch — which has nothing to do with when this task actually ran, and counted retries
+ * besides. Two definitions of "this window", disagreeing in public.
+ *
+ * Derived by COUNTING runs into consecutive chunks of N. That grouping is the only reading
+ * which survives a reset: runs 1-2 belong to window 1, 3-4 to window 2, and a run OPENS the
+ * window after the chunk it closes. Retries are excluded — a retry is the same run trying
+ * again, and letting one consume a slot would mean two failures quietly eat a window.
+ */
+export async function describeRandomWindow(
+  taskId: number,
+  windowMinutes: number,
+  runsPerWindow: number,
+): Promise<{ windowStartMs: number; windowEndMs: number; used: number; lastRunMs: number }> {
+  const windowMs = windowMinutes * 60 * 1000;
+  const now = Date.now();
+  let windowStartMs = now;
+  let used = 0;
+  let lastRunMs = 0;
+  try {
+    const [{ n }] = (await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(logsTable)
+      .where(and(
+        eq(logsTable.taskId, taskId),
+        sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
+      ))) as Array<{ n: number }>;
+    const total = Number(n) || 0;
+    if (total > 0) {
+      used = total % runsPerWindow;
+      // used === 0 → the window is spent; it restarts at the newest run.
+      // used  >  0 → we are inside a window opened by the run that closed the last complete
+      //              chunk, i.e. the (used + 1)th most recent.
+      const back = used === 0 ? 1 : used + 1;
+      const rows = await db
+        .select({ runAt: logsTable.runAt })
+        .from(logsTable)
+        .where(and(
+          eq(logsTable.taskId, taskId),
+          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
+        ))
+        .orderBy(sql`${logsTable.runAt} desc`)
+        .limit(back);
+      const anchor = rows[rows.length - 1];
+      if (anchor) windowStartMs = new Date(anchor.runAt).getTime();
+      if (rows[0]) lastRunMs = new Date(rows[0].runAt).getTime();
+    }
+  } catch (err) {
+    logger.warn({ taskId, err }, "Could not read the run history — treating the window as starting now");
+  }
+  return { windowStartMs, windowEndMs: windowStartMs + windowMs, used, lastRunMs };
+}
+
 function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow: number): void {
   clearRandomTimeouts(taskId);
   const windowMs = windowMinutes * 60 * 1000;
@@ -266,53 +324,11 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
     const now = Date.now();
     const timeouts: ReturnType<typeof setTimeout>[] = [];
 
-    // Where the current window starts, and how much of it is spent.
-    //
-    // Derived by COUNTING, not by asking whether the recent runs happen to sit close
-    // together. Grouping runs into consecutive chunks of N is the only reading that
-    // survives a reset: run 1 and 2 belong to window 1, run 3 and 4 to window 2, and the
-    // window a run OPENS is the one after the chunk it closes.
-    //
-    // Getting this wrong is the classic failure here and I reproduced it once already: if
-    // "the last N runs fall within one window" counts as spent, then every run re-spends the
-    // window and resets it, the quota never binds, and a month meant to hold two runs held
-    // ten in simulation.
-    let windowStartMs = now;
-    let used = 0;
-    let runs0Ms = 0; // the most recent run, for the minimum-gap floor below
-    try {
-      const [{ n }] = (await db
-        .select({ n: sql<number>`count(*)::int` })
-        .from(logsTable)
-        .where(and(
-          eq(logsTable.taskId, taskId),
-          // A retry is the same run trying again. Letting one consume a slot would mean two
-          // failures could quietly eat a window.
-          sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
-        ))) as Array<{ n: number }>;
-      const total = Number(n) || 0;
-      if (total > 0) {
-        used = total % runsPerWindow;
-        // used === 0 → the window is spent; it restarts at the newest run.
-        // used  >  0 → we are inside a window that opened at the run which closed the last
-        //              complete chunk, i.e. the (used + 1)th most recent run.
-        const back = used === 0 ? 1 : used + 1;
-        const rows = await db
-          .select({ runAt: logsTable.runAt })
-          .from(logsTable)
-          .where(and(
-            eq(logsTable.taskId, taskId),
-            sql`(${logsTable.triggeredBy} IS NULL OR ${logsTable.triggeredBy} <> 'retry')`,
-          ))
-          .orderBy(sql`${logsTable.runAt} desc`)
-          .limit(back);
-        const anchor = rows[rows.length - 1];
-        if (anchor) windowStartMs = new Date(anchor.runAt).getTime();
-        if (rows[0]) runs0Ms = new Date(rows[0].runAt).getTime();
-      }
-    } catch (err) {
-      logger.warn({ taskId, err }, "Could not read the run history — scheduling from now");
-    }
+    // One derivation, shared with the UI — see describeRandomWindow.
+    const win = await describeRandomWindow(taskId, windowMinutes, runsPerWindow);
+    const windowStartMs = win.windowStartMs;
+    const used = win.used;
+    const runs0Ms = win.lastRunMs;
 
     const windowEndMs = windowStartMs + windowMs;
 

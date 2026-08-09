@@ -38,6 +38,7 @@ import { rescheduleTask, unscheduleTask } from "../scheduler";
 import { Cron } from "croner";
 
 import { logger } from "../lib/logger";
+import { describeRandomWindow } from "../scheduler";
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
@@ -664,14 +665,15 @@ router.get("/tasks/:id/schedule-info", async (req, res): Promise<void> => {
     const parts = task.cronExpression.split(":");
     const windowMinutes = parseInt(parts[1] ?? "60", 10);
     const runsPerWindowN = parseInt(parts[2] ?? "1", 10);
-    const windowMs = windowMinutes * 60 * 1000;
-    const windowStart = new Date(Math.floor(now.getTime() / windowMs) * windowMs);
-    const windowEnd = new Date(windowStart.getTime() + windowMs);
-    const [countRow] = await db
-      .select({ cnt: count() })
-      .from(logsTable)
-      .where(and(eq(logsTable.taskId, params.data.id), gte(logsTable.createdAt, windowStart)));
-    const windowRunsCount = Number(countRow?.cnt ?? 0);
+    // The SAME window the scheduler uses. This used to bucket wall-clock time —
+    // floor(now / windowMs), a grid running from the epoch — which has nothing to do with
+    // when this task ran, and counted retries on top. So the card could say "3 of 2, resets
+    // in 15 hours" while the scheduler, working from the runs themselves, correctly saw a
+    // window that still owed one and scheduled inside those 15 hours. Both were right about
+    // different windows, which helps nobody.
+    const win = await describeRandomWindow(params.data.id, windowMinutes, runsPerWindowN);
+    const windowEnd = new Date(win.windowEndMs);
+    const windowRunsCount = win.used;
     res.json({ nextRunAt: task.nextRunAt ? new Date(task.nextRunAt).toISOString() : null, windowRunsCount, runsPerWindow: runsPerWindowN, windowEndsAt: windowEnd.toISOString() }); return;
   }
   const nextRun = getNextCronRun(task.cronExpression, now);
