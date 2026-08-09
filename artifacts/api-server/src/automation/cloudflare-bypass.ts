@@ -1488,6 +1488,20 @@ async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean
   );
 }
 
+/**
+ * When the checkbox on this page was last actually pressed.
+ *
+ * A reload after a real click is destructive: Turnstile can take ten or twenty seconds to
+ * reach a verdict, and reloading mid-verification throws away one that was about to succeed
+ * AND hands Cloudflare another abandoned attempt from this IP. The reload exists for the
+ * case where the widget never got clicked at all — it cannot tell the two apart by itself,
+ * because on the page this was reported against the widget's state is unreadable ("no
+ * turnstile frame"), so every unsettled click looked like "never clicked".
+ *
+ * This is the missing fact. We know whether we pressed it.
+ */
+const _lastClickAt = new WeakMap<object, number>();
+
 export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: number): Promise<boolean> {
   try {
     // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
@@ -1594,6 +1608,7 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
       let clickedNatively = false;
       if (osClick) clickedNatively = await osClick(x, y);
+      _lastClickAt.set(page as object, Date.now());
       if (clickedNatively) {
         logger.info("Clicked with the real X pointer");
       } else {
@@ -1625,7 +1640,9 @@ export async function clickTurnstileCheckbox(page: PageAdapter, settleMs?: numbe
       // produces "Verification failed" (and it used to happen ~1 s after a good click).
       let settled = await waitForTurnstileSettled(
       page,
-      Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000)),
+      // 25s, not 12. Turnstile takes its time on a profile it is unsure about, and the old
+      // budget expired mid-verdict — which then looked like failure and triggered a reload.
+      Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000)),
     );
 
       // Last resort: the sidecar's REAL X pointer.
@@ -1805,7 +1822,7 @@ export async function bypassCloudflareChallenge(
     // Full verdict wait, NOT clamped to the remaining budget: having clicked, the only
     // useful thing left is to wait for the answer. Worst case this overshoots the clear
     // budget by CF_TOKEN_WAIT_MS (12 s by default) — cheaper than throwing the click away.
-    const clicked = await clickTurnstileCheckbox(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 12_000));
+    const clicked = await clickTurnstileCheckbox(page, Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000));
     if (clicked) {
       logger.info("Cloudflare Turnstile click challenge bypassed");
       return "passed";
@@ -1939,6 +1956,21 @@ export async function clearCloudflareInterstitial(
       logger.warn(
         { round, leftMs: Math.max(0, Math.round(leftMs)), reloadMinMs },
         "Not reloading: too little budget left to clear a fresh challenge — leaving it for the task retry, which gets a new session",
+      );
+      return false;
+    }
+    // Never reload on top of a click we actually made.
+    //
+    // The verdict can take far longer than the settle budget, and a reload at that moment
+    // destroys a verification that may have been seconds from passing — which is exactly the
+    // "it clicks, the page starts verifying, then it refreshes itself" that was reported,
+    // and it happens to a HUMAN clicking in the VNC view too, because this runs on its own
+    // clock regardless of who pressed the box.
+    const clickedAt = _lastClickAt.get(page as object) ?? 0;
+    if (clickedAt > 0 && Date.now() - clickedAt < 120_000) {
+      logger.info(
+        { secondsSinceClick: Math.round((Date.now() - clickedAt) / 1000) },
+        "Not reloading: the checkbox was clicked on this page — a reload would discard a verdict still in flight",
       );
       return false;
     }
