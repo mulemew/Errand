@@ -753,6 +753,13 @@ def session_os_click(sid):
         cx = (sx + x) / 2 + random.uniform(-0.18, 0.18) * dist
         cy = (sy + y) / 2 + random.uniform(-0.14, 0.14) * dist
 
+        # NO --sync ON THE MOTION. It waits for the X server to confirm each move, which is a
+        # round trip PER EVENT, and it is not free: a gesture budgeted at 6.6s of sleeps took
+        # over 15s in practice and blew the caller's HTTP timeout, so the click fell back to
+        # synthesised input and the box was never really pressed. Ordering does not need it —
+        # X requests from one connection are processed in order, and the sleeps do the pacing.
+        # The one move that DOES keep it is the final positioning before mousedown, where the
+        # pointer must provably be on the target before the button goes down.
         cmd = ["xdotool"]
         for i in range(1, steps + 1):
             t = i / steps
@@ -762,7 +769,7 @@ def session_os_click(sid):
             if i < steps:                           # never jitter the landing point
                 px += random.uniform(-0.7, 0.7)
                 py += random.uniform(-0.7, 0.7)
-            cmd += ["mousemove", "--sync", str(int(round(px))), str(int(round(py))),
+            cmd += ["mousemove", str(int(round(px))), str(int(round(py))),
                     "sleep", f"{step_delay:.3f}"]
         # DWELL INSIDE THE WIDGET BEFORE PRESSING.
         #
@@ -792,11 +799,11 @@ def session_os_click(sid):
         dwell.append((float(x), float(y), random.uniform(0.12, 0.22)))  # back onto the checkbox
         pdx, pdy = float(x), float(y)
         for (tx_, ty_, tdur) in dwell:
-            tsteps = max(6, int(tdur * 110))
+            tsteps = max(4, int(tdur * 55))
             for i in range(1, tsteps + 1):
                 t = i / tsteps
                 e = 3 * t * t - 2 * t * t * t
-                cmd += ["mousemove", "--sync",
+                cmd += ["mousemove",
                         str(int(round(pdx + (tx_ - pdx) * e))),
                         str(int(round(pdy + (ty_ - pdy) * e))),
                         "sleep", f"{tdur / tsteps:.3f}"]
@@ -817,7 +824,7 @@ def session_os_click(sid):
         for _ in range(random.randint(10, 18)):
             px += dx * random.uniform(0.6, 2.0)
             py += dy * random.uniform(0.3, 1.6)
-            cmd += ["mousemove", "--sync", str(int(round(px))), str(int(round(py))),
+            cmd += ["mousemove", str(int(round(px))), str(int(round(py))),
                     "sleep", f"{random.uniform(0.012, 0.03):.3f}"]
 
         subprocess.run(cmd, env=env, timeout=30, check=True)

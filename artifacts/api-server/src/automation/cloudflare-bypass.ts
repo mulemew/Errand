@@ -1509,7 +1509,12 @@ export async function clickTurnstileCheckbox(
       // frame answers on the first ask, which is all of them today).
       let target = await locateCheckboxInCfFrame(page);
       if (!target) {
-        const until = Date.now() + 6_000;
+        // 2.5s, not 6. A frame that is going to load does so in about a second; on
+        // hub.weirdhost the two candidate frames report an empty url for as long as anyone
+        // cares to ask, so every extra poll was six seconds of the clear budget spent
+        // re-asking a question already answered — fifteen identical log lines and then the
+        // same fallback we would have taken immediately.
+        const until = Date.now() + 2_500;
         while (!target && Date.now() < until) {
           const candidates = cfWidgetFrames(page);
           const stillLoading =
