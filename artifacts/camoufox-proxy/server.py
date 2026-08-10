@@ -787,12 +787,18 @@ def session_os_click(sid):
         # difference that is both large and visible to the widget, so this is where the
         # movement belongs.
         #
+        # TWELVE TO SIXTEEN legs, ~5s. Not a taste call — measured. At 3-6 legs the first
+        # press drew no response from the widget at all and the second only got as far as
+        # "accepted, then rolled back"; at 12-16 the first press is accepted and the second
+        # clears the challenge. Same site, same machine, same everything else. Shortening
+        # this is exactly as breaking as removing it.
+        #
         # Bounds are relative to the aim point, which sits 22px from the widget's left edge
         # and vertically centred: -14..+60 across and ±18 down still lands well inside a
         # 300x65 control, with margin for the caller's ±2px of jitter.
         dwell = []
         dwx, dwy = float(x), float(y)
-        for _ in range(random.randint(3, 6)):
+        for _ in range(random.randint(12, 16)):
             dwx = min(max(dwx + random.uniform(-26, 34), x - 14), x + 60)
             dwy = min(max(dwy + random.uniform(-14, 14), y - 18), y + 18)
             dwell.append((dwx, dwy, random.uniform(0.12, 0.35)))
