@@ -1588,17 +1588,21 @@ export async function clickTurnstileCheckbox(
       // runs in the main document and watches everything we do.
       const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
       let clickedNatively = false;
-      if (osClick) clickedNatively = await osClick(x, y);
-      _lastClickAt.set(page as object, Date.now());
-      if (clickedNatively) {
-        logger.info("Clicked with the real X pointer");
-      } else {
-        // Camoufox's docs click the checkbox with page.mouse.click(), which needs COOP
-        // disabled — the sidecar does that by default now. Still the right fallback for any
-        // backend without a display of its own.
-        if (osClick) logger.info("Real-pointer click unavailable — falling back to synthesised input");
-        await humanClickAt(page, x, y);
-      }
+
+      const pressAt = async (px: number, py: number) => {
+        clickedNatively = osClick ? await osClick(px, py) : false;
+        _lastClickAt.set(page as object, Date.now());
+        if (clickedNatively) {
+          logger.info("Clicked with the real X pointer");
+        } else {
+          // Camoufox's docs click the checkbox with page.mouse.click(), which needs COOP
+          // disabled — the sidecar does that by default now. Still the right fallback for any
+          // backend without a display of its own.
+          if (osClick) logger.info("Real-pointer click unavailable — falling back to synthesised input");
+          await humanClickAt(page, px, py);
+        }
+      };
+      await pressAt(x, y);
 
       // Did the click LAND? This is the one question the logs could never answer.
       //
@@ -1615,15 +1619,57 @@ export async function clickTurnstileCheckbox(
       // one second into the verdict — the most sensitive moment there is — and on the page
       // this matters for it never returned anything but "no turnstile frame" anyway.
 
-      // Patience, and NO second click: re-clicking a widget that is still verifying is what
-      // produces "Verification failed" (and it used to happen ~1 s after a good click).
-      let settled = await waitForTurnstileSettled(
-        page,
-        // 25s, not 12. Turnstile takes its time on a profile it is unsure about, and the old
-        // budget expired mid-verdict — which then looked like failure and triggered a reload.
-        Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000)),
-        mode,
-      );
+      // A FULL-PAGE CHALLENGE TAKES TWO PRESSES. Measured, not reasoned about.
+      //
+      // This module has said since it was written that a second click is what turns a good
+      // press into "Verification failed", and it was wrong — that belief is why every run on
+      // hub.weirdhost ended one press short of passing. On a bench driving the real site
+      // through a real camoufox with the real OS pointer, the sequence is the same every
+      // time, for a hand and for us alike:
+      //
+      //   press  → /path?__cf_chl_rt_tk=…   the press is ACCEPTED
+      //          → back to /path            it rolls back, box unticked  ← looks like defeat
+      //   press  → /path?__cf_chl_tk=…      the pass-through, ~2s later
+      //          → the real page
+      //
+      // One press: accepted, rolled back, then nothing for 75s. Two presses: passed in 8s,
+      // twice out of two. The rollback after the first press is a STEP, not a verdict, and
+      // giving up on it is what we have been doing all along. The person who reported this
+      // had been saying so for a while: their own first click always bounced and their
+      // second one went through.
+      //
+      // Full-page only. An embedded widget in a login form ticks and issues a token on one
+      // press today, and nothing here should disturb that.
+      const maxPresses = mode === "fullpage" ? Number(process.env.CF_MAX_PRESSES ?? 3) : 1;
+      // 25s on the last press, less on the earlier ones: the rollback lands ~1s after the
+      // press and the pass-through ~2s after the press that works, so a press that is going
+      // to be rolled back is knowable long before the full budget is spent, and the budget
+      // is better given to the press that follows it.
+      const fullBudget = Math.max(3_000, settleMs ?? Number(process.env.CF_TOKEN_WAIT_MS ?? 25_000));
+      // A ceiling on the whole press sequence, so a challenge that answers nothing cannot
+      // sit here pressing until the task's own budget is gone. On the bench a passing run
+      // needs about 35s end to end (press, ~12s rollback, press, ~2s pass-through, ~6s to
+      // land), so this leaves room for one more press than that and stops.
+      const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 70_000);
+      let settled = await waitForTurnstileSettled(page, maxPresses > 1 ? 14_000 : fullBudget, mode);
+
+      for (let press = 2; !settled && press <= maxPresses && Date.now() < pressDeadline - 12_000; press++) {
+        // Re-measure. The rolled-back challenge builds a FRESH widget, and on a page that
+        // re-centres it the old coordinates are a click on the background.
+        const again = (await locateCheckboxInCfFrame(page)) ?? (await locateTurnstileCheckbox(page));
+        if (!again) {
+          logger.info({ press }, "Wanted to press again but the checkbox is no longer locatable");
+          break;
+        }
+        const rx = again.x + (Math.random() * 4 - 2);
+        const ry = again.y + (Math.random() * 4 - 2);
+        logger.info(
+          { press, x: Math.round(rx), y: Math.round(ry), from: again.from },
+          "First press was accepted and rolled back — pressing again, which is what clears this challenge",
+        );
+        await pressAt(rx, ry);
+        settled = await waitForTurnstileSettled(page, press === maxPresses ? fullBudget : 14_000, mode);
+      }
 
       // Last resort: the sidecar's REAL X pointer.
       //
@@ -1865,7 +1911,13 @@ export async function clearCloudflareInterstitial(
   // drags a failing login out for minutes. A page that clears exits immediately, so
   // this cap only bounds the give-up time on genuine failure. Tunable via
   // CF_CLEAR_BUDGET_MS.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 60_000);
+  // 100s, not 60. A full-page challenge needs TWO presses to clear (see the press loop in
+  // clickTurnstileCheckbox), and that sequence alone is ~40s — press, ~12s for the rollback,
+  // press, ~2s for the pass-through, ~6s to land — on top of a first navigation that is
+  // routinely 20s on an interstitial. At 60s the budget was spent before the second press
+  // could happen: the logs ended with "leftMs=0" every time. A page that clears still exits
+  // immediately, so this only moves the give-up time on a genuine failure.
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 100_000);
   const deadline = Date.now() + budgetMs;
 
   // This function clears FULL-PAGE interstitials — the ones that block the page and
