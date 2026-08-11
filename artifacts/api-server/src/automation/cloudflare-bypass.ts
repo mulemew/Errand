@@ -1663,31 +1663,37 @@ export async function clickTurnstileCheckbox(
       // needs about 35s end to end (press, ~12s rollback, press, ~2s pass-through, ~6s to
       // land), so this leaves room for one more press than that and stops.
       const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 180_000);
+
+      // BETWEEN PRESSES, DO NOTHING. This is a straight copy of the sequence that passes.
+      //
+      // A bench running inside this very sidecar, against this very site, through the same
+      // /os-click, the same proxy, the same 1920x1080 viewport and the same coordinates,
+      // clears the challenge every time — seven runs, seven passes — and this code path
+      // fails every time. Everything the two had that could be matched has been matched and
+      // tested one at a time: the proxy and its exit IP, the synthesised pre-click mouse
+      // moves, probing the cross-origin frame, a prior visit to the site, the viewport, the
+      // gesture itself. Each of those was added to the bench and it still passed.
+      //
+      // What was left is the only thing the bench never did: it does not look at the page
+      // between presses. It presses, waits a fixed spell in silence, and presses again. This
+      // path used to spend that window running detectCfChallenge, scrolling the widget into
+      // view and re-measuring it through the cross-origin frame — a script injected into the
+      // document, twice, in the seconds Cloudflare is scoring.
+      //
+      // So the loop now does what the bench does. The coordinates are measured ONCE, before
+      // the first press, and reused: the widget is rebuilt after a rollback but the page does
+      // not move it, and re-measuring cost more than it bought.
       let pressedAt = Date.now();
       let settled = await waitForTurnstileSettled(page, maxPresses > 1 ? 14_000 : fullBudget, mode);
 
       for (let press = 2; !settled && press <= maxPresses && Date.now() < pressDeadline - 20_000; press++) {
-        // Wait out the rest of the gap in silence. waitForTurnstileSettled returns as soon
-        // as the rollback has settled, which can be five seconds after the press.
         const quiet = pressedAt + pressGapMs - Date.now();
-        if (quiet > 0) {
-          logger.debug({ press, quietMs: Math.round(quiet) }, "Letting the widget rebuild before pressing again");
-          await sleep(quiet);
-        }
-        // Re-measure. The rolled-back challenge builds a FRESH widget, and on a page that
-        // re-centres it the old coordinates are a click on the background.
-        const again = (await locateCheckboxInCfFrame(page)) ?? (await locateTurnstileCheckbox(page));
-        if (!again) {
-          logger.info({ press }, "Wanted to press again but the checkbox is no longer locatable");
-          break;
-        }
-        const rx = again.x + (Math.random() * 4 - 2);
-        const ry = again.y + (Math.random() * 4 - 2);
+        if (quiet > 0) await sleep(quiet);
         logger.info(
-          { press, x: Math.round(rx), y: Math.round(ry), from: again.from },
-          "First press was accepted and rolled back — pressing again, which is what clears this challenge",
+          { press, x: Math.round(x), y: Math.round(y) },
+          "Pressing again — a full-page challenge takes several, and the rollback between them is a step, not a verdict",
         );
-        await pressAt(rx, ry);
+        await pressAt(x + (Math.random() * 4 - 2), y + (Math.random() * 4 - 2));
         pressedAt = Date.now();
         settled = await waitForTurnstileSettled(page, press === maxPresses ? fullBudget : 14_000, mode);
       }

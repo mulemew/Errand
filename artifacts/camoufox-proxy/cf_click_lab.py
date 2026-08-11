@@ -161,6 +161,27 @@ def run_variant(variant, display, x, y, page):
         # outcome.
         sid = page._lab_sid
         for n in range(1, ARGS.presses + 1):
+            if ARGS.framequery:
+                probed = []
+                for fr in page.frames[1:]:
+                    try:
+                        u = fr.url
+                        el = fr.query_selector("body")
+                        bb = el.bounding_box() if el else None
+                        probed.append(f"{u[:40]!r}->{bb}")
+                    except Exception as e:
+                        probed.append(f"{type(e).__name__}")
+                print(f"    frame probe before press {n}: {probed}")
+            if ARGS.synthetic:
+                # simulateHumanMouseMovement's camoufox path, verbatim: two humanized moves
+                # to random points in the middle of the viewport, ~200ms apart.
+                vp = page.viewport_size or {"width": 1280, "height": 720}
+                page.mouse.move(random.uniform(vp["width"] * 0.25, vp["width"] * 0.65),
+                                random.uniform(vp["height"] * 0.25, vp["height"] * 0.65))
+                time.sleep(random.uniform(0.12, 0.26))
+                page.mouse.move(random.uniform(vp["width"] * 0.35, vp["width"] * 0.75),
+                                random.uniform(vp["height"] * 0.35, vp["height"] * 0.75))
+                time.sleep(random.uniform(0.6, 1.5))
             t0 = time.time()
             post(f"/sessions/{sid}/os-click", {"x": x, "y": y})
             st = page.evaluate(STATE)
@@ -210,6 +231,34 @@ def main():
     ap.add_argument("--variant", default="proven",
                     choices=["manual", "proven", "baseline", "teleport"])
     ap.add_argument("--presses", type=int, default=4)
+    ap.add_argument("--prewarm", action="store_true",
+                    help="visit the site once and poll it before going to the login page, "
+                         "the way cookie-mode's session check does. A task has already been "
+                         "through one round on this site before the challenge it fails; this "
+                         "bench has always arrived cold.")
+    ap.add_argument("--framequery", action="store_true",
+                    help="before each press, reach into the CROSS-ORIGIN Turnstile iframe "
+                         "the way locateCheckboxInCfFrame does: enumerate frames, query "
+                         "body, take its bounding box. The service does this before every "
+                         "press; this bench never has.")
+    ap.add_argument("--viewport", default="",
+                    help="e.g. 1920x1080 — a task creates its context with an explicit "
+                         "viewport, and on a 1920x1080 Xvfb that asks for a content area as "
+                         "large as the whole screen. The bench has been using Playwright's "
+                         "1280x720 default, which is why its widget sits at x=214 and the "
+                         "task's at x=512.")
+    ap.add_argument("--synthetic", action="store_true",
+                    help="do what the service does before each press and this bench never "
+                         "has: move PLAYWRIGHT's cursor around the viewport first. The page "
+                         "then holds two pointer histories that disagree — a synthesised one "
+                         "and the real one that does the pressing.")
+    ap.add_argument("--proxy", default="",
+                    help="e.g. socks5://172.18.0.6:11080 — run the session through the same "
+                         "tunnel a task uses, so the exit IP is a controlled variable rather "
+                         "than an untested one")
+    ap.add_argument("--screen", default="",
+                    help="e.g. 1920x1080 — a task session gets its screen from a fingerprint "
+                         "profile, and the widget's position on the page follows from it")
     ap.add_argument("--gap", type=int, default=12)
     ap.add_argument("--url", default=URL)
     ap.add_argument("--watch", type=int, default=60, help="seconds to watch for a verdict")
@@ -220,7 +269,12 @@ def main():
     from playwright.sync_api import sync_playwright
 
     print(f"launching a session via {SIDECAR} …")
-    sess = post("/launch", {})
+    body = {}
+    if args.screen:
+        body["screen"] = args.screen
+    if args.proxy:
+        body["proxy"] = {"server": args.proxy}
+    sess = post("/launch", body)
     sid, ws = sess["id"], sess["ws"]
     print(f"  session {sid}")
 
@@ -233,9 +287,25 @@ def main():
 
     with sync_playwright() as pw:
         browser = pw.firefox.connect(ws)
-        page = browser.new_page()
+        if args.viewport:
+            _w, _h = args.viewport.lower().split("x", 1)
+            page = browser.new_context(viewport={"width": int(_w), "height": int(_h)}).new_page()
+        else:
+            page = browser.new_page()
         page._lab_sid = sid
         try:
+            if args.prewarm:
+                print("prewarming: one visit + a session-check style poll, then the login page")
+                try:
+                    page.goto(args.url, wait_until="domcontentloaded", timeout=45_000)
+                except Exception:
+                    pass
+                for _ in range(13):
+                    try:
+                        page.evaluate(STATE)
+                    except Exception:
+                        pass
+                    time.sleep(1)
             print(f"navigating to {args.url} …")
             try:
                 page.goto(args.url, wait_until="domcontentloaded", timeout=45_000)
@@ -249,8 +319,11 @@ def main():
                 time.sleep(1)
             st = page.evaluate(STATE)
             print(f"  title={st['title']!r} challenge={st['chl']} cType={st['ctype']!r}")
-            if not st["chl"]:
-                print("  no challenge on this page — nothing to test")
+            # Only a login FORM proves there is nothing to test. cType blinks out for a
+            # moment every time the challenge rebuilds itself, and bailing on that reported
+            # "no challenge" against a page whose title still said "Un instant…".
+            if st["form"]:
+                print("  already past the challenge — nothing to test")
                 return 2
 
             if args.variant == "late":
