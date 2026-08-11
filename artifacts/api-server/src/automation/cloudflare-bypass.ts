@@ -1640,7 +1640,19 @@ export async function clickTurnstileCheckbox(
       //
       // Full-page only. An embedded widget in a login form ticks and issues a token on one
       // press today, and nothing here should disturb that.
-      const maxPresses = mode === "fullpage" ? Number(process.env.CF_MAX_PRESSES ?? 3) : 1;
+      const maxPresses = mode === "fullpage" ? Number(process.env.CF_MAX_PRESSES ?? 4) : 1;
+      // A QUIET GAP BETWEEN PRESSES, measured from the previous press rather than from
+      // whenever we happened to notice the rollback.
+      //
+      // This is the one place the deployment differed from the recipe that passes on the
+      // bench, and the logs show it plainly: press 1 -> press 2 was 14s apart and press 2
+      // was accepted; press 2 -> press 3 was FIVE seconds apart, because the rollback was
+      // detected quickly and the loop pressed the moment its settle wait returned, and
+      // press 3 drew no response at all in 25s. The bench never looks at anything between
+      // presses — it presses, sleeps a fixed 7-15s, presses again — and it passes.
+      //
+      // So the gap stops being a side effect of how fast the verdict was noticed.
+      const pressGapMs = Number(process.env.CF_PRESS_GAP_MS ?? 12_000);
       // 25s on the last press, less on the earlier ones: the rollback lands ~1s after the
       // press and the pass-through ~2s after the press that works, so a press that is going
       // to be rolled back is knowable long before the full budget is spent, and the budget
@@ -1650,10 +1662,18 @@ export async function clickTurnstileCheckbox(
       // sit here pressing until the task's own budget is gone. On the bench a passing run
       // needs about 35s end to end (press, ~12s rollback, press, ~2s pass-through, ~6s to
       // land), so this leaves room for one more press than that and stops.
-      const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 70_000);
+      const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 120_000);
+      let pressedAt = Date.now();
       let settled = await waitForTurnstileSettled(page, maxPresses > 1 ? 14_000 : fullBudget, mode);
 
-      for (let press = 2; !settled && press <= maxPresses && Date.now() < pressDeadline - 12_000; press++) {
+      for (let press = 2; !settled && press <= maxPresses && Date.now() < pressDeadline - 20_000; press++) {
+        // Wait out the rest of the gap in silence. waitForTurnstileSettled returns as soon
+        // as the rollback has settled, which can be five seconds after the press.
+        const quiet = pressedAt + pressGapMs - Date.now();
+        if (quiet > 0) {
+          logger.debug({ press, quietMs: Math.round(quiet) }, "Letting the widget rebuild before pressing again");
+          await sleep(quiet);
+        }
         // Re-measure. The rolled-back challenge builds a FRESH widget, and on a page that
         // re-centres it the old coordinates are a click on the background.
         const again = (await locateCheckboxInCfFrame(page)) ?? (await locateTurnstileCheckbox(page));
@@ -1668,6 +1688,7 @@ export async function clickTurnstileCheckbox(
           "First press was accepted and rolled back — pressing again, which is what clears this challenge",
         );
         await pressAt(rx, ry);
+        pressedAt = Date.now();
         settled = await waitForTurnstileSettled(page, press === maxPresses ? fullBudget : 14_000, mode);
       }
 
@@ -1911,13 +1932,14 @@ export async function clearCloudflareInterstitial(
   // drags a failing login out for minutes. A page that clears exits immediately, so
   // this cap only bounds the give-up time on genuine failure. Tunable via
   // CF_CLEAR_BUDGET_MS.
-  // 100s, not 60. A full-page challenge needs TWO presses to clear (see the press loop in
-  // clickTurnstileCheckbox), and that sequence alone is ~40s — press, ~12s for the rollback,
-  // press, ~2s for the pass-through, ~6s to land — on top of a first navigation that is
-  // routinely 20s on an interstitial. At 60s the budget was spent before the second press
-  // could happen: the logs ended with "leftMs=0" every time. A page that clears still exits
+  // 180s. A full-page challenge is cleared by REPEATED presses with a quiet gap between
+  // them (see the press loop in clickTurnstileCheckbox), and up to four of those, each an
+  // ~8s gesture followed by a 12s gap, is ~80s before the final verdict wait — on top of a
+  // first navigation that is routinely 20s on an interstitial. Every smaller number has
+  // been spent before the sequence could finish: at 60s the logs ended "leftMs=0", at 100s
+  // the third press was the last one affordable. A page that clears still exits
   // immediately, so this only moves the give-up time on a genuine failure.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 100_000);
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
   const deadline = Date.now() + budgetMs;
 
   // This function clears FULL-PAGE interstitials — the ones that block the page and

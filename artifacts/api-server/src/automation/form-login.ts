@@ -566,6 +566,96 @@ import type { PageAdapter } from "./page-adapter";
   // focused password field belongs to). As a last resort, requestSubmit() the
   // password field's own form — this fires onSubmit WITHOUT clicking any button,
   // so it can never trip a social-login button.
+  /**
+   * Tick the checkboxes a login form makes you tick before it will accept a submit.
+   *
+   * Returns the label text of everything it ticked, so the log records what was agreed to
+   * rather than that something was.
+   *
+   * TICKS EVERY VISIBLE CHECKBOX IN THE LOGIN FORM, rather than trying to recognise the
+   * agreement one. Recognising it means an ALLOWLIST of agreement words, and an allowlist
+   * has to be complete to work: one unlisted language and the login simply fails. Ticking
+   * everything is wrong only in ways that do not apply here — this is a LOGIN form, not a
+   * registration, so the boxes on it are the terms box, "remember me", and little else.
+   * The marketing blocklist below survives on the opposite asymmetry: a blocklist that
+   * misses something only means one extra box gets ticked, which is the accepted default
+   * anyway.
+   *
+   * (Measured on hub.weirdhost's login page, which is what prompted this: one checkbox,
+   * no id, no name, no `required`, a submit button that is never disabled, and Korean
+   * label text. Nothing structural to key on at all.)
+   *
+   * Two guards, neither of which is about language:
+   *
+   *  • VISIBLE ONLY. A hidden checkbox is a honeypot, and "ticks everything including the
+   *    invisible one" is precisely the bot signature it is there to catch. Custom-styled
+   *    checkboxes complicate this — they are often the real input made zero-sized with a
+   *    styled span drawn over it — so a box with no rectangle of its own still counts if
+   *    its label or wrapper has one. What never counts is anything under display:none /
+   *    visibility:hidden, or parked off-screen.
+   *
+   *  • THE PASSWORD FIELD'S OWN FORM. A login page routinely carries a cookie banner and a
+   *    newsletter signup with checkboxes of their own, and neither is ours to touch.
+   */
+  async function tickRequiredAgreements(page: PageAdapter): Promise<string[]> {
+    return (await page
+      .evaluate(() => {
+        // Only a blocklist. See above for why there is no matching allowlist.
+        const MARKETING =
+          /newsletter|subscri|promo|marketing|advertis|mailing list|offers|广告|廣告|营销|營銷|订阅|訂閱|推送|마케팅|광고|수신|메일|メルマガ|広告|配信|рассылк/i;
+
+        const boxOf = (el: Element) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 ? r : null;
+        };
+        const shown = (el: Element) => {
+          for (let n: Element | null = el; n; n = n.parentElement) {
+            const s = getComputedStyle(n as HTMLElement);
+            if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+          }
+          return true;
+        };
+        const labelEl = (el: HTMLInputElement) =>
+          (el.id ? document.querySelector<HTMLElement>(`label[for="${CSS.escape(el.id)}"]`) : null) ??
+          el.closest("label") ??
+          (el.parentElement as HTMLElement | null);
+        const visible = (el: HTMLInputElement) => {
+          if (!shown(el)) return false;
+          // The input's own rectangle, or failing that its label's — a zero-sized input
+          // under a drawn label is a styled checkbox, not a hidden one.
+          const r = boxOf(el) ?? (labelEl(el) ? boxOf(labelEl(el)!) : null);
+          if (!r) return false;
+          // Parked off-screen is hidden by another name.
+          return r.bottom > 0 && r.right > 0 && r.top < innerHeight + 2000 && r.left < innerWidth + 2000;
+        };
+        const labelOf = (el: HTMLInputElement) => {
+          const t = labelEl(el)?.innerText ?? el.getAttribute("aria-label") ?? el.name ?? "";
+          return t.replace(/\s+/g, " ").trim().slice(0, 160);
+        };
+
+        const pw = (document.querySelector("input[data-wa-pass='1']") ??
+          document.querySelector('input[type="password"]')) as HTMLInputElement | null;
+        const scope: ParentNode = pw?.form ?? document;
+
+        const ticked: string[] = [];
+        for (const b of Array.from(scope.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))) {
+          if (b.checked || b.disabled || !visible(b)) continue;
+          const label = labelOf(b);
+          if (MARKETING.test(label)) continue;
+          // A REAL click. React binds onChange through the click event, and assigning
+          // .checked fires nothing at all — the box would look ticked and the site would
+          // still refuse. Clicking the input works even when it is visually replaced by a
+          // styled span, because the input is what carries the handler; if some design put
+          // the handler on the label instead, click that.
+          b.click();
+          if (!b.checked) labelEl(b)?.click();
+          if (b.checked) ticked.push(label);
+        }
+        return ticked;
+      })
+      .catch(() => [] as string[])) as string[];
+  }
+
   async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
     return (await page.evaluate(() => {
       const isVisible = (el: Element): boolean => {
@@ -1050,7 +1140,12 @@ import type { PageAdapter } from "./page-adapter";
         );
       }
 
-      // ── 3. Submit — click the real login control, else press Enter ────────
+      // ── 3. Tick whatever the form makes you agree to, then submit ─────────
+      const agreed = await tickRequiredAgreements(page);
+      if (agreed.length) {
+        logger.info({ agreed }, "Ticked the login form's agreement checkbox(es) before submitting");
+      }
+
       if (!(await jsClickSubmit(page))) {
         await page.keyboard.press("Enter");
       }
