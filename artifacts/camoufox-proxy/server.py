@@ -41,6 +41,11 @@ _LAUNCHER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launc
 
 _WS_RE = re.compile(r"(ws://[^\s]+)")
 
+# Seconds one dwell leg really costs on THIS box, learned from each gesture. Seeded at the
+# figure measured in the production container (5.9s over ~14 legs); the first gesture
+# corrects it either way.
+_leg_cost = [0.42]
+
 
 def _build_options(body: dict) -> dict:
     """Map the api-server's fingerprint/proxy config to Camoufox launch options."""
@@ -760,6 +765,18 @@ def session_os_click(sid):
         # X requests from one connection are processed in order, and the sleeps do the pacing.
         # The one move that DOES keep it is the final positioning before mousedown, where the
         # pointer must provably be on the target before the button goes down.
+        # NEVER EMIT A NEGATIVE COORDINATE.
+        #
+        # xdotool parses "-25" as a command-line option and fails the WHOLE chained gesture
+        # with "mousemove: unrecognized option", which the caller sees as a click that could
+        # not be delivered — followed by a fallback to synthesised input that this challenge
+        # does not accept. It is reachable whenever the widget sits far enough left: the
+        # approach starts at x - 150..320 and the dwell ranges to x - 14, and a widget at
+        # x=214 (a 1280-wide viewport, which is what a session without an explicit screen
+        # size gets) puts both below zero. Caught by running this bench inside the sidecar.
+        def C(v):
+            return str(max(0, int(round(v))))
+
         cmd = ["xdotool"]
         for i in range(1, steps + 1):
             t = i / steps
@@ -769,8 +786,7 @@ def session_os_click(sid):
             if i < steps:                           # never jitter the landing point
                 px += random.uniform(-0.7, 0.7)
                 py += random.uniform(-0.7, 0.7)
-            cmd += ["mousemove", str(int(round(px))), str(int(round(py))),
-                    "sleep", f"{step_delay:.3f}"]
+            cmd += ["mousemove", C(px), C(py), "sleep", f"{step_delay:.3f}"]
         # DWELL INSIDE THE WIDGET BEFORE PRESSING.
         #
         # Turnstile lives in a CROSS-ORIGIN iframe, so the only pointer activity it can
@@ -787,18 +803,29 @@ def session_os_click(sid):
         # difference that is both large and visible to the widget, so this is where the
         # movement belongs.
         #
-        # TWELVE TO SIXTEEN legs, ~5s. Not a taste call — measured. At 3-6 legs the first
-        # press drew no response from the widget at all and the second only got as far as
-        # "accepted, then rolled back"; at 12-16 the first press is accepted and the second
-        # clears the challenge. Same site, same machine, same everything else. Shortening
-        # this is exactly as breaking as removing it.
+        # AIM AT A DURATION, NOT AT A LEG COUNT.
+        #
+        # What decides the outcome is how long the pointer is actually inside the widget:
+        # 3-6 legs never got a press accepted, 12-16 did. But a leg count is a poor handle
+        # on duration, because the SAME command list runs at wildly different speeds. Timed
+        # in the production container, on one display, minutes apart: this service's own
+        # gesture 5.9s, a bench issuing the same 12-16 legs 21.6s. The sleeps in both add up
+        # to ~5s; the rest is xdotool's per-command overhead under whatever load the box is
+        # under. The 21.6s run cleared the challenge and the 5.9s one did not.
+        #
+        # So the leg count is chosen from a running estimate of what a leg actually costs
+        # here, to land on CAMOUFOX_DWELL_MS of real time in the box. The estimate updates
+        # itself from the measured duration of every gesture, so a quiet box and a busy one
+        # both end up spending the same time where it counts.
         #
         # Bounds are relative to the aim point, which sits 22px from the widget's left edge
         # and vertically centred: -14..+60 across and ±18 down still lands well inside a
         # 300x65 control, with margin for the caller's ±2px of jitter.
         dwell = []
         dwx, dwy = float(x), float(y)
-        for _ in range(random.randint(12, 16)):
+        dwell_target = float(os.getenv("CAMOUFOX_DWELL_MS", "16000")) / 1000.0
+        legs = int(max(12, min(60, dwell_target / max(0.05, _leg_cost[0]))))
+        for _ in range(legs):
             dwx = min(max(dwx + random.uniform(-26, 34), x - 14), x + 60)
             dwy = min(max(dwy + random.uniform(-14, 14), y - 18), y + 18)
             dwell.append((dwx, dwy, random.uniform(0.12, 0.35)))
@@ -809,16 +836,14 @@ def session_os_click(sid):
             for i in range(1, tsteps + 1):
                 t = i / tsteps
                 e = 3 * t * t - 2 * t * t * t
-                cmd += ["mousemove",
-                        str(int(round(pdx + (tx_ - pdx) * e))),
-                        str(int(round(pdy + (ty_ - pdy) * e))),
+                cmd += ["mousemove", C(pdx + (tx_ - pdx) * e), C(pdy + (ty_ - pdy) * e),
                         "sleep", f"{tdur / tsteps:.3f}"]
             pdx, pdy = tx_, ty_
             cmd += ["sleep", f"{random.uniform(0.06, 0.2):.3f}"]
 
         # Settle, a pixel of tremor, press, hold, release — still one process.
         cmd += ["sleep", f"{random.uniform(0.18, 0.32):.3f}",
-                "mousemove", "--sync", str(x + random.choice((-1, 0, 1))), str(y + random.choice((-1, 0, 1))),
+                "mousemove", "--sync", C(x + random.choice((-1, 0, 1))), C(y + random.choice((-1, 0, 1))),
                 "sleep", f"{random.uniform(0.04, 0.09):.3f}",
                 "mousedown", "1",
                 "sleep", f"{random.uniform(0.07, 0.14):.3f}",
@@ -830,12 +855,18 @@ def session_os_click(sid):
         for _ in range(random.randint(10, 18)):
             px += dx * random.uniform(0.6, 2.0)
             py += dy * random.uniform(0.3, 1.6)
-            cmd += ["mousemove", str(int(round(px))), str(int(round(py))),
-                    "sleep", f"{random.uniform(0.012, 0.03):.3f}"]
+            cmd += ["mousemove", C(px), C(py), "sleep", f"{random.uniform(0.012, 0.03):.3f}"]
 
-        subprocess.run(cmd, env=env, timeout=30, check=True)
-        print(f"[os-click] {sid} display=:{disp} at {x},{y}", flush=True)
-        return jsonify({"ok": True, "display": disp, "x": x, "y": y})
+        _t0 = time.time()
+        subprocess.run(cmd, env=env, timeout=90, check=True)
+        elapsed = time.time() - _t0
+        # Update the estimate from what this gesture actually cost, smoothed so one blip on
+        # a busy box does not swing the next one.
+        _leg_cost[0] = 0.7 * _leg_cost[0] + 0.3 * (elapsed / max(1, legs))
+        print(f"[os-click] {sid} display=:{disp} at {x},{y} legs={legs} took={elapsed:.1f}s "
+              f"legCost={_leg_cost[0]:.2f}s", flush=True)
+        return jsonify({"ok": True, "display": disp, "x": x, "y": y,
+                        "legs": legs, "seconds": round(elapsed, 2)})
     except subprocess.CalledProcessError as e:
         return jsonify({"error": f"xdotool failed: {e}"}), 500
     except Exception as e:

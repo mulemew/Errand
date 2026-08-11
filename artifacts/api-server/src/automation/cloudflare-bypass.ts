@@ -1662,7 +1662,7 @@ export async function clickTurnstileCheckbox(
       // sit here pressing until the task's own budget is gone. On the bench a passing run
       // needs about 35s end to end (press, ~12s rollback, press, ~2s pass-through, ~6s to
       // land), so this leaves room for one more press than that and stops.
-      const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 120_000);
+      const pressDeadline = Date.now() + Number(process.env.CF_PRESS_BUDGET_MS ?? 180_000);
       let pressedAt = Date.now();
       let settled = await waitForTurnstileSettled(page, maxPresses > 1 ? 14_000 : fullBudget, mode);
 
@@ -1939,7 +1939,7 @@ export async function clearCloudflareInterstitial(
   // been spent before the sequence could finish: at 60s the logs ended "leftMs=0", at 100s
   // the third press was the last one affordable. A page that clears still exits
   // immediately, so this only moves the give-up time on a genuine failure.
-  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 180_000);
+  const budgetMs = opts?.budgetMs ?? Number(process.env.CF_CLEAR_BUDGET_MS ?? 280_000);
   const deadline = Date.now() + budgetMs;
 
   // This function clears FULL-PAGE interstitials — the ones that block the page and

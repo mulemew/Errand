@@ -944,12 +944,17 @@ class CamoufoxProvider implements BrowserProvider {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ x: origin.x + x, y: origin.y + y }),
             // Longer than the sidecar's gesture can possibly be, and shorter than the
-            // subprocess timeout guarding it there (30s), so a slow gesture is reported as
+            // subprocess timeout guarding it there (90s), so a slow gesture is reported as
             // itself rather than as a click that "failed". At 15s it did the opposite: the
             // gesture ran past the deadline, this threw, and the caller quietly fell back to
             // synthesised input — which this page does not accept — so the run ended with the
             // widget never actually pressed and nothing in the log naming the real cause.
-            signal: AbortSignal.timeout(25_000),
+            //
+            // 45s, because the gesture now aims at a DURATION inside the widget rather than
+            // a step count: the same command list was timed at 5.9s and at 21.6s in the same
+            // container minutes apart, so a fixed budget sized from one of those numbers is
+            // wrong for the other.
+            signal: AbortSignal.timeout(45_000),
           });
           if (!res.ok) {
             logger.warn({ status: res.status, body: await res.text().catch(() => "") }, "Sidecar OS-level click failed");

@@ -597,7 +597,9 @@ import type { PageAdapter } from "./page-adapter";
    *  • THE PASSWORD FIELD'S OWN FORM. A login page routinely carries a cookie banner and a
    *    newsletter signup with checkboxes of their own, and neither is ours to touch.
    */
-  async function tickRequiredAgreements(page: PageAdapter): Promise<string[]> {
+  async function tickRequiredAgreements(
+    page: PageAdapter,
+  ): Promise<{ ticked: string[]; saw: string[] }> {
     return (await page
       .evaluate(() => {
         // Only a blocklist. See above for why there is no matching allowlist.
@@ -638,10 +640,16 @@ import type { PageAdapter } from "./page-adapter";
         const scope: ParentNode = pw?.form ?? document;
 
         const ticked: string[] = [];
+        // Everything considered, with the reason it was passed over. A run that ticks
+        // nothing has to say whether it found no checkbox, found a hidden one, or found a
+        // marketing one — three different situations that all end in "nothing ticked".
+        const saw: string[] = [];
         for (const b of Array.from(scope.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))) {
-          if (b.checked || b.disabled || !visible(b)) continue;
           const label = labelOf(b);
-          if (MARKETING.test(label)) continue;
+          if (b.checked) { saw.push(`already ticked: ${label}`); continue; }
+          if (b.disabled) { saw.push(`disabled: ${label}`); continue; }
+          if (!visible(b)) { saw.push(`hidden (honeypot?): ${label || b.name || b.id}`); continue; }
+          if (MARKETING.test(label)) { saw.push(`marketing, left alone: ${label}`); continue; }
           // A REAL click. React binds onChange through the click event, and assigning
           // .checked fires nothing at all — the box would look ticked and the site would
           // still refuse. Clicking the input works even when it is visually replaced by a
@@ -650,10 +658,14 @@ import type { PageAdapter } from "./page-adapter";
           b.click();
           if (!b.checked) labelEl(b)?.click();
           if (b.checked) ticked.push(label);
+          else saw.push(`would not tick: ${label}`);
         }
-        return ticked;
+        return { ticked, saw };
       })
-      .catch(() => [] as string[])) as string[];
+      .catch((err) => ({ ticked: [] as string[], saw: [`probe threw: ${String(err).slice(0, 120)}`] }))) as {
+      ticked: string[];
+      saw: string[];
+    };
   }
 
   async function jsClickSubmit(page: PageAdapter): Promise<boolean> {
@@ -1141,10 +1153,18 @@ import type { PageAdapter } from "./page-adapter";
       }
 
       // ── 3. Tick whatever the form makes you agree to, then submit ─────────
+      //
+      // Logged either way, and with what it SAW. Reporting only successes made "the build
+      // does not have this yet" and "it ran and found nothing to tick" produce identical
+      // logs — silence — which is the one thing a log must never do for two states that
+      // need different fixes.
       const agreed = await tickRequiredAgreements(page);
-      if (agreed.length) {
-        logger.info({ agreed }, "Ticked the login form's agreement checkbox(es) before submitting");
-      }
+      logger.info(
+        agreed.ticked.length ? { agreed: agreed.ticked } : { saw: agreed.saw },
+        agreed.ticked.length
+          ? "Ticked the login form's agreement checkbox(es) before submitting"
+          : "No checkbox to tick before submitting",
+      );
 
       if (!(await jsClickSubmit(page))) {
         await page.keyboard.press("Enter");
