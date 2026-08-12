@@ -770,8 +770,29 @@ class CamoufoxProvider implements BrowserProvider {
   }
 
   async newPage(): Promise<PageAdapter> {
-    const vp = resolveViewport(this.config);
     const fp = this.config.fingerprint ?? {};
+
+    // A WINDOW CANNOT BE BIGGER THAN THE SCREEN IT IS ON.
+    //
+    // The viewport is picked from a pool (or the provider's setting) and the screen comes
+    // from the saved fingerprint, and nothing reconciled them: a session was measured
+    // reporting innerWidth 1920 against screen.width 1707. No real browser can do that, and
+    // it is the kind of contradiction a fingerprinting check exists to find — it needs no
+    // cleverness, just a comparison.
+    //
+    // So when the fingerprint declares a screen, the viewport is fitted inside it: full
+    // width, and height less the browser's own chrome, which is what a maximised window
+    // looks like.
+    const vp = (() => {
+      const want = resolveViewport(this.config);
+      const scr = (fp as { summary?: { screen?: { width?: number; height?: number } } }).summary?.screen;
+      const sw = Number(scr?.width) || 0;
+      const sh = Number(scr?.height) || 0;
+      if (!sw || !sh || (want.width <= sw && want.height <= sh)) return want;
+      const fitted = { width: Math.min(want.width, sw), height: Math.min(want.height, Math.max(400, sh - 90)) };
+      logger.debug({ want, screen: { width: sw, height: sh }, fitted }, "Viewport did not fit the fingerprint's screen — fitted to it");
+      return fitted;
+    })();
 
     // Firefox (camoufox) can only speak http/socks proxies — a vless/vmess/… URL must
     // first be turned into a local sing-box SOCKS5. remoteConsumer=true so the helper is

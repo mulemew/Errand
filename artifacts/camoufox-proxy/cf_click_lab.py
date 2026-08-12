@@ -32,6 +32,7 @@ Everything runs against the real site through the sidecar's own launcher, so the
 fingerprint, the proxy and the display are the ones a task gets.
 """
 import argparse
+import io
 import json
 import os
 import random
@@ -86,6 +87,7 @@ FIND_TARGET = """() => {
 # report a pass while the page still plainly says "Just a moment". A password field only
 # exists on the real page.
 STATE = """() => ({
+  dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight, sw: screen.width, sh: screen.height,
   url: location.href,
   title: document.title,
   chl: !!(window._cf_chl_opt && window._cf_chl_opt.cType),
@@ -231,6 +233,17 @@ def main():
     ap.add_argument("--variant", default="proven",
                     choices=["manual", "proven", "baseline", "teleport"])
     ap.add_argument("--presses", type=int, default=4)
+    ap.add_argument("--launchbody", default="",
+                    help="path to a JSON file holding the EXACT /launch body a task sent "
+                         "(recorded by the sidecar). Replayed verbatim except for the proxy "
+                         "server, which --proxy replaces. This ends the guessing about which "
+                         "field differs: there is no reconstruction left to get wrong.")
+    ap.add_argument("--fpfile", default="",
+                    help="path to a JSON {os,preset,locale,timezone} exported from a saved "
+                         "fingerprint profile. A task launches with one; every bench run so "
+                         "far has let camoufox generate a fresh random one, which is a "
+                         "different devicePixelRatio and therefore a different mapping from "
+                         "the page's CSS pixels to the X server's device pixels.")
     ap.add_argument("--prewarm", action="store_true",
                     help="visit the site once and poll it before going to the login page, "
                          "the way cookie-mode's session check does. A task has already been "
@@ -270,10 +283,21 @@ def main():
 
     print(f"launching a session via {SIDECAR} …")
     body = {}
+    if args.launchbody:
+        body = json.loads(io.open(args.launchbody, encoding="utf-8").read())
+        body.pop("proxy", None)
     if args.screen:
         body["screen"] = args.screen
     if args.proxy:
         body["proxy"] = {"server": args.proxy}
+    if args.fpfile:
+        fp = json.loads(io.open(args.fpfile, encoding="utf-8").read())
+        body["fingerprint"] = fp
+        if fp.get("os"):
+            body["os"] = fp["os"]
+        for k in ("locale", "timezone"):
+            if fp.get(k):
+                body[k] = fp[k]
     sess = post("/launch", body)
     sid, ws = sess["id"], sess["ws"]
     print(f"  session {sid}")
@@ -318,7 +342,11 @@ def main():
                     break
                 time.sleep(1)
             st = page.evaluate(STATE)
-            print(f"  title={st['title']!r} challenge={st['chl']} cType={st['ctype']!r}")
+            print(f"  title={st['title']!r} challenge={st['chl']} cType={st['ctype']!r} "
+                  f"render={st.get('vw')}x{st.get('vh')} dpr={st.get('dpr')} "
+                  f"screen={st.get('sw')}x{st.get('sh')}"
+                  + ("   <<< VIEWPORT BIGGER THAN SCREEN — impossible on a real browser"
+                     if st.get('vw') and st.get('sw') and st['vw'] > st['sw'] else ""))
             # Only a login FORM proves there is nothing to test. cType blinks out for a
             # moment every time the challenge rebuilds itself, and bailing on that reported
             # "no challenge" against a page whose title still said "Un instant…".

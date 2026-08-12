@@ -468,6 +468,7 @@ def _stop_session_display(entry):
 @app.post("/launch")
 def launch():
     body = request.get_json(silent=True) or {}
+
     opts = _build_options(body)
     env = dict(os.environ)
     env["CAMOUFOX_CFG"] = json.dumps(opts)

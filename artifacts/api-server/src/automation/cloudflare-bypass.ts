@@ -875,7 +875,12 @@ const CF_PROBE_FN = () => {
     ["challenges.cloudflare.com", "cf-turnstile"].some((pat) => (f.src ?? "").includes(pat)),
   );
 
-  return { blocked, marker, legacy, title, visibleWidget, turnstileIframe, chlPresent, chlType };
+  // Carried on the probe that already runs, so nothing extra is injected: the page's own
+  // measurements are the last thing about a task session that has only ever been inferred
+  // from a bench session's numbers, and inference is what has been wrong all day.
+  return { blocked, marker, legacy, title, visibleWidget, turnstileIframe, chlPresent, chlType,
+           dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight,
+           sw: screen.width, sh: screen.height };
 };
 
 type CfPageProbe = {
@@ -887,6 +892,12 @@ type CfPageProbe = {
   turnstileIframe: boolean;
   /** window._cf_chl_opt exists — this page IS a Cloudflare challenge, whatever it renders. */
   chlPresent: boolean;
+  /** What the page thinks it is being rendered at. */
+  dpr: number;
+  vw: number;
+  vh: number;
+  sw: number;
+  sh: number;
   /** Its cType: "interactive" (a box to click), "non-interactive", "managed", or "". */
   chlType: string;
 };
@@ -950,12 +961,12 @@ async function detectCfChallenge(page: PageAdapter): Promise<CfChallengeType> {
   // from markup the current challenge platform keeps in a closed shadow root.
   const cType = probe.chlType.toLowerCase();
   if (cType === "interactive" || cType === "captcha") {
-    logger.debug({ title: probe.title, via: `_cf_chl_opt.cType=${cType}` }, "CF challenge classified as turnstile_click");
+    logger.info({ title: probe.title, via: `_cf_chl_opt.cType=${cType}`, render: `${probe.vw}x${probe.vh} dpr=${probe.dpr} screen=${probe.sw}x${probe.sh}` }, "CF challenge classified as turnstile_click");
     return "turnstile_click";
   }
 
   if (probe.visibleWidget) {
-    logger.debug({ title: probe.title, via: "visibleWidget" }, "CF challenge classified as turnstile_click");
+    logger.info({ title: probe.title, via: "visibleWidget", render: `${probe.vw}x${probe.vh} dpr=${probe.dpr} screen=${probe.sw}x${probe.sh}` }, "CF challenge classified as turnstile_click");
     return "turnstile_click";
   }
 
@@ -1689,6 +1700,23 @@ export async function clickTurnstileCheckbox(
       for (let press = 2; !settled && press <= maxPresses && Date.now() < pressDeadline - 20_000; press++) {
         const quiet = pressedAt + pressGapMs - Date.now();
         if (quiet > 0) await sleep(quiet);
+
+        // NEVER PRESS ON TOP OF A PASS-THROUGH. Seen doing exactly that, on the bench and
+        // in the logs within two minutes of each other: the url goes to ?__cf_chl_tk=…,
+        // which only a cleared challenge produces, and the next press puts the page back
+        // into the challenge it had just left. The bench run that did it ended stuck on the
+        // chl_tk url; every other bench run stopped pressing before that point and passed.
+        //
+        // waitForPassThroughToLand returning false does NOT mean the redirect died — it
+        // means it had not landed within the time it was given. So look at the url before
+        // pressing, and if the pass-through is still there, wait it out instead.
+        const here = (() => { try { return page.url(); } catch { return ""; } })();
+        if (here.includes("__cf_chl_tk")) {
+          logger.info({ press }, "The pass-through redirect is still in flight — waiting it out instead of pressing again");
+          settled = await waitForPassThroughToLand(page, Date.now() + 45_000);
+          if (settled) break;
+          continue;
+        }
         logger.info(
           { press, x: Math.round(x), y: Math.round(y) },
           "Pressing again — a full-page challenge takes several, and the rollback between them is a step, not a verdict",
