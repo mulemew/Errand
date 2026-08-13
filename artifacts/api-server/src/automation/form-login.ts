@@ -1,5 +1,6 @@
 import type { PageAdapter } from "./page-adapter";
   import { logger } from "../lib/logger";
+  import { solveRecaptchaAudio } from "./recaptcha-audio";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
   import { detectAndHandleCaptcha } from "./captcha";
   import { clearCloudflareInterstitial, describeTurnstileState } from "./cloudflare-bypass";
@@ -904,7 +905,34 @@ import type { PageAdapter } from "./page-adapter";
     }
   }
 
-  export async function formLogin(
+  /**
+ * Is a reCAPTCHA challenge popup actually open?
+ *
+ * Its iframe exists on every page that loads reCAPTCHA, collapsed and idle, so this
+ * measures rather than counts: an open challenge is around 400x580.
+ */
+async function waitForRecaptchaPopup(page: PageAdapter, timeoutMs: number): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const open = (await page
+      .evaluate(() => {
+        const f = document.querySelector<HTMLIFrameElement>(
+          "iframe[src*='api2/bframe'], iframe[src*='enterprise/bframe']",
+        );
+        if (!f) return false;
+        const cs = getComputedStyle(f);
+        if (cs.visibility === "hidden" || cs.display === "none") return false;
+        const r = f.getBoundingClientRect();
+        return r.width >= 300 && r.height >= 300;
+      })
+      .catch(() => false)) as boolean;
+    if (open) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+export async function formLogin(
     page: PageAdapter,
     targetUrl: string,
     credentials: FormCredentials,
@@ -1168,6 +1196,35 @@ import type { PageAdapter } from "./page-adapter";
 
       if (!(await jsClickSubmit(page))) {
         await page.keyboard.press("Enter");
+      }
+
+      // SOLVE THE CHALLENGE THAT SUBMITTING BRINGS UP, if one comes.
+      //
+      // An invisible reCAPTCHA scores the visitor when the form is submitted and only then
+      // decides whether to ask anything. Nothing may touch it BEFORE that — going looking
+      // for a checkbox to tick is what used to summon a challenge onto a page that had
+      // none — but once the popup is genuinely on screen it is the entire reason the login
+      // is stuck, and the audio solver exists for exactly this.
+      //
+      // "Genuinely on screen" is measured, not counted: reCAPTCHA creates its challenge
+      // iframe up front on every page and leaves it collapsed, so its presence proves
+      // nothing and its size proves it. Waited for, because the popup arrives a moment
+      // after the click.
+      if (await waitForRecaptchaPopup(page, 8000)) {
+        logger.info("A reCAPTCHA challenge opened after submitting — solving it");
+        const solved = await solveRecaptchaAudio(page);
+        logger.info(
+          { solved: solved.solved, blocked: solved.blocked, message: solved.message },
+          "Post-submit reCAPTCHA solve finished",
+        );
+        if (solved.solved) {
+          // The site's own callback usually submits once the token lands; if the form is
+          // still there, press again rather than leave a solved challenge unspent.
+          await sleep(1500);
+          if (await loginFormEvidence(page)) {
+            if (!(await jsClickSubmit(page))) await page.keyboard.press("Enter");
+          }
+        }
       }
 
       // Watch from the moment of submit until the login resolves, instead of settling for a
