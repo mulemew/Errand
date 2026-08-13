@@ -1075,7 +1075,12 @@ export async function detectAndHandleCaptcha(
       // on to submit the form.
       const interactive = (await page
         .evaluate(() => {
-          const bigEnough = (r: DOMRect) => r.width >= 200 && r.height >= 60;
+          // 280x70, not 200x60. Measured on hub.weirdhost's login page: the INVISIBLE
+          // reCAPTCHA's badge anchor iframe is exactly 256x60, so a >= 60 test called it
+          // interactive and the run went off to solve a challenge that does not exist —
+          // a minute in the audio flow, "captcha encountered", and the form never
+          // submitted. A real v2 checkbox anchor is 304x78, which still clears this.
+          const bigEnough = (r: DOMRect) => r.width >= 280 && r.height >= 70;
           // The checkbox lives in the anchor iframe — but so does the invisible mode's
           // BADGE, and at 256x60 it is close enough to a 304x78 checkbox that size alone
           // cannot tell them apart. The src can: Google puts size=invisible in the anchor
@@ -1094,7 +1099,15 @@ export async function detectAndHandleCaptcha(
             return true;
           }
           // A container rendered at checkbox size and not declared invisible.
-          return Array.from(document.querySelectorAll<HTMLElement>(".g-recaptcha, [data-sitekey]")).some(
+          // reCAPTCHA's OWN marker only. [data-sitekey] used to be in this list, and it is
+          // not a reCAPTCHA attribute — Cloudflare Turnstile uses it too, and a Turnstile
+          // widget is 300x65, which clears the 200x60 bar. So a login page carrying a
+          // Turnstile box and nothing but an invisible reCAPTCHA badge was read as having
+          // an interactive reCAPTCHA, and the run went off to solve a challenge that does
+          // not exist: a minute in the audio flow, then "captcha encountered", and the
+          // form never submitted. Measured on hub.weirdhost, whose reCAPTCHA needs no
+          // interaction at all.
+          return Array.from(document.querySelectorAll<HTMLElement>(".g-recaptcha")).some(
             (c) => c.getAttribute("data-size") !== "invisible" && bigEnough(c.getBoundingClientRect()),
           );
         })

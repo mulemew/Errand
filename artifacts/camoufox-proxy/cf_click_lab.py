@@ -122,6 +122,40 @@ def approach(cmd, sx, sy, x, y):
     return ease_to(cmd, sx, sy, x, y, random.uniform(0.5, 0.9), 110)
 
 
+CAPTCHA_DUMP = """() => {
+  const box = (el) => { const r = el.getBoundingClientRect();
+    return Math.round(r.width) + "x" + Math.round(r.height); };
+  const out = {iframes: [], containers: [], tokens: []};
+  for (const f of document.querySelectorAll('iframe')) {
+    const src = f.getAttribute('src') || '';
+    if (/recaptcha|turnstile|hcaptcha|challenges/.test(src))
+      out.iframes.push({src: src.slice(0, 110), size: box(f)});
+  }
+  for (const c of document.querySelectorAll('.g-recaptcha, [data-sitekey], .cf-turnstile, .h-captcha, [id^="cf-chl-widget"]'))
+    out.containers.push({tag: c.tagName, cls: String(c.className || '').slice(0, 40),
+                         sitekey: c.getAttribute('data-sitekey'), size: box(c), id: c.id || ''});
+  for (const t of document.querySelectorAll('textarea[name*="recaptcha"], input[name*="turnstile"], input[name*="captcha"]'))
+    out.tokens.push({name: t.getAttribute('name'), len: String(t.value || '').length});
+  return out;
+}"""
+
+
+def dump_captcha(page):
+    """List what the service's captcha detector would see here, with sizes.
+
+    Which of its branches fires has been assumed twice and measured never; the branch
+    decides whether a run goes off to solve a challenge or submits the form."""
+    print("\n-- what the captcha detector actually sees on this page --")
+    try:
+        d = page.evaluate(CAPTCHA_DUMP)
+    except Exception as e:
+        print(f"   ({type(e).__name__})")
+        return
+    print(f"   captcha iframes : {d['iframes'] or 'none'}")
+    print(f"   containers      : {d['containers'] or 'none'}")
+    print(f"   token fields    : {d['tokens'] or 'none'}")
+
+
 def run_variant(variant, display, x, y, page):
     """Deliver the press. x,y are SCREEN coordinates."""
     if variant == "manual":
@@ -151,6 +185,8 @@ def run_variant(variant, display, x, y, page):
             print(f"  press {n}: gesture {time.time() - t0:.1f}s  ->  {st['url'][:80]} "
                   f"chl={st['chl']} form={st['form']}")
             if st["form"]:
+                if ARGS.dumpcaptcha:
+                    dump_captcha(page)
                 return
             if n < ARGS.presses:
                 time.sleep(ARGS.gap)
@@ -162,6 +198,50 @@ def run_variant(variant, display, x, y, page):
         # the pointer spends inside the widget is the variable already shown to decide the
         # outcome.
         sid = page._lab_sid
+        mimic = None
+        if ARGS.mimic:
+            import io as _io
+            mimic = json.loads(_io.open(ARGS.mimic, encoding="utf-8").read())
+            # The pre-press sequence, in the order the service issues it (numbered from a
+            # live run): password probe, the CF page probe, the UA check, the widget
+            # expander, a widget description, the expander AGAIN, document.hasFocus(), then
+            # eight passes of the frame locate loop.
+            print("  mimic: running the service's pre-press injections")
+            if ARGS.only == "probeonce":
+                seq = (mimic["probe"],)
+            elif ARGS.only == "noinnertext":
+                seq = (mimic["probe_noinnertext"], mimic["probe_noinnertext"])
+            elif ARGS.only == "onlytext":
+                seq = (mimic["probe_onlytext"], mimic["probe_onlytext"])
+            elif ARGS.only == "probe":
+                seq = (mimic["probe"], mimic["probe"])
+            elif ARGS.only == "noprobe":
+                seq = ("() => !!document.querySelector(\"input[type='password']\")",
+                       "() => /Firefox/.test(navigator.userAgent)",
+                       mimic["expand"], mimic["expand"], "() => document.hasFocus()")
+            elif ARGS.only == "expand":
+                seq = (mimic["expand"], mimic["expand"])
+            elif ARGS.only == "noexpand":
+                seq = ("() => !!document.querySelector(\"input[type='password']\")",
+                       mimic["probe"], "() => /Firefox/.test(navigator.userAgent)",
+                       mimic["probe"], "() => document.hasFocus()")
+            else:
+                seq = ("() => !!document.querySelector(\"input[type='password']\")",
+                       mimic["probe"], "() => /Firefox/.test(navigator.userAgent)",
+                       mimic["expand"], mimic["probe"], mimic["expand"],
+                       "() => document.hasFocus()")
+            for js in seq:
+                try:
+                    page.evaluate(js)
+                except Exception as e:
+                    print(f"    ({type(e).__name__})")
+            for _ in range(8):
+                try:
+                    page.evaluate(FIND_TARGET)
+                except Exception:
+                    pass
+                time.sleep(0.4)
+
         for n in range(1, ARGS.presses + 1):
             if ARGS.framequery:
                 probed = []
@@ -186,10 +266,21 @@ def run_variant(variant, display, x, y, page):
                 time.sleep(random.uniform(0.6, 1.5))
             t0 = time.time()
             post(f"/sessions/{sid}/os-click", {"x": x, "y": y})
+            if mimic and ARGS.only in ("all", "noexpand", "probe", "noinnertext", "onlytext"):
+                # What the service runs between presses: the solved-token check, then the
+                # page probe each time a pass-through is seen.
+                _k = {"noinnertext": "probe_noinnertext", "onlytext": "probe_onlytext"}.get(ARGS.only, "probe")
+                for js in (mimic[_k], mimic[_k]):
+                    try:
+                        page.evaluate(js)
+                    except Exception:
+                        pass
             st = page.evaluate(STATE)
             print(f"  press {n}: SERVICE gesture {time.time() - t0:.1f}s  ->  "
                   f"{st['url'][:70]} form={st['form']}")
             if st["form"]:
+                if ARGS.dumpcaptcha:
+                    dump_captcha(page)
                 return
             if n < ARGS.presses:
                 time.sleep(ARGS.gap)
@@ -249,6 +340,15 @@ def main():
                          "the way cookie-mode's session check does. A task has already been "
                          "through one round on this site before the challenge it fails; this "
                          "bench has always arrived cold.")
+    ap.add_argument("--only", default="all", choices=["all", "expand", "noexpand", "probe", "noprobe", "noinnertext", "onlytext", "probeonce"],
+                    help="which part of --mimic to run: everything, only the widget "
+                         "expander, or everything except it")
+    ap.add_argument("--mimic", default="",
+                    help="path to scripts.json holding the service's own injected scripts. "
+                         "Runs them at the points the service runs them — the reverse of "
+                         "every experiment so far: instead of giving the bench the service's "
+                         "settings, give it the service's BEHAVIOUR and see if it starts "
+                         "failing.")
     ap.add_argument("--framequery", action="store_true",
                     help="before each press, reach into the CROSS-ORIGIN Turnstile iframe "
                          "the way locateCheckboxInCfFrame does: enumerate frames, query "
@@ -275,6 +375,9 @@ def main():
     ap.add_argument("--gap", type=int, default=12)
     ap.add_argument("--url", default=URL)
     ap.add_argument("--watch", type=int, default=60, help="seconds to watch for a verdict")
+    ap.add_argument("--dumpcaptcha", action="store_true",
+                    help="on reaching the login form, list every element the captcha "
+                         "detector looks at, with its size")
     ap.add_argument("--keep", action="store_true", help="leave the session running afterwards")
     args = ap.parse_args()
     ARGS = args

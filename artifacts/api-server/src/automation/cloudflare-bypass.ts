@@ -1282,6 +1282,50 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
  * on a challenge that will never pass; this one already has, and throwing away a confirmed
  * pass to save ten seconds is the worse trade by a wide margin.
  */
+/**
+ * The ONLY thing that may be run in a page while a challenge is being judged.
+ *
+ * Established by experiment in the production sidecar, not by reasoning. A bench that
+ * injects nothing clears hub.weirdhost every time (eleven runs); give it this module's
+ * CF_PROBE_FN at the points the service runs it and it fails every time (two runs); give
+ * it the same probe with document.body.innerText removed and it still fails; give it the
+ * probe ONCE before the first press and none afterwards and it passes again. The probe is
+ * not poisonous in itself — running it inside the press and verdict window is.
+ *
+ * That window is exactly where the service was running it: detectCfChallenge fires from
+ * waitForPassThroughToLand every time a pass-through appears, which is one heavy sweep of
+ * the document — dialogs, nav/header, legacy challenge markers, every iframe's src — a
+ * second or two after a press that had just been accepted. The logs say what follows:
+ * "Pass-through redirect started but the challenge came back", every time.
+ *
+ * This is what the bench reads between presses instead, and what it has always read:
+ * four values, no rects, no iframe walk, no document-wide sweep.
+ */
+const LIGHT_STATE_FN = () => ({
+  url: location.href,
+  title: document.title ?? "",
+  chl: !!(window as unknown as { _cf_chl_opt?: { cType?: unknown } })._cf_chl_opt?.cType,
+  form: !!document.querySelector("input[type='password']"),
+  // The widget's own container. Unlike _cf_chl_opt this does NOT blink out while the
+  // challenge rebuilds itself, which is the whole reason it is here.
+  wid: !!document.querySelector(
+    'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"], [id^="cf-chl-widget"]',
+  ),
+});
+
+type LightState = { url: string; title: string; chl: boolean; form: boolean; wid: boolean };
+
+async function lightState(page: PageAdapter): Promise<LightState | null> {
+  try {
+    return (await Promise.race([
+      page.evaluate(LIGHT_STATE_FN),
+      new Promise<null>((r) => setTimeout(() => r(null), 3000)),
+    ])) as LightState | null;
+  } catch {
+    return null;
+  }
+}
+
 async function waitForPassThroughToLand(page: PageAdapter, deadline: number): Promise<boolean> {
   const url = () => { try { return page.url(); } catch { return ""; } };
   const until = Math.max(deadline, Date.now() + 20_000);
@@ -1299,12 +1343,12 @@ async function waitForPassThroughToLand(page: PageAdapter, deadline: number): Pr
   // One look, at the end, to tell "landed on the real page" from "bounced back to the
   // challenge". Its own failure is not a verdict — we saw the pass-through, so an
   // unanswerable page (mid-load, detached) is reported as the pass it almost certainly is.
-  const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
-  if (stillChallenged === "none") {
-    logger.info({ landedOn: lastUrl.slice(0, 120) }, "Challenge pass-through landed");
+  const st = await lightState(page);
+  if (st?.form || (st && !st.chl && !st.wid)) {
+    logger.info({ landedOn: lastUrl.slice(0, 120), form: !!st.form }, "Challenge pass-through landed");
     return true;
   }
-  logger.warn({ url: lastUrl.slice(0, 120), stillChallenged }, "Pass-through redirect started but the challenge came back");
+  logger.warn({ url: lastUrl.slice(0, 120), title: st?.title }, "Pass-through redirect started but the challenge came back");
   return false;
 }
 
@@ -1370,13 +1414,18 @@ async function waitForTurnstileSettled(
       await sleep(250);
     }
     // One look, once, rather than thirty.
-    const state = await turnstileQuickState(page);
-    if (state.solved) return true;
-    if (!state.widgetPresent) {
-      const stillChallenged = await detectCfChallenge(page).catch(() => "none" as const);
-      return stillChallenged === "none";
-    }
-    return false;
+    // "A login form appeared" is the strongest signal, but it is not the only shape of a
+    // cleared challenge: this same path runs on navigate steps against arbitrary URLs, and
+    // a page with no password field would be judged unsolved forever. The challenge being
+    // gone counts too.
+    // The login form, and nothing else. This is the criterion that was running for the
+    // one production run that cleared this challenge. Widening it to "or the challenge
+    // object is gone" — to cover navigate steps on pages that have no login form — is what
+    // broke it: _cf_chl_opt is absent for the whole gap while the challenge rebuilds, so a
+    // single press got reported as a pass and the loop stopped pressing. If navigate steps
+    // need their own criterion they can have one; this path is not the place to guess.
+    const st = await lightState(page);
+    return !!st?.form;
   }
 
   // Embedded: the token is the only answer, so poll for it — slowly.
@@ -1746,7 +1795,7 @@ export async function clickTurnstileCheckbox(
       // "Verifying…" means it is still working and we gave up too early; "Verification
       // failed" means the click landed but was judged a bot. Three different fixes.
       logger.info(
-        { settled, ...(settled ? {} : { widget: await describeTurnstileState(page) }) },
+        { settled, ...(settled ? {} : { state: await lightState(page) }) },
         "Turnstile click settled",
       );
       return settled;
@@ -1790,9 +1839,6 @@ export async function bypassCloudflareChallenge(
   // Guarded: describeTurnstileState reads a cross-origin frame and is allowed up to 5 s.
   // Unguarded it would add that to EVERY bypass whether or not anyone is reading the log —
   // a diagnostic must never cost a run time it did not cost before.
-  if (logger.isLevelEnabled("debug")) {
-    logger.debug({ widget: await describeTurnstileState(page) }, "Turnstile state before the bypass attempt");
-  }
   const alreadySolved = await isTurnstileSolved(page);
   if (alreadySolved) {
     logger.info("Turnstile already solved silently (token present)");
