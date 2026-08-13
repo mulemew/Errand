@@ -339,6 +339,8 @@ export interface Translations {
       textContains: string;
       textNotContains: string;
       elementVisible: string;
+      elementClickable: string;
+      elementNotClickable: string;
       elementNotVisible: string;
       urlContains: string;
       conditionValue: string;
@@ -1071,6 +1073,8 @@ export interface Translations {
       textContains: "页面包含文字",
       textNotContains: "页面不包含文字",
       elementVisible: "元素可见",
+      elementClickable: "元素可点击（排除禁用/灰掉的）",
+      elementNotClickable: "元素不可点击（禁用或灰掉）",
       elementNotVisible: "元素不可见",
       urlContains: "URL 包含",
       conditionValue: "匹配值",
@@ -1794,6 +1798,8 @@ export interface Translations {
       textContains: "Page contains text",
       textNotContains: "Page does NOT contain text",
       elementVisible: "Element is visible",
+      elementClickable: "Element is clickable (not disabled)",
+      elementNotClickable: "Element is not clickable (disabled)",
       elementNotVisible: "Element is NOT visible",
       urlContains: "URL contains",
       conditionValue: "Match value",

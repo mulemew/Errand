@@ -14,7 +14,7 @@ import type { DecryptedCredentials } from "./runner";
   import { db, savedCredentialsTable, eq } from "@workspace/db";
   import { decrypt } from "../lib/encryption";
 
-export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
+export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "element_clickable" | "element_not_clickable" | "url_contains";
 
 // An if/else branch action. Either performs a sub-step (click/fill/…), or is a
 // control-flow action: continue to the next step, or end the whole task.
@@ -965,6 +965,48 @@ async function executeStep(
                 }).catch(() => false) as boolean;
                 conditionMet = !visible;
               }
+              break;
+            }
+            // "Is it there" and "can it be used" are different questions, and only the
+            // first one could be asked. A button that is present but disabled — this
+            // panel's renew button before its renewal window opens — satisfies
+            // text_contains and element_visible, so the then-branch went ahead and tried
+            // to click it, clickByText refused a disabled control, and the whole task
+            // failed on a page that was simply saying "not yet".
+            case "element_clickable":
+            case "element_not_clickable": {
+              const csel = conditionSelector || conditionValue;
+              const usable = (await page
+                .evaluate((arg: unknown) => {
+                  const { sel, text } = arg as { sel: string; text: string };
+                  const ok = (el: Element | null): boolean => {
+                    if (!el) return false;
+                    const h = el as HTMLElement;
+                    const st = getComputedStyle(h);
+                    const r = h.getBoundingClientRect();
+                    if (st.display === "none" || st.visibility === "hidden") return false;
+                    if (r.width <= 0 || r.height <= 0) return false;
+                    if ((h as HTMLButtonElement).disabled) return false;
+                    if (h.getAttribute("aria-disabled") === "true") return false;
+                    if (st.pointerEvents === "none") return false;
+                    // A control greyed out by class rather than by attribute is still
+                    // unusable, and saying so is the whole point of this condition.
+                    if (/(disabled|is-disabled|btn-disabled)/.test(h.className || "")) return false;
+                    return true;
+                  };
+                  if (sel) {
+                    try {
+                      if (Array.from(document.querySelectorAll(sel)).some(ok)) return true;
+                    } catch { /* not a selector — fall through to the text search */ }
+                  }
+                  const want = String(text || "").trim();
+                  if (!want) return false;
+                  return Array.from(document.querySelectorAll("body *")).some(
+                    (el) => (el.textContent || "").trim() === want && el.children.length === 0 && ok(el),
+                  );
+                }, { sel: csel, text: conditionValue } as never)
+                .catch(() => false)) as boolean;
+              conditionMet = conditionType === "element_clickable" ? usable : !usable;
               break;
             }
             case "url_contains": {

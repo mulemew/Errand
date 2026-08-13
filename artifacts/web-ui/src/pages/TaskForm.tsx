@@ -134,6 +134,8 @@ const stepSchema = z.object({
       "text_not_contains",
       "element_visible",
       "element_not_visible",
+      "element_clickable",
+      "element_not_clickable",
       "url_contains",
     ])
     .optional(),

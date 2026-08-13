@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition" | "cfVerify";
 
-export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "url_contains";
+export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "element_clickable" | "element_not_clickable" | "url_contains";
 export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll" | "continue" | "exitSuccess" | "exitFailure";
 
 export interface ConditionalAction {
@@ -579,6 +579,8 @@ function StepCard({
                 <SelectItem value="text_contains" className="text-xs">{t.textContains}</SelectItem>
                 <SelectItem value="text_not_contains" className="text-xs">{t.textNotContains}</SelectItem>
                 <SelectItem value="element_visible" className="text-xs">{t.elementVisible}</SelectItem>
+                <SelectItem value="element_clickable" className="text-xs">{t.elementClickable}</SelectItem>
+                <SelectItem value="element_not_clickable" className="text-xs">{t.elementNotClickable}</SelectItem>
                 <SelectItem value="element_not_visible" className="text-xs">{t.elementNotVisible}</SelectItem>
                 <SelectItem value="url_contains" className="text-xs">{t.urlContains}</SelectItem>
               </SelectContent>
