@@ -1115,13 +1115,27 @@ export async function detectAndHandleCaptcha(
 
       // A challenge popup that is ALREADY open counts, whatever the widget looks like:
       // an invisible reCAPTCHA that decided to challenge does show a bframe.
-      const challengeOpen = (() => {
-        try {
-          return page.frames().some((f) => /api2\/bframe|enterprise\/bframe/.test(f.url()));
-        } catch {
-          return false;
-        }
-      })();
+      // The bframe EXISTING is not a challenge being open. reCAPTCHA creates that iframe up
+      // front on every page that loads it and leaves it collapsed until it actually wants
+      // one — measured on hub.weirdhost's login page at 1918x150 with nothing to solve. So
+      // this test was true on every reCAPTCHA page in the world, the "nothing to solve"
+      // exemption below could never fire, and a login whose captcha needs no interaction at
+      // all was sent into the audio solver: a minute of failing, then "captcha encountered",
+      // and the form never submitted.
+      //
+      // An open challenge is a popup: ~400x580. Anything shorter is the idle placeholder.
+      const challengeOpen = (await page
+        .evaluate(() => {
+          const f = document.querySelector<HTMLIFrameElement>(
+            "iframe[src*='api2/bframe'], iframe[src*='enterprise/bframe']",
+          );
+          if (!f) return false;
+          const r = f.getBoundingClientRect();
+          const s = getComputedStyle(f);
+          if (s.visibility === "hidden" || s.display === "none") return false;
+          return r.width >= 300 && r.height >= 300;
+        })
+        .catch(() => false)) as boolean;
 
       if (!interactive && !challengeOpen) {
         logger.info("Invisible reCAPTCHA present with no challenge — nothing to solve, continuing");
