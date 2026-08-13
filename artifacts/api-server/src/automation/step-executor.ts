@@ -1369,11 +1369,25 @@ async function clickByText(
   let sel: string | null = null;
   while (Date.now() < deadline) {
     sel = (await page.evaluate((btnText: unknown) => {
-      const candidates = Array.from(
+      // Real controls first, then ANY visible element whose whole text is the target.
+      //
+      // Restricting the search to button/a/[role=button] misses the ones that are not:
+      // plenty of panels build their buttons out of div and span, and this one does —
+      // "연장하기" is there, the condition step that guards the click finds it (it scans
+      // body *), and then the click reported "no visible element with text" and failed the
+      // task. Two tests that disagree about whether the same thing is on the page.
+      //
+      // Deepest match wins, so a wrapper that happens to contain only that text does not
+      // shadow the element the user would actually have clicked.
+      const controls = Array.from(
         document.querySelectorAll<HTMLElement>(
           "button, a, input[type='button'], input[type='submit'], [role='button']",
         ),
       );
+      const wanted = String(btnText).trim();
+      const others = Array.from(document.querySelectorAll<HTMLElement>("body *"))
+        .filter((el) => !controls.includes(el) && (el.textContent || "").trim() === wanted && el.children.length === 0);
+      const candidates = [...controls, ...others];
       const isClickable = (el: HTMLElement): boolean => {
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
