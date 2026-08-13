@@ -1344,7 +1344,12 @@ async function waitForPassThroughToLand(page: PageAdapter, deadline: number): Pr
   // challenge". Its own failure is not a verdict — we saw the pass-through, so an
   // unanswerable page (mid-load, detached) is reported as the pass it almost certainly is.
   const st = await lightState(page);
-  if (st?.form || (st && !st.chl && !st.wid)) {
+  // EXACTLY the condition that was running for the one production run that cleared this
+  // challenge. The extra "and the widget container is gone" term I added afterwards was
+  // aimed at a false positive seen once — and it was added to a build that was working,
+  // without a snapshot of that build to go back to. Restored to the known-good form; if
+  // the false positive returns it gets fixed from a committed baseline, not from memory.
+  if (st?.form || (st && !st.chl)) {
     logger.info({ landedOn: lastUrl.slice(0, 120), form: !!st.form }, "Challenge pass-through landed");
     return true;
   }
