@@ -1306,14 +1306,9 @@ const LIGHT_STATE_FN = () => ({
   title: document.title ?? "",
   chl: !!(window as unknown as { _cf_chl_opt?: { cType?: unknown } })._cf_chl_opt?.cType,
   form: !!document.querySelector("input[type='password']"),
-  // The widget's own container. Unlike _cf_chl_opt this does NOT blink out while the
-  // challenge rebuilds itself, which is the whole reason it is here.
-  wid: !!document.querySelector(
-    'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"], [id^="cf-chl-widget"]',
-  ),
 });
 
-type LightState = { url: string; title: string; chl: boolean; form: boolean; wid: boolean };
+type LightState = { url: string; title: string; chl: boolean; form: boolean };
 
 async function lightState(page: PageAdapter): Promise<LightState | null> {
   try {
