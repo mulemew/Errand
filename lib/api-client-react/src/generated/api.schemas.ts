@@ -154,9 +154,15 @@ export const CfVerifyStepType = {
   cfVerify: "cfVerify",
 } as const;
 
+/**
+ * Explicitly clear a Cloudflare challenge / click a Turnstile "verify you are human" checkbox that is gating the current page. Use before a click or fill step whose target only becomes interactive after CF passes.
+
+ */
 export interface CfVerifyStep {
   type: CfVerifyStepType;
+  /** Optional URL to (re)navigate to before verifying — defaults to the current page */
   url?: string;
+  /** Max page reloads to attempt while clearing the challenge (default 2) */
   maxReloads?: number;
 }
 
@@ -283,7 +289,8 @@ export interface LoginStep {
    */
   cookieMode?: boolean;
   sessionKey?: string;
-  /** Cookie-mode seed in document.cookie format ("name=value; name2=value2"). Only the site's login-ticket cookie is needed (Pterodactyl/Laravel: remember_web_*). Used only until a session has been saved. */
+  /** Cookie-mode seed, in document.cookie format ("name=value; name2=value2"). Only the site's login-ticket cookie is needed — its name differs per site (Pterodactyl/Laravel panels use remember_web_*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.
+   */
   cookies?: string;
   successText?: string;
   /** ID of a saved credential to use for this login step */
@@ -324,7 +331,7 @@ export const ConditionalActionSelectorType = {
 } as const;
 
 /**
- * Action to execute when the condition is true
+ * An if/else branch action. Either performs a sub-step (click/fill/navigate/wait/keypress/screenshot/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess/exitFailure).
  */
 export interface ConditionalAction {
   type: ConditionalActionType;
@@ -336,7 +343,7 @@ export interface ConditionalAction {
   key?: string;
   x?: number;
   y?: number;
-  /** For exitSuccess / exitFailure: optional message recorded in the log */
+  /** For exitSuccess / exitFailure, an optional message recorded in the log */
   message?: string;
 }
 
@@ -355,6 +362,8 @@ export const ConditionStepConditionType = {
   text_not_contains: "text_not_contains",
   element_visible: "element_visible",
   element_not_visible: "element_not_visible",
+  element_clickable: "element_clickable",
+  element_not_clickable: "element_not_clickable",
   url_contains: "url_contains",
 } as const;
 
@@ -376,7 +385,7 @@ export interface ConditionStep {
 /**
  * Browser backend for this task:
 playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
-local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
 
  */
 export type TaskBrowserConfigProvider =
@@ -385,8 +394,8 @@ export type TaskBrowserConfigProvider =
 export const TaskBrowserConfigProvider = {
   playwright: "playwright",
   puppeteer: "puppeteer",
-  local: "local",
   seleniumbase: "seleniumbase",
+  camoufox: "camoufox",
 } as const;
 
 /**
@@ -409,15 +418,47 @@ export const TaskBrowserConfigProxyType = {
 } as const;
 
 /**
+ * Browser fingerprint spoofing (SeleniumBase/cf-proxy backend only). Overlays a Windows/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty/off for the honest Linux fingerprint.
+
+ * @nullable
+ */
+export type TaskBrowserConfigFingerprint = {
+  os?: "" | "windows" | "mac";
+  /** IANA timezone; empty = auto-detect from exit IP */
+  timezone?: string;
+  /** BCP-47 locale; empty = auto-detect from exit IP */
+  locale?: string;
+  autoGeo?: boolean;
+} | null;
+
+/**
  * Per-task browser backend override. When set, these values are merged over the global browser config (Settings page), letting each task use a different execution backend.
 
  */
 export interface TaskBrowserConfig {
   /** Browser backend for this task:
 playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
-local=local Chromium launch, seleniumbase=CF Proxy bypass mode
+seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
  */
   provider?: TaskBrowserConfigProvider;
+  /**
+   * Named provider (Providers page) to run this task on. When set, its type + URL drive the backend (overriding `provider`/`wsEndpoint`) and its own concurrency limit applies. Null = use the Settings default backend.
+
+   * @nullable
+   */
+  providerId?: number | null;
+  /**
+   * Saved fingerprint profile to use for this task. When set, it overrides the inline `fingerprint` field below. Null = use the inline fingerprint.
+
+   * @nullable
+   */
+  fingerprintProfileId?: number | null;
+  /**
+   * Saved proxy profile to use for this task. When set, its URL overrides the inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.
+
+   * @nullable
+   */
+  proxyProfileId?: number | null;
   /**
    * WebSocket endpoint override for this task
    * @nullable
@@ -431,7 +472,8 @@ local=local Chromium launch, seleniumbase=CF Proxy bypass mode
   /** @nullable */
   proxyType?: TaskBrowserConfigProxyType;
   /**
-   * WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. 0 disables rotation.
+   * WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.
+
    * @nullable
    */
   warpRotations?: number | null;
@@ -445,6 +487,12 @@ local=local Chromium launch, seleniumbase=CF Proxy bypass mode
   ignoreHTTPS?: boolean | null;
   /** @nullable */
   sessionTimeoutMs?: number | null;
+  /**
+   * Browser fingerprint spoofing (SeleniumBase/cf-proxy backend only). Overlays a Windows/Mac OS profile (UA, UA-CH, platform, WebGL, timezone, locale). Leave os empty/off for the honest Linux fingerprint.
+
+   * @nullable
+   */
+  fingerprint?: TaskBrowserConfigFingerprint;
 }
 
 export type WorkflowStep =
@@ -491,17 +539,27 @@ export interface Task {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
-   * @nullable */
+  /**
+   * Auto-retry after a failed run: extra attempts before giving up and waiting for the normal schedule. null/0 = no retry.
+
+   * @nullable
+   */
   retryCount?: number | null;
-  /** Minutes between retry attempts (default 5).
-   * @nullable */
+  /**
+   * Minutes between retry attempts (default 5).
+   * @nullable
+   */
   retryIntervalMinutes?: number | null;
-  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
-   * @nullable */
+  /**
+   * Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.
+
+   * @nullable
+   */
   webhookEnabled?: boolean | null;
-  /** Bearer token the webhook caller must present.
-   * @nullable */
+  /**
+   * Bearer token the webhook caller must present.
+   * @nullable
+   */
   webhookToken?: string | null;
   /** idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution */
   status: TaskStatus;
@@ -545,17 +603,26 @@ export interface CreateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
-   * @nullable */
+  /**
+   * Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
+   * @nullable
+   */
   retryCount?: number | null;
-  /** Minutes between retry attempts (default 5).
-   * @nullable */
+  /**
+   * Minutes between retry attempts (default 5).
+   * @nullable
+   */
   retryIntervalMinutes?: number | null;
-  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
-   * @nullable */
+  /**
+   * Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.
+
+   * @nullable
+   */
   webhookEnabled?: boolean | null;
-  /** Bearer token the webhook caller must present.
-   * @nullable */
+  /**
+   * Bearer token the webhook caller must present.
+   * @nullable
+   */
   webhookToken?: string | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;
@@ -569,17 +636,26 @@ export interface UpdateTaskBody {
   steps?: WorkflowStep[] | null;
   /** @nullable */
   cronExpression?: string | null;
-  /** Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
-   * @nullable */
+  /**
+   * Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry.
+   * @nullable
+   */
   retryCount?: number | null;
-  /** Minutes between retry attempts (default 5).
-   * @nullable */
+  /**
+   * Minutes between retry attempts (default 5).
+   * @nullable
+   */
   retryIntervalMinutes?: number | null;
-  /** Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task.
-   * @nullable */
+  /**
+   * Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this task, e.g. from an uptime monitor. Requires webhookToken to be set.
+
+   * @nullable
+   */
   webhookEnabled?: boolean | null;
-  /** Bearer token the webhook caller must present.
-   * @nullable */
+  /**
+   * Bearer token the webhook caller must present.
+   * @nullable
+   */
   webhookToken?: string | null;
   /** Per-task browser backend override. Null uses global settings. */
   browserConfig?: TaskBrowserConfig | null;

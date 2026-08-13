@@ -167,6 +167,8 @@ export const ListTasksResponseItem = zod.object({
               "text_not_contains",
               "element_visible",
               "element_not_visible",
+              "element_clickable",
+              "element_not_clickable",
               "url_contains",
             ]),
             conditionValue: zod
@@ -564,6 +566,8 @@ export const CreateTaskBody = zod.object({
               "text_not_contains",
               "element_visible",
               "element_not_visible",
+              "element_clickable",
+              "element_not_clickable",
               "url_contains",
             ]),
             conditionValue: zod
@@ -946,6 +950,8 @@ export const GetTaskResponse = zod
                 "text_not_contains",
                 "element_visible",
                 "element_not_visible",
+                "element_clickable",
+                "element_not_clickable",
                 "url_contains",
               ]),
               conditionValue: zod
@@ -1371,6 +1377,8 @@ export const UpdateTaskBody = zod.object({
               "text_not_contains",
               "element_visible",
               "element_not_visible",
+              "element_clickable",
+              "element_not_clickable",
               "url_contains",
             ]),
             conditionValue: zod
@@ -1745,6 +1753,8 @@ export const UpdateTaskResponse = zod.object({
               "text_not_contains",
               "element_visible",
               "element_not_visible",
+              "element_clickable",
+              "element_not_clickable",
               "url_contains",
             ]),
             conditionValue: zod

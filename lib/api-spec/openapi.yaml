@@ -763,7 +763,7 @@ components:
           enum: [condition]
         conditionType:
           type: string
-          enum: [text_contains, text_not_contains, element_visible, element_not_visible, url_contains]
+          enum: [text_contains, text_not_contains, element_visible, element_not_visible, element_clickable, element_not_clickable, url_contains]
         conditionValue:
           type: string
           description: Value to check against (e.g. text to look for, URL substring)
