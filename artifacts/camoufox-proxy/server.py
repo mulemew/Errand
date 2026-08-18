@@ -14,13 +14,16 @@ Endpoints:
   POST /launch  {os,screen,locale,timezone,humanize,proxy} -> {id, ws}
   POST /release {id}                -> {ok}
 """
+import glob
 import json
 import os
 import random
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -537,42 +540,86 @@ def _drain(proc):
         pass
 
 
-def _kill(proc):
-    """Kill the launcher AND everything it started.
+# How long the launcher gets to unwind on its own, and how long the process group gets
+# after that before SIGKILL. Both only matter on teardown, so generous is cheap.
+_GRACE_S = int(os.getenv("CAMOUFOX_KILL_GRACE", "8"))
+_FORCE_S = int(os.getenv("CAMOUFOX_KILL_FORCE_AFTER", "5"))
 
-    Signalling just the launcher leaves camoufox-bin (and its content processes) running:
-    they are grandchildren via Playwright's driver, and nothing reaps them. Because /launch
-    starts each session in its own process group, one killpg takes down the whole tree.
+
+def _group_alive(pgid):
+    """Does the process group still have members? Signal 0 tests without delivering."""
+    if not pgid:
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True          # exists, just not ours to signal
+    except Exception:
+        return False
+
+
+def _kill(proc):
+    """Kill the launcher AND everything it started — graceful first, group force second.
+
+    THE ORDER IS THE WHOLE POINT, and getting it wrong is what leaked 4.2 GB of /tmp in two
+    days of uptime (65 abandoned playwright_firefoxdev_profile-* at ~85 MB each, plus 57
+    playwright-artifacts-*).
+
+    Playwright creates those directories inside its Node driver and deletes them when the
+    browser is closed properly. launcher.py already turns SIGTERM into SystemExit precisely
+    so that launch_server's context managers unwind and that close happens. But this
+    function used to open with killpg(SIGTERM) — and the driver sits in the SAME process
+    group. Node's default SIGTERM disposition is immediate death, so the driver was gone
+    before the launcher had finished unwinding, and the cleanup it was supposed to perform
+    never ran. Every teardown path (release, TTL reap, failed launch) went through that
+    call, so the leak was 100%: the directories only ever disappeared when the container
+    was rebuilt and its writable layer went with it.
+
+    So: signal the LAUNCHER ALONE and let it shut the browser down. Only if it is still
+    there after the grace period do we fall back to the group, and only if the group
+    survives THAT do we SIGKILL. The escalation is still guaranteed — an unkillable Firefox
+    must not outlive its session, which is what the group signal was added for — it just is
+    no longer the opening move.
     """
     try:
         pgid = os.getpgid(proc.pid)
     except Exception:
         pgid = None
 
+    # ── Phase 1: the launcher, by itself, gets to close the browser ────────────────
     try:
-        if pgid is not None:
-            os.killpg(pgid, signal.SIGTERM)
-        else:
-            proc.send_signal(signal.SIGTERM)
-    except ProcessLookupError:
-        pgid = None
+        proc.send_signal(signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        pass
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=_GRACE_S)
     except Exception:
         pass
 
-    try:
-        proc.wait(timeout=8)
-    except Exception:
-        pass
+    # Reap first: a camoufox-bin that has already exited lingers as a zombie (this process
+    # is PID 1, so orphans reparent here) and a zombie still answers signal 0. Without this
+    # the aliveness check below would read "group still populated" on a perfectly clean
+    # shutdown and escalate for no reason.
+    _reap_orphans()
 
-    # Anything still alive in the group gets SIGKILL — a Firefox that ignored SIGTERM (or
-    # was mid-startup when we asked) must not survive the session.
-    if pgid is not None:
+    # ── Phase 2: the group, only for what the graceful path left behind ────────────
+    if _group_alive(pgid):
         try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            os.killpg(pgid, signal.SIGTERM)
         except Exception:
             pass
+        _wait_group_gone(pgid, _FORCE_S)
+        if _group_alive(pgid):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                pass
+
     try:
         proc.kill()
     except Exception:
@@ -583,20 +630,38 @@ def _kill(proc):
         pass
 
 
+def _wait_group_gone(pgid, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _group_alive(pgid):
+            return True
+        time.sleep(0.2)
+    return not _group_alive(pgid)
+
+
 def _kill_group_of(entry):
     """Best-effort sweep of a session's process group, recorded at launch time so it works
-    even after the launcher itself has exited (os.getpgid would fail then)."""
+    even after the launcher itself has exited (os.getpgid would fail then).
+
+    No graceful phase here on purpose: this runs when the launcher is ALREADY gone, so
+    there is nobody left to unwind launch_server and ask Playwright to clean up. All that
+    remains is to take down whatever it orphaned — which _sweep_tmp then tidies after.
+    SIGKILL is still held back until SIGTERM has had _FORCE_S to work (it used to get
+    exactly 0.5 s, which is not enough for Firefox to finish exiting).
+    """
     pgid = entry.get("pgid")
-    if not pgid:
+    if not _group_alive(pgid):
         return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except Exception:
+        return
+    _wait_group_gone(pgid, _FORCE_S)
+    if _group_alive(pgid):
         try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return
+            os.killpg(pgid, signal.SIGKILL)
         except Exception:
-            return
-        time.sleep(0.5)
+            pass
 
 
 # Background reaper: without it a session whose task hung (never called /release) would
@@ -634,6 +699,90 @@ def _reap_orphans():
         print(f"[camoufox] reaped {reaped} orphaned child process(es)", flush=True)
 
 
+# Temp directories Playwright creates per browser and is supposed to remove on close.
+# _kill's graceful path is what makes that happen; this sweep is the net under it, for the
+# cases where no graceful path exists at all — a launcher killed by the OOM killer, a
+# container-level SIGKILL, or simply a Playwright version that misses one on its way out.
+_TMP_GLOBS = (
+    "playwright_firefoxdev_profile-*",
+    "playwright_firefox_profile-*",
+    "playwright-artifacts-*",
+)
+# A directory younger than this is never touched, however dead it looks: it may belong to a
+# session that is still starting up and has not put its path into anyone's argv yet.
+_SWEEP_MIN_AGE = int(os.getenv("CAMOUFOX_TMP_SWEEP_AGE", "300"))
+
+
+def _referenced_paths():
+    """Every path any live process names — argv, cwd, or an open fd.
+
+    Firefox is started with `-profile /tmp/playwright_firefoxdev_profile-XXXX`, so argv
+    alone catches profiles; fds and cwd cover the artifacts directories, which nothing
+    names on a command line. Returned as one blob for substring testing: a false "still in
+    use" only costs us a sweep cycle, a false "dead" would delete a running browser's
+    profile out from under it.
+    """
+    blob = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                blob.append(fh.read().decode("utf-8", "replace"))
+        except Exception:
+            pass
+        try:
+            blob.append(os.readlink(f"/proc/{pid}/cwd"))
+        except Exception:
+            pass
+        try:
+            fd_dir = f"/proc/{pid}/fd"
+            for fd in os.listdir(fd_dir):
+                try:
+                    blob.append(os.readlink(os.path.join(fd_dir, fd)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return "\0".join(blob)
+
+
+def _sweep_tmp():
+    """Delete Playwright temp dirs that no live process refers to."""
+    now = time.time()
+    # Never sweep anything newer than the oldest session still running. Its artifacts dir
+    # can legitimately sit idle — no open fd, named nowhere — between a download and the
+    # next one, and removing it would break that session rather than tidy after a dead one.
+    with _lock:
+        starts = [e.get("started", now) for e in _servers.values()]
+    cutoff = now - _SWEEP_MIN_AGE
+    if starts:
+        cutoff = min(cutoff, min(starts))
+
+    try:
+        live = _referenced_paths()
+    except Exception:
+        return  # cannot prove anything is dead — sweep nothing
+
+    tmp = tempfile.gettempdir()
+    swept = 0
+    for pattern in _TMP_GLOBS:
+        for path in glob.glob(os.path.join(tmp, pattern)):
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue
+                if os.path.basename(path) in live:
+                    continue
+                shutil.rmtree(path, ignore_errors=True)
+                swept += 1
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+    if swept:
+        print(f"[camoufox] swept {swept} orphaned temp dir(s)", flush=True)
+
+
 def _reaper():
     while True:
         time.sleep(20)
@@ -664,6 +813,12 @@ def _reaper():
         # AFTER the tracked sweep, so Popen still owns the bookkeeping for its own
         # launchers and only genuine orphans are collected generically.
         _reap_orphans()
+        # And AFTER that, so a browser that just died is no longer holding fds when the
+        # sweep asks whether its directory is still in use.
+        try:
+            _sweep_tmp()
+        except Exception as ex:
+            print(f"[camoufox] tmp sweep error: {ex}", flush=True)
 
 
 threading.Thread(target=_reaper, daemon=True).start()
