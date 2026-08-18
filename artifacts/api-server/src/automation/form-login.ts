@@ -538,7 +538,27 @@ import type { PageAdapter } from "./page-adapter";
   // directly via the native setter and fire input/change.
   async function jsFillInput(page: PageAdapter, selector: string, text: string): Promise<void> {
     let clicked = true;
-    try { await page.click(selector); } catch { clicked = false; }
+    // 15 s, not the 60 s default. This click only focuses a field we have ALREADY
+    // located and confirmed visible, so the wait here is purely for the driver's
+    // actionability checks (stable box / hit-testable / enabled) — those settle in
+    // well under a second or, as measured, never. A production run spent 60 s here
+    // on the username and 60 s again on the password, silently, and the 121 s that
+    // cost is most of what pushed the login past its 298 s attempt budget.
+    //
+    // And log WHY. The exception names the check that failed ("element is not
+    // stable", "<div> intercepts pointer events") and the bare `catch {}` that used
+    // to be here threw that away — leaving the 60 s stall diagnosable only by
+    // subtracting log timestamps. If anything legitimately needs longer than 15 s,
+    // this line is what will show it.
+    try {
+      await page.click(selector, { timeout: 15_000 });
+    } catch (err) {
+      clicked = false;
+      logger.warn(
+        { selector, reason: (err as Error)?.message?.split("\n").slice(0, 6).join(" | ") },
+        "Input was not clickable — filling it directly instead",
+      );
+    }
     if (clicked) {
       await page.evaluate((sel: unknown) => {
         const el = document.querySelector<HTMLInputElement>(sel as string);

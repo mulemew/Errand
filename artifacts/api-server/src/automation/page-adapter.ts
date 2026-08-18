@@ -50,7 +50,12 @@ export interface FrameAdapter {
 
 export interface PageAdapter {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<void>;
-  click(selector: string): Promise<void>;
+  // `timeout` caps the ACTIONABILITY wait — how long the driver waits for an
+  // already-located element to become visible/stable/hit-testable — not the time
+  // spent finding it. Callers that have a working fallback should pass a short one:
+  // the default is NAV_TIMEOUT_MS (60 s), and two clicks stuck on it are enough to
+  // blow a login's whole attempt budget without ever reporting why.
+  click(selector: string, options?: { timeout?: number }): Promise<void>;
   hover(selector: string): Promise<void>;
   waitForSelector(selector: string, options?: { timeout?: number }): Promise<void>;
   waitForNavigation(options?: { waitUntil?: string; timeout?: number }): Promise<void>;
@@ -151,6 +156,9 @@ export function wrapPuppeteerPage(page: PuppeteerPage): PageAdapter {
     goto: async (url, opts) => {
       await page.goto(url, opts as Parameters<PuppeteerPage["goto"]>[1]);
     },
+    // `timeout` is deliberately dropped here: Puppeteer's ClickOptions has no such
+    // field, and it needs none — its click resolves the selector and clicks, without
+    // Playwright's actionability retry loop, so there is no wait to cap.
     click: (sel) => page.click(toPuppeteerSelector(sel)),
     hover: (sel) => page.hover(toPuppeteerSelector(sel)),
     waitForSelector: async (sel, opts) => {
@@ -253,7 +261,7 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
         timeout: opts?.timeout,
       });
     },
-    click: (sel) => page.click(sel),
+    click: (sel, opts) => page.click(sel, opts),
     hover: (sel) => page.locator(sel).first().hover(),
     waitForSelector: async (sel, opts) => {
       await page.waitForSelector(sel, opts);
