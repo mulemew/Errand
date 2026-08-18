@@ -153,12 +153,69 @@ const SINGBOX_PROTOCOLS: ProxyType[] = [
   "ss",
 ];
 
+/**
+ * Every spelling of a SOCKS proxy URL people actually paste, rewritten into the one
+ * spelling a browser understands.
+ *
+ * Four things are wrong with taking these URLs verbatim, and all four were reachable
+ * from the UI:
+ *
+ *   • `socks://`     — Xray writes its SOCKS share links this way. The scheme detector
+ *                      below already accepted it (`socks5?`), the save-time validator did
+ *                      not, so it could never be stored in the first place.
+ *   • `socks5h://`   — passed validation and mapped to type "socks5", but the URL itself
+ *                      was never rewritten and went straight to `proxy: { server }`,
+ *                      which only understands `socks5://`. Silently broken.
+ *   • `socks4://`    — passed validation, matched NO branch of the detector (the regex is
+ *                      `socks5?`, which stops at the "4"), so resolveProxyType returned
+ *                      null and the task ran with NO PROXY AT ALL. That is the dangerous
+ *                      one: the user believes they are behind a proxy and their real IP
+ *                      goes out.
+ *   • base64 userinfo — Xray/V2Ray links carry `base64(user:pass)` as a single userinfo
+ *                      token. Nothing decoded it, so it was sent as a literal username
+ *                      with an empty password and the proxy refused the connection.
+ *
+ * socks4/socks4a keep their scheme (browsers speak those too, and socks4 has no auth);
+ * everything else canonicalises to socks5. Non-SOCKS URLs are returned untouched.
+ */
+export function normalizeProxyUrl(raw: string): string {
+  const url = (raw ?? "").trim();
+  const m = /^(socks|socks4a|socks4|socks5h|socks5):\/\/(.*)$/i.exec(url);
+  if (!m) return url;
+  const scheme = m[1]!.toLowerCase();
+  const rest = m[2]!;
+  const canonical = scheme === "socks4" || scheme === "socks4a" ? scheme : "socks5";
+
+  // Split on the LAST "@": a base64 userinfo can itself contain "@"-free padding but a
+  // password with "@" in it is far more common, and host parts never contain one.
+  const at = rest.lastIndexOf("@");
+  if (at < 0) return `${canonical}://${rest}`;
+  let userinfo = rest.slice(0, at);
+  const hostport = rest.slice(at + 1);
+
+  // Already `user:pass` — leave it alone. Only a single opaque token can be base64,
+  // and only if it decodes to something that actually looks like credentials.
+  if (!userinfo.includes(":") && /^[A-Za-z0-9+/\-_]+={0,2}$/.test(userinfo)) {
+    try {
+      const decoded = Buffer.from(userinfo.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+      // Round-trip guard: any string is "valid" base64 to Buffer, so require that the
+      // result is printable ASCII and carries the user:pass separator.
+      if (decoded.includes(":") && /^[\x20-\x7e]+$/.test(decoded)) userinfo = decoded;
+    } catch { /* not base64 — keep the token as written */ }
+  }
+  return `${canonical}://${userinfo}@${hostport}`;
+}
+
 /** Infer the proxy type from an explicit type or the URL scheme. */
 export function resolveProxyType(cfg: ProxyConfig): ProxyType | null {
   if (cfg.proxyType) return cfg.proxyType;
   const url = (cfg.proxyUrl ?? "").trim();
   if (!url) return null;
-  if (/^socks5?:\/\//i.test(url)) return "socks5";
+  // socks / socks4 / socks4a / socks5 / socks5h all land on the passthrough path.
+  // "socks5" here is a ROUTING CATEGORY ("a SOCKS proxy the browser dials directly"),
+  // not a claim about the wire version — normalizeProxyUrl preserves socks4/socks4a in
+  // the URL that the browser actually receives.
+  if (/^socks(4a|4|5h|5)?:\/\//i.test(url)) return "socks5";
   if (/^https?:\/\//i.test(url)) return "http";
   if (/^vless:\/\//i.test(url)) return "vless";
   if (/^vmess:\/\//i.test(url)) return "vmess";
@@ -926,9 +983,11 @@ export async function startLocalProxy(
     return null;
   }
 
-  // Passthrough: Chromium speaks http/socks directly.
+  // Passthrough: Chromium speaks http/socks directly. Normalised on the way out — this
+  // is the last point before the URL becomes `proxy: { server }`, so a socks5h:// or a
+  // base64 userinfo that got this far would reach the browser as-is and fail there.
   if (type === "http" || type === "socks5") {
-    return { serverUrl: url, stop: async () => {} };
+    return { serverUrl: normalizeProxyUrl(url), stop: async () => {} };
   }
 
   return startSingBox(type, url, remoteConsumer);

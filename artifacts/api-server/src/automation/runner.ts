@@ -5,6 +5,7 @@ import path from "path";
   import { decrypt } from "../lib/encryption";
   import { createBrowserProvider } from "./browser-provider";
   import { resolveProvider } from "./providers";
+  import { resolveProxyType } from "./proxy-manager";
   import { PROVIDER_TYPE_PARAMS } from "@workspace/db";
   import { createCaptchaSolverFromConfig } from "./captcha-solver";
   import { loadBrowserConfig, loadCaptchaConfig, loadTaskTimeoutConfig, loadConcurrencyConfig } from "../lib/appSettings";
@@ -398,11 +399,11 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         const [pp] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, _profileIds.proxyProfileId));
         if (pp) {
           browserConfig.proxyUrl = pp.url;
-          const scheme = (pp.url.split("://")[0] || "").toLowerCase();
-          const t = scheme === "socks5h" ? "socks5" : scheme;
-          if (["http", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"].includes(t)) {
-            (browserConfig as { proxyType?: string }).proxyType = t;
-          }
+          // resolveProxyType, not a second hand-written scheme table. The copy that used
+          // to live here knew about socks5h but not socks:// or socks4://, so a profile
+          // saved with either left proxyType unset.
+          const t = resolveProxyType({ proxyUrl: pp.url });
+          if (t) (browserConfig as { proxyType?: string }).proxyType = t;
           logger.info({ taskId, proxyProfile: pp.name }, "Using saved proxy profile");
         }
       }

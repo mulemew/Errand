@@ -10,8 +10,13 @@ const router: IRouter = Router();
 
 // Accept a proxy URL with an explicit supported scheme. WARP is NOT a URL and is
 // handled separately, so it is rejected here.
+// `socks` and `socks4a` are here because people paste them, not because they are new:
+// Xray writes its SOCKS share links as `socks://base64(user:pass)@host:port`, and the
+// scheme detector has always accepted that spelling — only this validator rejected it,
+// so the URL could never be saved. normalizeProxyUrl turns all five spellings into the
+// one the browser understands.
 const ProxyUrl = z.string().min(1).refine(
-  (u) => /^(https?|socks5|socks5h|socks4|vless|vmess|trojan|ss|hysteria2|hy2|tuic):\/\//i.test(u.trim()),
+  (u) => /^(https?|socks|socks4a|socks4|socks5h|socks5|vless|vmess|trojan|ss|hysteria2|hy2|tuic):\/\//i.test(u.trim()),
   { message: "Proxy URL must start with a supported scheme (http/https/socks5/…)" },
 );
 

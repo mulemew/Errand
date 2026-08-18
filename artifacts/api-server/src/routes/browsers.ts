@@ -18,6 +18,7 @@ import {
   dumpInstanceSession,
 } from "../lib/browserInstances";
 import type { BrowserProviderConfig } from "../automation/browser-provider";
+import { resolveProxyType } from "../automation/proxy-manager";
 
 const router: IRouter = Router();
 
@@ -72,11 +73,9 @@ async function buildConfig(input: {
     const [pr] = await db.select().from(proxyProfilesTable).where(eq(proxyProfilesTable.id, input.proxyProfileId));
     if (pr?.url) {
       config.proxyUrl = pr.url;
-      const scheme = (pr.url.split("://")[0] || "").toLowerCase();
-      const t = scheme === "socks5h" ? "socks5" : scheme;
-      if (["http", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"].includes(t)) {
-        config.proxyType = t;
-      }
+      // Same single source of truth as the runner — see the note there.
+      const t = resolveProxyType({ proxyUrl: pr.url });
+      if (t) config.proxyType = t;
     }
   }
   return config as unknown as BrowserProviderConfig;
