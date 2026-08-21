@@ -2,6 +2,7 @@ import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
 import { verifyOAuthLanding, detectLoginState, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
+import { waitForSuccessCriterion } from "./success-text";
 import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { generateTotpCode } from "../lib/totp";
 import { detectAndHandleCaptcha } from "./captcha";
@@ -536,13 +537,13 @@ export async function googleLogin(
         return { success: false, captchaBlocked: false, message: timer.annotate(landingErr) };
       }
       // 如果配置了 successText，验证页面含该文本才算已登录
+      //
+      // WAITS, and matches the way every other login path matches. This was a single look
+      // 1.5s after landing, compared raw against innerText — see success-text.ts for the
+      // three ways that got a successful login reported as a failure.
       if (successText) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const hasText = await page.evaluate(
-          (t: unknown) => (document.body?.innerText ?? "").includes(t as string),
-          successText as never,
-        ).catch(() => false) as boolean;
-        if (!hasText) {
+        const found = await waitForSuccessCriterion(page, undefined, successText);
+        if (!found) {
           return { success: false, captchaBlocked: false, message: `Login completed but success text "${successText}" not found on page. URL: ${page.url()}` };
         }
       }
@@ -565,13 +566,14 @@ export async function googleLogin(
     const finalUrl = page.url();
     logger.info({ finalUrl }, "Google login succeeded");
     // 如果配置了 successText，验证页面含该文本才算登录成功
+    //
+    // Same shared wait as above. A Google login that had genuinely succeeded was failed
+    // here, retried against a site that was now signed in (so no OAuth button existed), and
+    // its session was therefore never saved — so the next run repeated the whole flow, TOTP
+    // included, every single day.
     if (successText) {
-      await new Promise((r) => setTimeout(r, 1500));
-      const hasSuccessText = await page.evaluate(
-        (t: unknown) => (document.body?.innerText ?? "").includes(t as string),
-        successText as never,
-      ).catch(() => false) as boolean;
-      if (!hasSuccessText) {
+      const found = await waitForSuccessCriterion(page, undefined, successText);
+      if (!found) {
         return { success: false, captchaBlocked: false, message: `Login completed but success text "${successText}" not found on page. URL: ${finalUrl}` };
       }
     }

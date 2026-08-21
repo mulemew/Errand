@@ -5,6 +5,7 @@ import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
 import { detectLoginState } from "./login-verify";
+import { pageHasSuccessText } from "./success-text";
 import { detectAndHandleCaptcha } from "./captcha";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
@@ -1156,12 +1157,15 @@ async function probeSessionOnce(
 
   if (successText) {
     try {
-      const bodyText = (await page.evaluate(() => document.body?.innerText).catch(() => "")) as string;
-      if (bodyText.includes(successText)) {
+      // The SHARED matcher, not a raw `includes` on innerText. This probe used to be the
+      // strictest of the three success-text checks in the codebase while pretending to ask
+      // the same question: the very page that satisfied the form path failed here, the task
+      // concluded it was logged out, and it logged in again on top of a working session.
+      if (await pageHasSuccessText(page, successText)) {
         logger.debug({ attempt, successText }, "Session check: success TEXT found on the page");
         return true;
       }
-      logger.debug({ attempt, successText, chars: bodyText.length }, "Session check: success text not on the page yet");
+      logger.debug({ attempt, successText }, "Session check: success text not on the page yet");
     } catch {}
   }
   if (successSelector) {

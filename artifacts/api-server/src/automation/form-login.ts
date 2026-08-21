@@ -5,6 +5,10 @@ import type { PageAdapter } from "./page-adapter";
   import { detectAndHandleCaptcha } from "./captcha";
   import { clearCloudflareInterstitial, describeTurnstileState } from "./cloudflare-bypass";
   import { gotoTolerant, detectLoginState } from "./login-verify";
+  import {
+    CRITERION_WAIT_MS as SHARED_CRITERION_WAIT_MS,
+    waitForSuccessCriterion as sharedWaitForSuccessCriterion,
+  } from "./success-text";
   import { normalizeTotpSecret } from "../lib/totp";
   import type { CaptchaSolver } from "./captcha-solver";
   import crypto from "crypto";
@@ -198,28 +202,14 @@ import type { PageAdapter } from "./page-adapter";
     return { error: await readLoginError(page), formGone: !(await loginFormEvidence(page)) };
   }
 
-  /** How long a success criterion gets to show up before we call it absent. */
-  // 25s, not 10. The criterion describes the page login LANDS on, and a panel's landing page
-  // fetches its content after it renders: control.heavencloud.in reached the dashboard, the
-  // URL proved it, and the text the operator was waiting for arrived after we had already
-  // called the login a failure — then retried it twice more against a session that was
-  // working perfectly.
-  const CRITERION_WAIT_MS = Math.max(2000, Number(process.env.LOGIN_CRITERION_WAIT_MS ?? 25_000));
+  /** How long a success criterion gets to show up before we call it absent. See success-text.ts. */
+  const CRITERION_WAIT_MS = SHARED_CRITERION_WAIT_MS;
 
   /**
    * Wait for the caller's own definition of success — their text, their selector, or either.
    *
-   * Checked repeatedly rather than once, because the criterion describes the page login
-   * LANDS on and that page usually arrives via a redirect: a single look immediately after
-   * submit reports "not there" about a page that had not loaded yet.
-   *
-   * The text match is deliberately forgiving. It used to be `innerText.includes(needle)`,
-   * raw — so "Dashboard" missed a page rendering "dashboard", and a needle typed with a
-   * double space missed a page with one. Nobody who sets this expects to be matching
-   * whitespace exactly; case and run-length are noise, and ignoring them cannot make an
-   * absent phrase present.
-   *
-   * Returns the evidence, or "" if it never appeared.
+   * Delegates to the shared implementation so that the form path, the cookie-mode probe and
+   * the Google path cannot drift apart again. See success-text.ts for what counts as a match.
    */
   async function waitForSuccessCriterion(
     page: PageAdapter,
@@ -227,32 +217,7 @@ import type { PageAdapter } from "./page-adapter";
     text?: string,
     maxMs = CRITERION_WAIT_MS,
   ): Promise<string> {
-    const squash = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-    const needle = text ? squash(text) : "";
-    const deadline = Date.now() + maxMs;
-    for (;;) {
-      if (needle) {
-        try {
-          const body = (await page.evaluate(() => document.body?.innerText ?? "")) as string;
-          if (squash(body).includes(needle)) return `Found the success text: "${text}"`;
-        } catch { /* mid-navigation — try again on the next pass */ }
-      }
-      if (selector) {
-        try {
-          const el = await page.$(selector);
-          const visible = el
-            ? ((await el.evaluate((e: Element) => {
-                const style = window.getComputedStyle(e);
-                const rect = e.getBoundingClientRect();
-                return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-              })) as boolean)
-            : false;
-          if (visible) return `The success selector "${selector}" is visible`;
-        } catch { /* invalid selector or a detached element — treat as not found */ }
-      }
-      if (Date.now() >= deadline) return "";
-      await sleep(500);
-    }
+    return sharedWaitForSuccessCriterion(page, selector, text, maxMs);
   }
 
   /**
