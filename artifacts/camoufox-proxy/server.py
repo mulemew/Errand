@@ -460,12 +460,100 @@ def _start_session_display():
 
 
 def _stop_session_display(entry):
-    for pr in entry.get("view_procs") or []:
+    """Shut this session's Xvfb + x11vnc + websockify down, gracefully first.
+
+    THIS USED TO BE `pr.kill()` — SIGKILL, immediately, to all three — and that single line
+    took the whole live-view feature down after about a day of uptime.
+
+    x11vnc holds SIXTY-TWO SysV shared-memory segments per instance — measured, not
+    estimated: a scanline, the full framebuffer, and a tile for each region it polls. It
+    releases them when it exits normally; SIGKILL gives it no chance, so every session leaks
+    all 62. The kernel allows 4096 (`kernel.shmmni`), which is **about 66 sessions** — two
+    days of ordinary use — after which `shmget` fails for EVERY new x11vnc. It then dies on
+    startup while Xvfb and websockify come up fine, leaving a view port that accepts the
+    WebSocket, completes the upgrade, and shows nothing at all, forever, with no error
+    anywhere. Measured on production before the fix: 4096/4096 segments, 4034 unattached.
+
+    Reverse order on purpose: websockify and x11vnc are CLIENTS of the Xvfb they were
+    started with. Signalling all three at once can take the X server down first, which is
+    the same thing as SIGKILL from x11vnc's point of view — it dies against a dead display
+    and leaks anyway.
+    """
+    procs = list(entry.get("view_procs") or [])
+    for pr in reversed(procs):
         try:
-            pr.kill()
+            pr.terminate()
+        except Exception:
+            pass
+    deadline = time.time() + _VIEW_GRACE_S
+    for pr in reversed(procs):
+        try:
+            pr.wait(timeout=max(0.1, deadline - time.time()))
+        except Exception:
+            pass
+    for pr in procs:
+        try:
+            if pr.poll() is None:
+                pr.kill()
         except Exception:
             pass
     _free_display(entry.get("display"))
+
+
+# How long x11vnc/websockify/Xvfb get to exit on their own before SIGKILL. Short, because
+# it is spent on every session teardown — but it must be long enough for x11vnc to detach
+# and remove its shared-memory segments, which is all it needs to do.
+_VIEW_GRACE_S = float(os.getenv("CAMOUFOX_VIEW_GRACE", "3"))
+
+
+def _sweep_shm():
+    """Reclaim SysV shared-memory segments nobody can ever use again.
+
+    The net under the graceful teardown above, for the cases where nothing graceful can
+    happen: an OOM-killed x11vnc, a container-level SIGKILL, or a crash. Without it the
+    count only ever goes up, and the failure it produces is silent and total — every new
+    x11vnc fails to start and the live view shows a blank page that never errors.
+
+    Two conditions, BOTH required, and both verified against production before this was
+    written: nothing is attached to the segment (nattch == 0) AND the process that created
+    it is gone. A segment in use by a running viewer therefore cannot be touched, and
+    neither can one whose creator is still starting up.
+    """
+    def _ipcs(args):
+        try:
+            return subprocess.run(["ipcs"] + args, capture_output=True, text=True,
+                                  timeout=15).stdout.splitlines()
+        except Exception:
+            return []
+
+    # `ipcs -m`    : key shmid owner perms bytes nattch status
+    nattch = {}
+    for line in _ipcs(["-m"]):
+        f = line.split()
+        if len(f) >= 6 and f[0].startswith("0x") and f[1].isdigit() and f[5].isdigit():
+            nattch[f[1]] = int(f[5])
+    # `ipcs -m -p` : shmid owner cpid lpid — NO key column, so it cannot be parsed the same
+    # way as the table above. Getting that wrong makes this function silently sweep nothing.
+    creator = {}
+    for line in _ipcs(["-m", "-p"]):
+        f = line.split()
+        if len(f) >= 4 and f[0].isdigit() and f[2].isdigit():
+            creator[f[0]] = f[2]
+
+    freed = 0
+    for shmid, n in nattch.items():
+        if n != 0:
+            continue
+        cpid = creator.get(shmid)
+        if not cpid or os.path.isdir(f"/proc/{cpid}"):
+            continue
+        try:
+            if subprocess.run(["ipcrm", "-m", shmid], capture_output=True, timeout=10).returncode == 0:
+                freed += 1
+        except Exception:
+            pass
+    if freed:
+        print(f"[camoufox] reclaimed {freed} orphaned shared-memory segment(s)", flush=True)
 
 
 @app.post("/launch")
@@ -819,6 +907,10 @@ def _reaper():
             _sweep_tmp()
         except Exception as ex:
             print(f"[camoufox] tmp sweep error: {ex}", flush=True)
+        try:
+            _sweep_shm()
+        except Exception as ex:
+            print(f"[camoufox] shm sweep error: {ex}", flush=True)
 
 
 threading.Thread(target=_reaper, daemon=True).start()
