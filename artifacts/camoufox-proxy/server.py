@@ -203,6 +203,63 @@ def _summ_from_fp(fp, os_name: str) -> dict:
     }
 
 
+# How many times to re-draw a preset whose GPU camoufox cannot actually spoof. About 1 in 9
+# Windows presets is unusable (measured: 47/400; macOS and Linux ~8%), so five draws leaves
+# roughly a 1-in-60000 chance of not finding a good one.
+_PRESET_REROLLS = int(os.getenv("CAMOUFOX_PRESET_REROLLS", "5"))
+
+_WEBGL_DB = "/usr/local/lib/python3.11/site-packages/camoufox/webgl/webgl_data.db"
+_webgl_pairs_cache = [None]
+
+
+def _supported_webgl_pairs():
+    """The vendor/renderer pairs camoufox has real WebGL parameter data for.
+
+    Camoufox ships TWO datasets that do not agree with each other: 312 device presets, and
+    33 rows of WebGL data. `launch_options` looks a preset's GPU up in the second one and
+    raises `ValueError: No WebGL data found for vendor ... and renderer ...` when it is
+    absent — which fails /launch with a 500, at task-run time, long after the profile was
+    saved and named. Measured on the bundled v150 preset set: 11% of Windows presets, 8% of
+    macOS and Linux. The most common offender is an Intel Arc A750.
+
+    That combination is only reachable when a preset supplies a GPU *and* WebGL is enabled,
+    which is presumably why the error string has no hits anywhere on GitHub. The synthetic
+    (browserforge) path never hits it: camoufox drops browserforge's videoCard entirely and
+    samples its own GPU, so it can only ever pick a supported one.
+    """
+    if _webgl_pairs_cache[0] is None:
+        pairs = set()
+        try:
+            import sqlite3
+            con = sqlite3.connect(f"file:{_WEBGL_DB}?mode=ro", uri=True)
+            try:
+                for vendor, renderer in con.execute("select vendor, renderer from webgl_fingerprints"):
+                    pairs.add((vendor, renderer))
+            finally:
+                con.close()
+        except Exception as e:
+            # Unreadable database: return an EMPTY set and let the caller treat every preset
+            # as acceptable. Guessing the other way would reject all of them and leave the
+            # fingerprint page unable to generate anything at all.
+            print(f"[fingerprint] could not read the webgl dataset ({e}) — skipping the check", flush=True)
+        _webgl_pairs_cache[0] = pairs
+    return _webgl_pairs_cache[0]
+
+
+def _preset_webgl_is_supported(preset) -> bool:
+    """Can camoufox actually launch with this preset's GPU?"""
+    pairs = _supported_webgl_pairs()
+    if not pairs:
+        return True                      # dataset unreadable — do not block generation
+    wg = preset.get("webgl") if isinstance(preset, dict) else None
+    if not isinstance(wg, dict):
+        return True                      # no GPU in the preset — camoufox samples its own
+    vendor, renderer = wg.get("unmaskedVendor"), wg.get("unmaskedRenderer")
+    if not vendor or not renderer:
+        return True
+    return (vendor, renderer) in pairs
+
+
 def _summ_from_preset(preset: dict, os_name: str) -> dict:
     # A preset is a NESTED dict: navigator{userAgent,platform,hardwareConcurrency},
     # screen{width,height,...}, webgl{unmaskedVendor,unmaskedRenderer}.
@@ -294,9 +351,26 @@ def generate():
     try:
         if source == "preset":
             from camoufox.fingerprints import get_random_preset
-            preset = get_random_preset(os=os_name, ff_version=_preset_ff_version())
+            preset = None
+            for _ in range(_PRESET_REROLLS):
+                candidate = get_random_preset(os=os_name, ff_version=_preset_ff_version())
+                if not candidate:
+                    break
+                if _preset_webgl_is_supported(candidate):
+                    preset = candidate
+                    break
+                preset = preset or candidate      # keep the first one as a fallback
             if not preset:
                 return jsonify({"error": f"no bundled preset available for os={os_name}"}), 404
+            if not _preset_webgl_is_supported(preset):
+                # Every roll landed on an unusable GPU. Drop the webgl block rather than
+                # hand back a profile that cannot launch: camoufox then samples a supported
+                # vendor/renderer itself and the rest of the preset — UA, screen, navigator,
+                # voices — is used exactly as captured.
+                wg = preset.get("webgl") if isinstance(preset, dict) else None
+                dropped = (wg or {}).get("unmaskedRenderer")
+                preset.pop("webgl", None)
+                print(f"[fingerprint] dropped an unsupported GPU from the preset: {dropped}", flush=True)
             summary = _summ_from_preset(preset, os_name)
             return jsonify({"config": {"source": "preset", "os": os_name, "preset": preset, "summary": summary}, "summary": summary})
         # default: browserforge synthetic — pickle the Fingerprint so /launch reproduces it EXACTLY
