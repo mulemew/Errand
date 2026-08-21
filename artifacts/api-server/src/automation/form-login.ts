@@ -270,12 +270,27 @@ import type { PageAdapter } from "./page-adapter";
     if ((wantText || wantSelector) && !criterionWasAlreadyTrue) {
       const found = await waitForSuccessCriterion(page, wantSelector, wantText);
       if (found) return { success: true, reason: found };
+      // The VERDICT is unchanged — the criterion is still authoritative and its absence is
+      // still a failure. This only says something truer about WHY.
+      //
+      // "The success criterion never appeared" points at the criterion, so that is where
+      // people look: they re-check the text, widen it, try a selector. But the same message
+      // is produced when the credentials were simply wrong, and a site that rejects a login
+      // without printing anything (livemy.app does exactly that: the form stays filled, the
+      // page does not move, nothing is shown) is indistinguishable from a criterion that is
+      // merely mistyped. The login form still sitting there is the difference, and asking
+      // costs one DOM read on a path that has already failed.
+      const stillShowingForm = await loginFormEvidence(page).catch(() => "");
       return {
         success: false,
         reason:
           `The success criterion never appeared — ${wantText ? `text "${wantText}"` : `selector "${wantSelector}"`} ` +
           `was not on the page ${Math.round(CRITERION_WAIT_MS / 1000)}s after submitting. URL: ${page.url()}` +
-          (submitError ? ` The site said: "${submitError}"` : ""),
+          (submitError ? ` The site said: "${submitError}"` : "") +
+          (stillShowingForm
+            ? ` The login form is still on screen (${stillShowingForm}), so the submit was rejected or ignored — ` +
+              `check the credentials before the criterion.`
+            : ""),
       };
     }
 
