@@ -776,7 +776,12 @@ function StepCard({
           {step.type === "wait" && (
             <div className="space-y-1">
               <Label className="text-xs">{t.durationMs}</Label>
-              <Input type="number" className="font-mono text-xs h-8 w-36" min={100} max={3600000}
+              {/* 7 days, matching MAX_WAIT_MS in step-executor. The old 1-hour ceiling here
+                  (and a 60s clamp in the runner) made the one thing this step exists for —
+                  parking on a page while something slow finishes elsewhere — impossible to
+                  even express. The wait is served in cancellable slices, so a long one is no
+                  harder to stop than a short one. */}
+              <Input type="number" className="font-mono text-xs h-8 w-36" min={100} max={604800000}
                 value={step.ms ?? 1000} onChange={(e) => set({ ms: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
             </div>
           )}

@@ -102,8 +102,37 @@ export class TaskExitError extends Error {
   }
 }
 
-// #9 — maximum allowed wait duration to prevent runner lockup
-const MAX_WAIT_MS = 60_000;
+/**
+ * Upper bound on a wait step. Seven days, not sixty seconds.
+ *
+ * The old cap silently clamped every wait to 60s "to prevent runner lockup", which made the
+ * one thing a wait step is for — parking on a page for hours while something on the far end
+ * finishes — quietly impossible: the step reported success, having waited a minute.
+ *
+ * The lockup it feared is handled properly below instead: the wait is served in short
+ * slices and gives up the moment the run is cancelled or times out, so a multi-hour wait is
+ * no less interruptible than a one-second one. The bound that remains is a sanity limit,
+ * and it also keeps us clear of setTimeout's ~24.8-day ceiling, past which a timer fires
+ * immediately instead of late.
+ *
+ * NOTE for anyone parking a task for hours: the TASK TIMEOUT still applies on top of this
+ * (Settings → 30 min by default; 0 disables it). A long wait under a short task timeout is
+ * killed by the timeout, not by this.
+ */
+const MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** How often a long wait comes up for air to check whether the run is still wanted. */
+const WAIT_SLICE_MS = 1_000;
+
+/**
+ * The runner's "should this stop?" predicate, published for the wait step.
+ *
+ * executeWorkflowSteps already polls it BETWEEN steps, which is enough for steps that
+ * finish quickly and useless for one that is deliberately parked for six hours. Rather than
+ * thread the callback through executeStep and every one of its call sites, the loop stashes
+ * it here for the duration of the run.
+ */
+let _shouldCancelHook: (() => boolean) | undefined;
 
 // Auto-screenshot helper — captures page state for visual tracing.
   // Returns relative path (screenshots/filename) or undefined on any error.
@@ -152,7 +181,11 @@ const MAX_WAIT_MS = 60_000;
 ): Promise<{ results: StepResult[]; finalPage: PageAdapter }> {
   const results: StepResult[] = [];
   let currentPage = page;
+  // Published for the wait step; see _shouldCancelHook. Cleared in the finally below so a
+  // finished run cannot leave a stale predicate behind for the next one.
+  _shouldCancelHook = shouldCancel;
 
+  try {
   for (let i = 0; i < steps.length; i++) {
       if (shouldCancel?.()) throw new Error("Task cancelled by user");
       const step = steps[i];
@@ -233,6 +266,9 @@ const MAX_WAIT_MS = 60_000;
   }
 
   return { results, finalPage: currentPage };
+  } finally {
+    _shouldCancelHook = undefined;
+  }
 }
 
 interface StepExecResult {
@@ -451,13 +487,38 @@ async function executeStep(
     }
 
     case "wait": {
-      // #9 — cap wait duration to prevent runner lockup
-      const clamped = Math.min(step.ms, MAX_WAIT_MS);
-      if (clamped < step.ms) {
-        logger.warn({ taskId, stepIndex, requested: step.ms, clamped }, "wait step ms clamped to MAX_WAIT_MS");
+      const requested = Math.max(0, Number(step.ms) || 0);
+      const target = Math.min(requested, MAX_WAIT_MS);
+      if (target < requested) {
+        logger.warn({ taskId, stepIndex, requested, target }, "wait step ms clamped to MAX_WAIT_MS");
       }
-      await new Promise((r) => setTimeout(r, clamped));
-      return { message: `Waited ${clamped}ms${clamped < step.ms ? ` (requested ${step.ms}ms, capped at ${MAX_WAIT_MS}ms)` : ""}` };
+      // Served in slices so that cancelling a task parked for six hours takes effect now
+      // rather than in six hours. One unbroken setTimeout is what made the 60s cap look
+      // necessary in the first place.
+      const startedAt = Date.now();
+      const deadline = startedAt + target;
+      let nextReport = startedAt + 60_000;
+      let stopped = false;
+      while (Date.now() < deadline) {
+        if (_shouldCancelHook?.()) { stopped = true; break; }
+        await new Promise((r) => setTimeout(r, Math.min(WAIT_SLICE_MS, deadline - Date.now())));
+        // A wait measured in hours must not look like a hung task. Once a minute is often
+        // enough to prove it is alive and rare enough to keep out of the way.
+        if (target > 60_000 && Date.now() >= nextReport) {
+          nextReport = Date.now() + 60_000;
+          logger.info(
+            { taskId, stepIndex, elapsedMs: Date.now() - startedAt, remainingMs: Math.max(0, deadline - Date.now()) },
+            "wait step still waiting",
+          );
+        }
+      }
+      const waited = Date.now() - startedAt;
+      if (stopped) {
+        return { message: `Waited ${waited}ms of ${target}ms — the run was cancelled or timed out` };
+      }
+      return {
+        message: `Waited ${waited}ms` + (target < requested ? ` (requested ${requested}ms, capped at ${MAX_WAIT_MS}ms)` : ""),
+      };
     }
 
     case "waitFor": {
