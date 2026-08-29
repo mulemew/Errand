@@ -21,7 +21,9 @@ export type ConditionType = "text_contains" | "text_not_contains" | "element_vis
 // control-flow action: continue to the next step, or end the whole task.
 export interface ConditionalAction {
   type: "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll"
-    | "continue" | "exitSuccess" | "exitFailure";
+    | "continue" | "exitSuccess" | "exitFailure"
+    /** A branch may itself be a condition — see BranchAction. */
+    | "condition";
   selector?: string;
   selectorType?: "text" | "css" | "xpath";
   url?: string;
@@ -32,7 +34,219 @@ export interface ConditionalAction {
   y?: number;
   /** For exitSuccess / exitFailure: an optional message recorded in the log. */
   message?: string;
+  // ── Only when type === "condition" (a nested if/else) ─────────────────────
+  conditionType?: ConditionType;
+  conditionValue?: string;
+  conditionSelector?: string;
+  conditionSelectorType?: SelectorKind;
+  thenAction?: BranchAction;
+  elseAction?: BranchAction;
 }
+
+/**
+ * What a branch runs: one action, or several in order.
+ *
+ * BOTH SHAPES ARE ACCEPTED FOREVER. Every task already in the database stores a single
+ * object here, and a config format that needs a migration to keep working is a config
+ * format that breaks production on the day it ships. `asActionList` normalises the two at
+ * the point of use; nothing is ever rewritten on disk.
+ */
+export type BranchAction = ConditionalAction | ConditionalAction[];
+
+/** One action, or several, as a list. Missing/empty means "continue". */
+function asActionList(a: BranchAction | undefined): ConditionalAction[] {
+  if (!a) return [];
+  return Array.isArray(a) ? a.filter(Boolean) : [a];
+}
+
+/**
+ * How deep if/else nesting may go.
+ *
+ * A cycle is not actually reachable — steps are JSON, JSON is a tree, and a tree cannot
+ * contain itself — so this is not cycle protection. It is protection against a config
+ * nested far enough to exhaust the stack, and a bound on how much work one step can
+ * quietly turn into. Ten is far past anything a person will build by hand.
+ */
+const MAX_CONDITION_DEPTH = 10;
+
+/** How a selector string should be read. "auto" works it out from the string itself. */
+export type SelectorKind = "auto" | "css" | "xpath" | "text";
+
+/**
+ * Which question a condition asks of the elements it finds.
+ *   "visible" — element_visible / element_not_visible
+ *   "usable"  — element_clickable / element_not_clickable
+ */
+type ConditionMode = "visible" | "usable";
+
+/**
+ * The in-page half of condition matching: XPath, CSS over all matches, and exact text.
+ *
+ * Deliberately NOT the whole story — see probeCondition. This runs inside the page, so it
+ * only knows standard DOM selectors. `page.$()` goes through Playwright's engine instead,
+ * which understands extensions like `:has-text("…")` that `document.querySelectorAll`
+ * rejects outright. A production task depends on exactly that.
+ */
+const IN_PAGE_PROBE = (arg: unknown) => {
+  const { sel, kind } = arg as { sel: string; kind: string };
+  const want = String(sel ?? "").trim();
+  if (!want) return { how: "empty", count: 0, anyVisible: false, anyUsable: false };
+
+  const vis = (el: Element) => {
+    const h = el as HTMLElement;
+    const st = getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const usable = (el: Element) => {
+    if (!vis(el)) return false;
+    const h = el as HTMLElement;
+    if ((h as HTMLButtonElement).disabled) return false;
+    if (h.getAttribute("aria-disabled") === "true") return false;
+    if (getComputedStyle(h).pointerEvents === "none") return false;
+    // A control greyed out by class rather than by attribute is still unusable.
+    if (/(disabled|is-disabled|btn-disabled)/.test(h.className || "")) return false;
+    return true;
+  };
+
+  const byXPath = (): Element[] => {
+    const found: Element[] = [];
+    try {
+      const it = document.evaluate(want, document, null, 5 /* UNORDERED_NODE_ITERATOR */, null);
+      for (let n = it.iterateNext(); n; n = it.iterateNext()) if (n instanceof Element) found.push(n);
+    } catch { /* malformed XPath — treated as "matched nothing" */ }
+    return found;
+  };
+  const byCss = (): Element[] => {
+    try { return Array.from(document.querySelectorAll(want)); } catch { return []; }
+  };
+  const byText = (): Element[] =>
+    Array.from(document.querySelectorAll("body *")).filter(
+      (el) => el.children.length === 0 && (el.textContent || "").trim() === want,
+    );
+
+  let hits: Element[] = [];
+  let how = "";
+  if (kind === "xpath" || (kind === "auto" && /^\(?\s*\//.test(want))) {
+    hits = byXPath(); how = "xpath";
+  } else if (kind === "text") {
+    hits = byText(); how = "text";
+  } else if (kind === "css") {
+    hits = byCss(); how = "css";
+  } else {
+    // "Valid CSS" is NOT enough to decide: `Pause` parses fine as a type selector for a
+    // <pause> element, it just never matches anything. CSS wins only if it MATCHES.
+    hits = byCss(); how = "css";
+    if (!hits.length) { hits = byText(); how = hits.length ? "text" : "css"; }
+  }
+  return { how, count: hits.length, anyVisible: hits.some(vis), anyUsable: hits.some(usable) };
+};
+
+type TargetProbe = { how: string; count: number; anyVisible: boolean; anyUsable: boolean };
+
+/** The same visible/usable rules, applied to the one element Playwright handed back. */
+const ONE_ELEMENT_PROBE = (el: Element) => {
+  const h = el as HTMLElement;
+  const st = getComputedStyle(h);
+  const r = h.getBoundingClientRect();
+  const visible = st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  const usable =
+    visible &&
+    !(h as HTMLButtonElement).disabled &&
+    h.getAttribute("aria-disabled") !== "true" &&
+    st.pointerEvents !== "none" &&
+    !/(disabled|is-disabled|btn-disabled)/.test(h.className || "");
+  return { visible, usable };
+};
+
+/**
+ * Answer an element condition, keeping every path that already worked.
+ *
+ * STRICTLY ADDITIVE, and that is the entire design constraint. Each condition keeps the
+ * mechanism it has always used as its FIRST attempt, so a configuration that works today
+ * takes the identical route to the identical answer. The new XPath and text handling only
+ * ever runs where the old mechanism found nothing — which is where the old behaviour was
+ * to report "no such element" regardless.
+ *
+ * What each one used to do, and therefore still does first:
+ *
+ *   visible  page.$(sel) — Playwright's selector engine, first match. That engine is why
+ *            `button:has-text("Renew")` works, and task 51 in production depends on it.
+ *            Running the same string inside the page would throw and silently answer "not
+ *            visible".
+ *   usable   querySelectorAll inside the page, ANY match. First-match would give a
+ *            different answer on a page where the first match is disabled and a later one
+ *            is not.
+ *
+ * What the old visible path actually could not do, measured against a live camoufox
+ * session rather than assumed:
+ *
+ *     page.$('button:has-text("Pause")')  -> FOUND      (Playwright extension)
+ *     page.$('//button[@id="b"]')         -> FOUND      (bare XPath, auto-detected)
+ *     page.$('text=Pause')                -> FOUND
+ *     page.$('Pause')                     -> null       <- the real gap
+ *
+ * So XPath was never the broken case on this backend, whatever the shape of the bug
+ * report: Playwright detects a leading "//" by itself. PLAIN TEXT is what silently
+ * failed — element_visible with `연장하기` returned null and answered "not visible",
+ * while element_clickable with the same string worked, because only that one had a text
+ * fallback. The seleniumbase backend is the one where XPath genuinely fails, since its
+ * page.$ goes to Selenium and only speaks CSS; the in-page XPath branch below covers it.
+ *
+ * No task in production stores an XPath in a condition today (checked), so none of this
+ * changes an existing run.
+ */
+async function probeCondition(
+  page: PageAdapter,
+  sel: string,
+  kind: SelectorKind,
+  mode: ConditionMode,
+): Promise<{ how: string; ok: boolean }> {
+  const want = (sel ?? "").trim();
+  if (!want) return { how: "empty", ok: false };
+  const looksXPath = /^\(?\s*\//.test(want);
+  const engineFirst = kind !== "xpath" && kind !== "text" && !(kind === "auto" && looksXPath);
+  const inPage = async (k: SelectorKind) =>
+    (await page
+      .evaluate(IN_PAGE_PROBE, { sel: want, kind: k } as never)
+      .catch(() => ({ how: "error", count: 0, anyVisible: false, anyUsable: false }))) as TargetProbe;
+  const one = async () => {
+    const el = await page.$(want);
+    if (!el) return null;
+    return (await el.evaluate(ONE_ELEMENT_PROBE)) as { visible: boolean; usable: boolean };
+  };
+
+  // ── The path this condition has always taken ──────────────────────────────
+  if (engineFirst && mode === "visible") {
+    try {
+      const r = await one();
+      if (r) return { how: "css", ok: r.visible };
+    } catch { /* not a selector this engine understands — fall through */ }
+  }
+  if (engineFirst && mode === "usable") {
+    const css = await inPage("css");
+    if (css.count > 0) return { how: "css", ok: css.anyUsable };
+    // Zero plain-CSS matches, but Playwright may still understand it (`:has-text`, `text=`).
+    try {
+      const r = await one();
+      if (r) return { how: "css", ok: r.usable };
+    } catch { /* fall through to the new fallbacks */ }
+  }
+
+  // ── New ground: only reached where the old code had already given up ──────
+  if (kind === "xpath" || (kind === "auto" && looksXPath)) {
+    const r = await inPage("xpath");
+    return { how: "xpath", ok: mode === "visible" ? r.anyVisible : r.anyUsable };
+  }
+  if (kind === "text") {
+    const r = await inPage("text");
+    return { how: "text", ok: mode === "visible" ? r.anyVisible : r.anyUsable };
+  }
+  if (kind === "css") return { how: "css", ok: false };
+  const t = await inPage("text");
+  return { how: t.count ? "text" : "css", ok: mode === "visible" ? t.anyVisible : t.anyUsable };
+}
+
 
 export type WorkflowStep =
   | { type: "navigate"; url: string; timeout?: number }
@@ -49,7 +263,7 @@ export type WorkflowStep =
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
   | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
-  | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; thenAction: ConditionalAction; elseAction?: ConditionalAction };
+  | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; conditionSelectorType?: SelectorKind; thenAction: BranchAction; elseAction?: BranchAction };
 
 export interface StepResult {
   success: boolean;
@@ -345,6 +559,11 @@ async function executeStep(
   creds: DecryptedCredentials | null,
   solver: CaptchaSolver | null,
   targetUrl: string,
+  /**
+   * How many condition branches deep we already are. Only a condition passes a non-zero
+   * value, and only to the sub-steps it runs; every other caller leaves it at 0.
+   */
+  depth = 0,
 ): Promise<StepExecResult> {
   switch (step.type) {
     case "navigate": {
@@ -988,11 +1207,12 @@ async function executeStep(
     }
 
     case "condition": {
-        const { conditionType, conditionValue, conditionSelector, thenAction } = step;
+        const { conditionType, conditionValue, conditionSelector } = step;
         // Evaluate the condition — wrap in try/catch so page errors (stale frame,
         // navigation, etc.) are treated as "not met" rather than hard-failing the task.
         let conditionMet = false;
         let evalWarning: string | undefined;
+        let how = "";
 
         try {
           switch (conditionType) {
@@ -1004,71 +1224,25 @@ async function executeStep(
               conditionMet = !(await pageHasExactText(page, conditionValue));
               break;
             }
-            case "element_visible": {
-              const sel = conditionSelector || conditionValue;
-              const el = await page.$(sel);
-              if (el) {
-                conditionMet = await el.evaluate((e: Element) => {
-                  const r = e.getBoundingClientRect();
-                  return r.width > 0 && r.height > 0;
-                }).catch(() => false) as boolean;
-              }
-              break;
-            }
-            case "element_not_visible": {
-              const sel2 = conditionSelector || conditionValue;
-              const el2 = await page.$(sel2);
-              if (!el2) {
-                conditionMet = true;
-              } else {
-                const visible = await el2.evaluate((e: Element) => {
-                  const r = e.getBoundingClientRect();
-                  return r.width > 0 && r.height > 0;
-                }).catch(() => false) as boolean;
-                conditionMet = !visible;
-              }
-              break;
-            }
-            // "Is it there" and "can it be used" are different questions, and only the
-            // first one could be asked. A button that is present but disabled — this
-            // panel's renew button before its renewal window opens — satisfies
-            // text_contains and element_visible, so the then-branch went ahead and tried
-            // to click it, clickByText refused a disabled control, and the whole task
-            // failed on a page that was simply saying "not yet".
+            // All four element conditions go through ONE resolver now. They used to
+            // disagree about what a selector even is — see RESOLVE_TARGETS.
+            case "element_visible":
+            case "element_not_visible":
             case "element_clickable":
             case "element_not_clickable": {
-              const csel = conditionSelector || conditionValue;
-              const usable = (await page
-                .evaluate((arg: unknown) => {
-                  const { sel, text } = arg as { sel: string; text: string };
-                  const ok = (el: Element | null): boolean => {
-                    if (!el) return false;
-                    const h = el as HTMLElement;
-                    const st = getComputedStyle(h);
-                    const r = h.getBoundingClientRect();
-                    if (st.display === "none" || st.visibility === "hidden") return false;
-                    if (r.width <= 0 || r.height <= 0) return false;
-                    if ((h as HTMLButtonElement).disabled) return false;
-                    if (h.getAttribute("aria-disabled") === "true") return false;
-                    if (st.pointerEvents === "none") return false;
-                    // A control greyed out by class rather than by attribute is still
-                    // unusable, and saying so is the whole point of this condition.
-                    if (/(disabled|is-disabled|btn-disabled)/.test(h.className || "")) return false;
-                    return true;
-                  };
-                  if (sel) {
-                    try {
-                      if (Array.from(document.querySelectorAll(sel)).some(ok)) return true;
-                    } catch { /* not a selector — fall through to the text search */ }
-                  }
-                  const want = String(text || "").trim();
-                  if (!want) return false;
-                  return Array.from(document.querySelectorAll("body *")).some(
-                    (el) => (el.textContent || "").trim() === want && el.children.length === 0 && ok(el),
-                  );
-                }, { sel: csel, text: conditionValue } as never)
-                .catch(() => false)) as boolean;
-              conditionMet = conditionType === "element_clickable" ? usable : !usable;
+              const wantsVisible =
+                conditionType === "element_visible" || conditionType === "element_not_visible";
+              const probe = await probeCondition(
+                page,
+                conditionSelector || conditionValue,
+                step.conditionSelectorType ?? "auto",
+                wantsVisible ? "visible" : "usable",
+              );
+              how = probe.how;
+              conditionMet =
+                conditionType === "element_visible" || conditionType === "element_clickable"
+                  ? probe.ok
+                  : !probe.ok;
               break;
             }
             case "url_contains": {
@@ -1087,32 +1261,56 @@ async function executeStep(
         // Condition NOT met is never a failure by itself — it just selects the
         // else branch (which defaults to "continue", preserving old behavior).
         const branch = conditionMet ? "then" : "else";
-        const action: ConditionalAction = conditionMet
-          ? thenAction
-          : (step.elseAction ?? { type: "continue" });
-        const condDesc = `${conditionType}: "${conditionValue}"`;
+        const actions = asActionList(conditionMet ? step.thenAction : (step.elseAction ?? { type: "continue" }));
+        const condDesc = `${conditionType}: "${conditionValue}"${how && how !== "css" ? ` via ${how}` : ""}`;
         const metWord = conditionMet ? "met" : "not met";
         const evalNote = !conditionMet && evalWarning ? ` (eval warning: ${evalWarning})` : "";
 
-        // Control-flow branches.
-        if (!action || action.type === "continue") {
+        const noop = actions.length === 0 || actions.every((a) => !a || a.type === "continue");
+        if (noop) {
           const shot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
           return { message: `Condition ${metWord} (${condDesc}) → ${branch}: continue${evalNote}`, screenshotPath: shot };
         }
-        if (action.type === "exitSuccess") {
-          throw new TaskExitError(true, `Condition ${metWord} (${condDesc}) → ${branch}: exit task (success)${action.message ? ` — ${action.message}` : ""}`);
-        }
-        if (action.type === "exitFailure") {
-          throw new TaskExitError(false, `Condition ${metWord} (${condDesc}) → ${branch}: exit task (failure)${action.message ? ` — ${action.message}` : ""}`);
+
+        // A branch may hold SEVERAL actions, and any of them may be another condition.
+        // Both are new; both are additive. A branch that is a single object still arrives
+        // here as a one-element list, and a task that has never heard of either keeps
+        // behaving exactly as it did.
+        if (depth >= MAX_CONDITION_DEPTH) {
+          throw new Error(
+            `Condition nesting exceeded ${MAX_CONDITION_DEPTH} levels — refusing to go deeper. ` +
+              `This is a configuration problem, not a page problem.`,
+          );
         }
 
-        // Otherwise it's a sub-step action — run it. A FAILURE here aborts the task
-        // like a normal step (the user asked for this): only the condition itself
-        // not matching is non-fatal (handled by the else/continue branch above).
-        const subStep = action as unknown as WorkflowStep;
-        const subResult = await executeStep(page, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl);
-        const condShot = subResult.screenshotPath ?? await saveStepScreenshot(subResult.newPage ?? page, dataDir, taskId, stepIndex, "cond");
-        return { message: `Condition ${metWord} (${condDesc}) → ${branch}: ${subResult.message}`, newPage: subResult.newPage, screenshotPath: condShot };
+        let branchPage = page;
+        let newPage: PageAdapter | undefined;
+        const done: string[] = [];
+        for (const action of actions) {
+          if (action.type === "continue") continue;
+          if (action.type === "exitSuccess" || action.type === "exitFailure") {
+            throw new TaskExitError(
+              action.type === "exitSuccess",
+              `Condition ${metWord} (${condDesc}) → ${branch}: exit task (${action.type === "exitSuccess" ? "success" : "failure"})` +
+                (action.message ? ` — ${action.message}` : ""),
+            );
+          }
+          // A FAILURE here aborts the task like a normal step (the user asked for this):
+          // only the condition itself not matching is non-fatal.
+          const subStep = action as unknown as WorkflowStep;
+          const subResult = await executeStep(
+            branchPage, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl, depth + 1,
+          );
+          if (subResult.newPage) { branchPage = subResult.newPage; newPage = subResult.newPage; }
+          done.push(subResult.message);
+        }
+
+        const condShot = await saveStepScreenshot(branchPage, dataDir, taskId, stepIndex, "cond");
+        return {
+          message: `Condition ${metWord} (${condDesc}) → ${branch}: ${done.join(" ; ")}`,
+          newPage,
+          screenshotPath: condShot,
+        };
       }
   
     default: {

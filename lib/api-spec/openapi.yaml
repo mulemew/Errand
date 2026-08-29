@@ -731,7 +731,7 @@ components:
       properties:
         type:
           type: string
-          enum: [click, fill, navigate, wait, keypress, screenshot, scroll, continue, exitSuccess, exitFailure]
+          enum: [click, fill, navigate, wait, keypress, screenshot, scroll, continue, exitSuccess, exitFailure, condition]
         selector:
           type: string
         selectorType:
@@ -752,6 +752,26 @@ components:
         message:
           type: string
           description: For exitSuccess / exitFailure, an optional message recorded in the log
+        conditionType:
+          type: string
+          description: Only when type=condition — a nested if/else. Same values as ConditionStep.conditionType.
+        conditionValue:
+          type: string
+          description: Only when type=condition.
+        conditionSelector:
+          type: string
+          description: Only when type=condition.
+        conditionSelectorType:
+          type: string
+          enum: [auto, css, xpath, text]
+          description: Only when type=condition. Defaults to auto.
+        thenAction:
+          description: >-
+            Only when type=condition. One action or an array of them; deliberately untyped
+            here because the alternative is a recursive $ref that every client generator
+            would have to render correctly.
+        elseAction:
+          description: Only when type=condition. Same shape as thenAction.
       required: [type]
 
     ConditionStep:
@@ -769,12 +789,22 @@ components:
           description: Value to check against (e.g. text to look for, URL substring)
         conditionSelector:
           type: string
-          description: CSS selector for element-based conditions
+          description: >-
+            Selector for element-based conditions. CSS, XPath, or the exact visible text —
+            worked out from the string unless conditionSelectorType says otherwise.
+        conditionSelectorType:
+          type: string
+          enum: [auto, css, xpath, text]
+          description: >-
+            How to read conditionSelector/conditionValue. Defaults to auto, which tries
+            XPath for strings starting with "/", then CSS, then exact text.
         thenAction:
-          $ref: "#/components/schemas/ConditionalAction"
+          description: >-
+            What to run when the condition holds: one ConditionalAction, or an array of
+            them run in order. An action may itself be a condition (type=condition), which
+            is how if/else nests. Untyped on purpose — see ConditionalAction.
         elseAction:
-          description: Action to execute when the condition is false
-          $ref: "#/components/schemas/ConditionalAction"
+          description: Same as thenAction, for when the condition does not hold.
       required: [type, conditionType]
 
     TaskBrowserConfig:
