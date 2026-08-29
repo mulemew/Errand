@@ -449,6 +449,9 @@ _VIEW_PORT_BASE = int(os.getenv("CAMOUFOX_VIEW_PORT_BASE", "7901"))
 _display_lock = threading.Lock()
 _displays_in_use: set = set()
 _VNC_DISABLED = os.getenv("VNC_DISABLE") == "1"
+# Where the KasmVNC web client lives, and where files uploaded through it land.
+_KASM_WWW = os.getenv("KASM_WWW_DIR", "/usr/share/kasmvnc/www")
+_KASM_DOWNLOADS = os.getenv("KASM_DOWNLOAD_DIR", os.path.expanduser("~/Downloads"))
 
 
 def _screen_geometry() -> str:
@@ -472,11 +475,57 @@ def _free_display(n):
         _displays_in_use.discard(n)
 
 
+def _kasm_env():
+    """Environment a KasmVNC server needs to start without a password prompt."""
+    env = dict(os.environ)
+    env.setdefault("HOME", os.path.expanduser("~"))
+    return env
+
+
+def _xvnc_argv(display: int, view_port: int) -> list:
+    """One process: X server + VNC + web server. Every flag here was checked against a
+    running Xvnc, because the ones that look obvious are the ones that were wrong.
+
+      -rfbport 0        no raw VNC listener; the websocket is the only door. (`-1` is not
+                        "off" — it makes the whole listener setup fail silently.)
+      -httpd            without it the port answers but serves no client at all.
+      -DisableBasicAuth needs an explicit 1; the bare flag is accepted and ignored.
+      -SecurityTypes None  deliberate: this port is never published, the app proxies it
+                        behind the same login as everything else, and a VNC password on an
+                        interior door only guarantees that the door gets propped open.
+
+    The websocket lives at BOTH /websockify and /api/websockify — verified by handshake,
+    which is why the app's existing proxy path keeps working unchanged. A 401 from either
+    is almost never authentication: Xvnc rejects a handshake with no Origin header and
+    reports it as 401, which cost an hour to learn the first time.
+    """
+    geom = _screen_geometry()                      # "WxHxD"
+    wh, _, depth = geom.rpartition("x")
+    return [
+        "Xvnc", f":{display}",
+        "-geometry", wh,
+        "-depth", depth,
+        "-websocketPort", str(view_port),
+        "-rfbport", "0",
+        "-httpd", _KASM_WWW,
+        "-SecurityTypes", "None",
+        "-DisableBasicAuth", "1",
+        "-AlwaysShared",                           # more than one watcher, like x11vnc -shared
+        "-interface", "0.0.0.0",
+    ]
+
+
 def _start_session_display():
-    """Xvfb + x11vnc + websockify for one session.
+    """A KasmVNC server for one session: its own X display, its own view port.
 
     Returns (display_num, view_port, [procs]) — or (None, None, []) if anything failed, in
     which case the caller uses the shared :99 and simply cannot be watched individually.
+
+    This used to start three processes (Xvfb, x11vnc, websockify) and the middle one was
+    the whole problem: SIGKILLed on teardown, it leaked 62 shared-memory segments each
+    time, and after ~66 sessions no new x11vnc could start at all — the view connected,
+    upgraded, and stayed black. Xvnc is all three at once, so there is one process to
+    start, one to stop, and nothing that can half-fail into a silent blank screen.
     """
     n = _alloc_display()
     if n is None:
@@ -484,42 +533,45 @@ def _start_session_display():
         return None, None, []
     procs = []
     try:
-        # A crashed Xvfb leaves its lock behind, and the next Xvfb on that number refuses to
-        # start ("Server is already active"). Without this the number would fail forever
-        # after one crash — sessions would still run, just always on the shared display.
+        # A crashed X server leaves its lock behind and the next one on that number refuses
+        # to start ("Server is already active"). Without this the number would fail forever
+        # after one crash.
         for stale in (f"/tmp/.X{n}-lock", f"/tmp/.X11-unix/X{n}"):
             try:
                 os.unlink(stale)
             except OSError:
                 pass
-        xvfb = subprocess.Popen(
-            ["Xvfb", f":{n}", "-screen", "0", _screen_geometry(), "-ac"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-        )
-        procs.append(xvfb)
-        time.sleep(1.0)
-        if xvfb.poll() is not None:
-            raise RuntimeError(f"Xvfb :{n} exited immediately")
 
         view_port = None
-        if not _VNC_DISABLED:
+        if _VNC_DISABLED:
+            # No viewer wanted: a plain Xvfb is enough to render into, and it costs less.
+            xserver = subprocess.Popen(
+                ["Xvfb", f":{n}", "-screen", "0", _screen_geometry(), "-ac"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+        else:
             view_port = _VIEW_PORT_BASE + (n - _DISPLAY_BASE)
-            # 5900 belongs to the container-wide viewer the entrypoint starts on :99.
-            # Starting at 5901 keeps the first session from colliding with it — x11vnc
-            # would fail to bind, websockify would still come up, and the view would be a
-            # port that answers and never shows anything.
-            vnc_port = 5901 + (n - _DISPLAY_BASE)
-            # -bg would daemonise out of our process tree; keep it in the foreground so the
-            # teardown below actually owns it.
-            procs.append(subprocess.Popen(
-                ["x11vnc", "-display", f":{n}", "-nopw", "-rfbport", str(vnc_port),
-                 "-forever", "-shared", "-quiet"],
+            xserver = subprocess.Popen(
+                _xvnc_argv(n, view_port),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-            ))
-            procs.append(subprocess.Popen(
-                ["websockify", "--web", "/usr/share/novnc", str(view_port), f"localhost:{vnc_port}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-            ))
+                env=_kasm_env(),
+            )
+        procs.append(xserver)
+
+        # Wait for the DISPLAY to exist rather than sleeping a fixed amount. Xvnc has more
+        # to set up than Xvfb did, and a fixed 1s was already marginal for the old pair:
+        # the browser would start against a display that was not ready and die on connect.
+        ready = False
+        for _ in range(60):                      # up to ~6s
+            if xserver.poll() is not None:
+                raise RuntimeError(f"X server for :{n} exited immediately")
+            if os.path.exists(f"/tmp/.X11-unix/X{n}"):
+                ready = True
+                break
+            time.sleep(0.1)
+        if not ready:
+            raise RuntimeError(f"X server for :{n} never created its socket")
+
         print(f"[display] :{n} up (view port {view_port})", flush=True)
         return n, view_port, procs
     except Exception as e:
