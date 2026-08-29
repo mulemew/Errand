@@ -243,11 +243,15 @@ export default function FingerprintProfiles() {
 
             {/* Generate a real, consistent fingerprint and FIX it (Camoufox) */}
             <div className="space-y-2 rounded-md border border-border p-3">
-              <div className="flex items-center gap-2">
+              {/* flex-wrap + min-w-0 on the select, shrink-0 on the badge. Without them the
+                  select's long option text claims the whole row, the badge is squeezed to
+                  zero width, and — having nothing to stop it wrapping — renders one
+                  character per line as a vertical stripe down the side of the dialog. */}
+              <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={source}
                   onChange={(e) => setSource(e.target.value as "browserforge" | "preset")}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
                 >
                   <option value="browserforge">{t.sourceBrowserforge}</option>
                   <option value="preset">{t.sourceRealPreset}</option>
@@ -255,7 +259,7 @@ export default function FingerprintProfiles() {
                 <Button type="button" variant="outline" size="sm" onClick={doGenerate} disabled={generating} className="gap-2">
                   {generating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{t.generateFingerprint}
                 </Button>
-                {generated && <span className="text-[11px] text-emerald-500">{t.generatedFixedOnSave}</span>}
+                {generated && <span className="shrink-0 whitespace-nowrap text-[11px] text-emerald-500">{t.generatedFixedOnSave}</span>}
               </div>
               {genSummary ? (
                 <div className="text-[11px] font-mono text-muted-foreground space-y-0.5 break-all">
