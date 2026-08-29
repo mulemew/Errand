@@ -319,6 +319,7 @@ export const ConditionalActionType = {
   continue: "continue",
   exitSuccess: "exitSuccess",
   exitFailure: "exitFailure",
+  condition: "condition",
 } as const;
 
 export type ConditionalActionSelectorType =
@@ -328,6 +329,19 @@ export const ConditionalActionSelectorType = {
   text: "text",
   css: "css",
   xpath: "xpath",
+} as const;
+
+/**
+ * Only when type=condition. Defaults to auto.
+ */
+export type ConditionalActionConditionSelectorType =
+  (typeof ConditionalActionConditionSelectorType)[keyof typeof ConditionalActionConditionSelectorType];
+
+export const ConditionalActionConditionSelectorType = {
+  auto: "auto",
+  css: "css",
+  xpath: "xpath",
+  text: "text",
 } as const;
 
 /**
@@ -345,6 +359,18 @@ export interface ConditionalAction {
   y?: number;
   /** For exitSuccess / exitFailure, an optional message recorded in the log */
   message?: string;
+  /** Only when type=condition — a nested if/else. Same values as ConditionStep.conditionType. */
+  conditionType?: string;
+  /** Only when type=condition. */
+  conditionValue?: string;
+  /** Only when type=condition. */
+  conditionSelector?: string;
+  /** Only when type=condition. Defaults to auto. */
+  conditionSelectorType?: ConditionalActionConditionSelectorType;
+  /** Only when type=condition. One action or an array of them; deliberately untyped here because the alternative is a recursive $ref that every client generator would have to render correctly. */
+  thenAction?: unknown;
+  /** Only when type=condition. Same shape as thenAction. */
+  elseAction?: unknown;
 }
 
 export type ConditionStepType =
@@ -368,6 +394,19 @@ export const ConditionStepConditionType = {
 } as const;
 
 /**
+ * How to read conditionSelector/conditionValue. Defaults to auto, which tries XPath for strings starting with "/", then CSS, then exact text.
+ */
+export type ConditionStepConditionSelectorType =
+  (typeof ConditionStepConditionSelectorType)[keyof typeof ConditionStepConditionSelectorType];
+
+export const ConditionStepConditionSelectorType = {
+  auto: "auto",
+  css: "css",
+  xpath: "xpath",
+  text: "text",
+} as const;
+
+/**
  * Conditionally execute an action based on page state
  */
 export interface ConditionStep {
@@ -375,11 +414,14 @@ export interface ConditionStep {
   conditionType: ConditionStepConditionType;
   /** Value to check against (e.g. text to look for, URL substring) */
   conditionValue?: string;
-  /** CSS selector for element-based conditions */
+  /** Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise. */
   conditionSelector?: string;
-  thenAction?: ConditionalAction;
-  /** Action to execute when the condition is false */
-  elseAction?: ConditionalAction;
+  /** How to read conditionSelector/conditionValue. Defaults to auto, which tries XPath for strings starting with "/", then CSS, then exact text. */
+  conditionSelectorType?: ConditionStepConditionSelectorType;
+  /** What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if/else nests. Untyped on purpose — see ConditionalAction. */
+  thenAction?: unknown;
+  /** Same as thenAction, for when the condition does not hold. */
+  elseAction?: unknown;
 }
 
 /**

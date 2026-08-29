@@ -180,71 +180,27 @@ export const ListTasksResponseItem = zod.object({
             conditionSelector: zod
               .string()
               .optional()
-              .describe("CSS selector for element-based conditions"),
-            thenAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .describe(
+                "Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise.",
+              ),
+            conditionSelectorType: zod
+              .enum(["auto", "css", "xpath", "text"])
               .optional()
               .describe(
-                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                'How to read conditionSelector\/conditionValue. Defaults to auto, which tries XPath for strings starting with \"\/\", then CSS, then exact text.',
+              ),
+            thenAction: zod
+              .unknown()
+              .optional()
+              .describe(
+                "What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if\/else nests. Untyped on purpose — see ConditionalAction.",
               ),
             elseAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .unknown()
               .optional()
-              .describe("Action to execute when the condition is false"),
+              .describe(
+                "Same as thenAction, for when the condition does not hold.",
+              ),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -579,71 +535,27 @@ export const CreateTaskBody = zod.object({
             conditionSelector: zod
               .string()
               .optional()
-              .describe("CSS selector for element-based conditions"),
-            thenAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .describe(
+                "Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise.",
+              ),
+            conditionSelectorType: zod
+              .enum(["auto", "css", "xpath", "text"])
               .optional()
               .describe(
-                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                'How to read conditionSelector\/conditionValue. Defaults to auto, which tries XPath for strings starting with \"\/\", then CSS, then exact text.',
+              ),
+            thenAction: zod
+              .unknown()
+              .optional()
+              .describe(
+                "What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if\/else nests. Untyped on purpose — see ConditionalAction.",
               ),
             elseAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .unknown()
               .optional()
-              .describe("Action to execute when the condition is false"),
+              .describe(
+                "Same as thenAction, for when the condition does not hold.",
+              ),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -963,71 +875,27 @@ export const GetTaskResponse = zod
               conditionSelector: zod
                 .string()
                 .optional()
-                .describe("CSS selector for element-based conditions"),
-              thenAction: zod
-                .object({
-                  type: zod.enum([
-                    "click",
-                    "fill",
-                    "navigate",
-                    "wait",
-                    "keypress",
-                    "screenshot",
-                    "scroll",
-                    "continue",
-                    "exitSuccess",
-                    "exitFailure",
-                  ]),
-                  selector: zod.string().optional(),
-                  selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                  url: zod.string().optional(),
-                  value: zod.string().optional(),
-                  ms: zod.number().optional(),
-                  key: zod.string().optional(),
-                  x: zod.number().optional(),
-                  y: zod.number().optional(),
-                  message: zod
-                    .string()
-                    .optional()
-                    .describe(
-                      "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                    ),
-                })
+                .describe(
+                  "Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise.",
+                ),
+              conditionSelectorType: zod
+                .enum(["auto", "css", "xpath", "text"])
                 .optional()
                 .describe(
-                  "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                  'How to read conditionSelector\/conditionValue. Defaults to auto, which tries XPath for strings starting with \"\/\", then CSS, then exact text.',
+                ),
+              thenAction: zod
+                .unknown()
+                .optional()
+                .describe(
+                  "What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if\/else nests. Untyped on purpose — see ConditionalAction.",
                 ),
               elseAction: zod
-                .object({
-                  type: zod.enum([
-                    "click",
-                    "fill",
-                    "navigate",
-                    "wait",
-                    "keypress",
-                    "screenshot",
-                    "scroll",
-                    "continue",
-                    "exitSuccess",
-                    "exitFailure",
-                  ]),
-                  selector: zod.string().optional(),
-                  selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                  url: zod.string().optional(),
-                  value: zod.string().optional(),
-                  ms: zod.number().optional(),
-                  key: zod.string().optional(),
-                  x: zod.number().optional(),
-                  y: zod.number().optional(),
-                  message: zod
-                    .string()
-                    .optional()
-                    .describe(
-                      "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                    ),
-                })
+                .unknown()
                 .optional()
-                .describe("Action to execute when the condition is false"),
+                .describe(
+                  "Same as thenAction, for when the condition does not hold.",
+                ),
             })
             .describe("Conditionally execute an action based on page state"),
           zod
@@ -1390,71 +1258,27 @@ export const UpdateTaskBody = zod.object({
             conditionSelector: zod
               .string()
               .optional()
-              .describe("CSS selector for element-based conditions"),
-            thenAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .describe(
+                "Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise.",
+              ),
+            conditionSelectorType: zod
+              .enum(["auto", "css", "xpath", "text"])
               .optional()
               .describe(
-                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                'How to read conditionSelector\/conditionValue. Defaults to auto, which tries XPath for strings starting with \"\/\", then CSS, then exact text.',
+              ),
+            thenAction: zod
+              .unknown()
+              .optional()
+              .describe(
+                "What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if\/else nests. Untyped on purpose — see ConditionalAction.",
               ),
             elseAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .unknown()
               .optional()
-              .describe("Action to execute when the condition is false"),
+              .describe(
+                "Same as thenAction, for when the condition does not hold.",
+              ),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
@@ -1766,71 +1590,27 @@ export const UpdateTaskResponse = zod.object({
             conditionSelector: zod
               .string()
               .optional()
-              .describe("CSS selector for element-based conditions"),
-            thenAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .describe(
+                "Selector for element-based conditions. CSS, XPath, or the exact visible text — worked out from the string unless conditionSelectorType says otherwise.",
+              ),
+            conditionSelectorType: zod
+              .enum(["auto", "css", "xpath", "text"])
               .optional()
               .describe(
-                "An if\/else branch action. Either performs a sub-step (click\/fill\/navigate\/wait\/keypress\/screenshot\/scroll), or a control-flow action: continue to the next step, or end the task (exitSuccess\/exitFailure).",
+                'How to read conditionSelector\/conditionValue. Defaults to auto, which tries XPath for strings starting with \"\/\", then CSS, then exact text.',
+              ),
+            thenAction: zod
+              .unknown()
+              .optional()
+              .describe(
+                "What to run when the condition holds: one ConditionalAction, or an array of them run in order. An action may itself be a condition (type=condition), which is how if\/else nests. Untyped on purpose — see ConditionalAction.",
               ),
             elseAction: zod
-              .object({
-                type: zod.enum([
-                  "click",
-                  "fill",
-                  "navigate",
-                  "wait",
-                  "keypress",
-                  "screenshot",
-                  "scroll",
-                  "continue",
-                  "exitSuccess",
-                  "exitFailure",
-                ]),
-                selector: zod.string().optional(),
-                selectorType: zod.enum(["text", "css", "xpath"]).optional(),
-                url: zod.string().optional(),
-                value: zod.string().optional(),
-                ms: zod.number().optional(),
-                key: zod.string().optional(),
-                x: zod.number().optional(),
-                y: zod.number().optional(),
-                message: zod
-                  .string()
-                  .optional()
-                  .describe(
-                    "For exitSuccess \/ exitFailure, an optional message recorded in the log",
-                  ),
-              })
+              .unknown()
               .optional()
-              .describe("Action to execute when the condition is false"),
+              .describe(
+                "Same as thenAction, for when the condition does not hold.",
+              ),
           })
           .describe("Conditionally execute an action based on page state"),
         zod
