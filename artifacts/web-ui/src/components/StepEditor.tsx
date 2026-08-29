@@ -12,7 +12,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition" | "cfVerify";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "element_clickable" | "element_not_clickable" | "url_contains";
-export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll" | "continue" | "exitSuccess" | "exitFailure";
+export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll" | "continue" | "exitSuccess" | "exitFailure" | "condition";
+/** How a condition's selector should be read. "auto" works it out from the string. */
+export type SelectorKind = "auto" | "css" | "xpath" | "text";
 
 export interface ConditionalAction {
   type: ThenActionType;
@@ -25,7 +27,41 @@ export interface ConditionalAction {
   x?: number;
   y?: number;
   message?: string;
+  // Only when type === "condition" — a branch that is itself an if/else.
+  conditionType?: ConditionType;
+  conditionValue?: string;
+  conditionSelector?: string;
+  conditionSelectorType?: SelectorKind;
+  thenAction?: BranchAction;
+  elseAction?: BranchAction;
 }
+
+/**
+ * What a branch runs: one action, or several in order.
+ *
+ * Every task saved before this existed stores a single object, and they are never
+ * rewritten — toBranchList/fromBranchList convert at the edges, and a branch that still
+ * holds exactly one action is written back as a bare object, so opening and closing an
+ * old task without touching it produces no diff at all.
+ */
+export type BranchAction = ConditionalAction | ConditionalAction[];
+
+export function toBranchList(b: BranchAction | undefined): ConditionalAction[] {
+  if (!b) return [];
+  return (Array.isArray(b) ? b : [b]).filter(Boolean);
+}
+
+function fromBranchList(list: ConditionalAction[]): BranchAction | undefined {
+  if (list.length === 0) return undefined;
+  return list.length === 1 ? list[0] : list;
+}
+
+/**
+ * How deep the EDITOR lets you nest. The executor's own limit is 10; this is lower
+ * because a form nested five deep is already unreadable, and the limit that matters for
+ * safety is the one on the server.
+ */
+const MAX_UI_NESTING = 5;
 
 export interface WorkflowStep {
   type: StepType;
@@ -59,8 +95,9 @@ export interface WorkflowStep {
   conditionType?: ConditionType;
   conditionValue?: string;
   conditionSelector?: string;
-  thenAction?: ConditionalAction;
-  elseAction?: ConditionalAction;
+  conditionSelectorType?: SelectorKind;
+  thenAction?: BranchAction;
+  elseAction?: BranchAction;
 }
 
 export interface SavedCredentialOption {
@@ -148,11 +185,13 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
 // Editor for one if/else branch action (used for both thenAction and elseAction).
 // An action is either a sub-step (click/fill/…) or a control action
 // (continue / exit the task success or failure).
-function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
+function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 }: {
   action: ConditionalAction | undefined;
   onChange: (a: ConditionalAction) => void;
-  label: string;
+  label?: string;
   idPrefix: string;
+  /** How many conditions deep this editor already sits. Only nesting increases it. */
+  depth?: number;
 }) {
   const { t } = useLang();
   const a: ConditionalAction = action ?? { type: "continue" };
@@ -166,11 +205,12 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
     if (v === "keypress") { na.key = "Enter"; }
     if (v === "scroll") { na.x = 0; na.y = 300; }
     if (v === "exitSuccess" || v === "exitFailure") { na.message = ""; }
+    if (v === "condition") { na.conditionType = "text_contains"; na.conditionValue = ""; na.conditionSelectorType = "auto"; }
     onChange(na);
   };
   return (
     <div className="space-y-2">
-      <Label className="text-xs font-medium">{label}</Label>
+      {label && <Label className="text-xs font-medium">{label}</Label>}
       <Select value={a.type} onValueChange={(v) => setType(v as ThenActionType)}>
         <SelectTrigger className="h-8 text-xs font-mono"><SelectValue /></SelectTrigger>
         <SelectContent>
@@ -184,6 +224,9 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
           <SelectItem value="keypress" className="text-xs">{t.stepKeyPress}</SelectItem>
           <SelectItem value="screenshot" className="text-xs">{t.stepScreenshotType}</SelectItem>
           <SelectItem value="scroll" className="text-xs">{t.stepScroll}</SelectItem>
+          {depth < MAX_UI_NESTING && (
+            <SelectItem value="condition" className="text-xs">{t.nestedCondition}</SelectItem>
+          )}
         </SelectContent>
       </Select>
       {a.type === "continue" && (
@@ -248,6 +291,155 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix }: {
       {a.type === "screenshot" && (
         <p className="text-xs text-muted-foreground font-mono">{t.capturesPageShort}</p>
       )}
+      {a.type === "condition" && (
+        depth >= MAX_UI_NESTING ? (
+          <p className="text-xs text-amber-500 font-mono">{t.nestingLimitReached}</p>
+        ) : (
+          // The same editor a top-level condition uses, one level in. Recursion is the
+          // whole point: a branch holding a condition is what "else if" is made of.
+          <div className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-3">
+            <ConditionFields
+              value={a}
+              onChange={(p) => patch(p)}
+              idPrefix={`${idPrefix}-cond`}
+            />
+            <BranchEditor
+              label={`${t.thenExecute} (${t.whenConditionTrue})`}
+              idPrefix={`${idPrefix}-then`}
+              value={a.thenAction}
+              onChange={(b) => patch({ thenAction: b })}
+              depth={depth + 1}
+            />
+            <BranchEditor
+              label={t.elseWhenFalse}
+              idPrefix={`${idPrefix}-else`}
+              value={a.elseAction}
+              onChange={(b) => patch({ elseAction: b })}
+              depth={depth + 1}
+            />
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * The "what am I testing" half of a condition, shared by the top-level step and by a
+ * nested one so the two cannot drift apart.
+ */
+function ConditionFields({ value, onChange, idPrefix }: {
+  value: { conditionType?: ConditionType; conditionValue?: string; conditionSelector?: string; conditionSelectorType?: SelectorKind };
+  onChange: (p: { conditionType?: ConditionType; conditionValue?: string; conditionSelector?: string; conditionSelectorType?: SelectorKind }) => void;
+  idPrefix: string;
+}) {
+  const { t } = useLang();
+  const ct = value.conditionType ?? "text_contains";
+  const isElement = ct.startsWith("element_");
+  return (
+    <>
+      <div className="space-y-2">
+        <Label className="text-xs font-medium">{t.ifCondition}</Label>
+        <Select value={ct} onValueChange={(v) => onChange({ conditionType: v as ConditionType })}>
+          <SelectTrigger className="h-8 text-xs font-mono"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="text_contains" className="text-xs">{t.textContains}</SelectItem>
+            <SelectItem value="text_not_contains" className="text-xs">{t.textNotContains}</SelectItem>
+            <SelectItem value="element_visible" className="text-xs">{t.elementVisible}</SelectItem>
+            <SelectItem value="element_clickable" className="text-xs">{t.elementClickable}</SelectItem>
+            <SelectItem value="element_not_clickable" className="text-xs">{t.elementNotClickable}</SelectItem>
+            <SelectItem value="element_not_visible" className="text-xs">{t.elementNotVisible}</SelectItem>
+            <SelectItem value="url_contains" className="text-xs">{t.urlContains}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {isElement && (
+        <div className="space-y-1">
+          <Label className="text-xs">{t.selectorKind}</Label>
+          <Select
+            value={value.conditionSelectorType ?? "auto"}
+            onValueChange={(v) => onChange({ conditionSelectorType: v as SelectorKind })}
+          >
+            <SelectTrigger className="h-8 text-xs font-mono"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto" className="text-xs">{t.selectorKindAuto}</SelectItem>
+              <SelectItem value="css" className="text-xs">css</SelectItem>
+              <SelectItem value="xpath" className="text-xs">xpath</SelectItem>
+              <SelectItem value="text" className="text-xs">text</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="space-y-1">
+        <Label className="text-xs">{isElement ? t.selectorOrText : "Match value"}</Label>
+        <Input
+          id={`${idPrefix}-value`}
+          className="font-mono text-xs h-8"
+          placeholder={isElement ? "#renew, //button[@id='x'], Extend" : ct === "url_contains" ? "/dashboard" : "Sign in successful"}
+          value={value.conditionValue ?? ""}
+          onChange={(e) => onChange({ conditionValue: e.target.value })}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * One branch of an if/else: a list of actions run in order.
+ *
+ * Reads both shapes and writes back the smaller one — a branch holding a single action is
+ * stored as a bare object, exactly as every existing task stores it, so opening an old
+ * task and saving it unchanged produces no diff.
+ */
+function BranchEditor({ value, onChange, label, idPrefix, depth = 0 }: {
+  value: BranchAction | undefined;
+  onChange: (b: BranchAction | undefined) => void;
+  label: string;
+  idPrefix: string;
+  depth?: number;
+}) {
+  const { t } = useLang();
+  const list = toBranchList(value);
+  const write = (l: ConditionalAction[]) => onChange(fromBranchList(l));
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="text-xs font-medium">{label}</Label>
+        {list.length > 1 && (
+          <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground font-mono">
+            {t.branchRunsInOrder}
+          </span>
+        )}
+      </div>
+      {list.length === 0 && (
+        <p className="text-xs text-muted-foreground font-mono">{t.doNothingContinue}</p>
+      )}
+      {list.map((act, i) => (
+        <div key={i} className="rounded-md border border-border/60 p-2 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-mono text-muted-foreground">#{i + 1}</span>
+            <Button
+              type="button" variant="ghost" size="sm"
+              className="h-6 px-2 text-[10px] text-muted-foreground hover:text-destructive"
+              onClick={() => write(list.filter((_, j) => j !== i))}
+            >
+              {t.removeAction}
+            </Button>
+          </div>
+          <ConditionalActionEditor
+            idPrefix={`${idPrefix}-${i}`}
+            action={act}
+            onChange={(na) => write(list.map((x, j) => (j === i ? na : x)))}
+            depth={depth}
+          />
+        </div>
+      ))}
+      <Button
+        type="button" variant="outline" size="sm" className="h-7 text-xs"
+        onClick={() => write([...list, { type: "click", selector: "", selectorType: "text" }])}
+      >
+        {t.addAction}
+      </Button>
     </div>
   );
 }
@@ -566,45 +758,11 @@ function StepCard({
 
       {step.type === "condition" && (
         <div className="p-3 space-y-3">
-          <div className="space-y-2">
-            <Label className="text-xs font-medium">{t.ifCondition}</Label>
-            <Select
-              value={step.conditionType ?? "text_contains"}
-              onValueChange={(v) => set({ conditionType: v as ConditionType })}
-            >
-              <SelectTrigger className="h-8 text-xs font-mono">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="text_contains" className="text-xs">{t.textContains}</SelectItem>
-                <SelectItem value="text_not_contains" className="text-xs">{t.textNotContains}</SelectItem>
-                <SelectItem value="element_visible" className="text-xs">{t.elementVisible}</SelectItem>
-                <SelectItem value="element_clickable" className="text-xs">{t.elementClickable}</SelectItem>
-                <SelectItem value="element_not_clickable" className="text-xs">{t.elementNotClickable}</SelectItem>
-                <SelectItem value="element_not_visible" className="text-xs">{t.elementNotVisible}</SelectItem>
-                <SelectItem value="url_contains" className="text-xs">{t.urlContains}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">
-              {(step.conditionType === "element_visible" || step.conditionType === "element_not_visible")
-                ? "CSS Selector"
-                : "Match value"}
-            </Label>
-            <Input
-              className="font-mono text-xs h-8"
-              placeholder={
-                (step.conditionType === "element_visible" || step.conditionType === "element_not_visible")
-                  ? ".success-badge, #logged-in"
-                  : step.conditionType === "url_contains"
-                    ? "/dashboard"
-                    : "Sign in successful"
-              }
-              value={step.conditionValue ?? ""}
-              onChange={(e) => set({ conditionValue: e.target.value })}
-            />
-          </div>
+          <ConditionFields
+            value={step}
+            onChange={(p) => set(p)}
+            idPrefix={`cond-${index}`}
+          />
           {(step.conditionType === "element_visible" || step.conditionType === "element_not_visible") && (
             <div className="space-y-1">
               <Label className="text-xs">{t.altSelector}</Label>
@@ -617,19 +775,19 @@ function StepCard({
             </div>
           )}
           <div className="border-t border-border pt-3">
-            <ConditionalActionEditor
+            <BranchEditor
               label={`${t.thenExecute} (${t.whenConditionTrue})`}
               idPrefix={`cond-then-${index}`}
-              action={step.thenAction}
-              onChange={(a) => set({ thenAction: a })}
+              value={step.thenAction}
+              onChange={(b) => set({ thenAction: b })}
             />
           </div>
           <div className="border-t border-border pt-3">
-            <ConditionalActionEditor
+            <BranchEditor
               label={t.elseWhenFalse}
               idPrefix={`cond-else-${index}`}
-              action={step.elseAction}
-              onChange={(a) => set({ elseAction: a })}
+              value={step.elseAction}
+              onChange={(b) => set({ elseAction: b })}
             />
           </div>
         </div>

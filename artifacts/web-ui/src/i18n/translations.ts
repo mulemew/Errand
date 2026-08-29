@@ -336,6 +336,13 @@ export interface Translations {
       successSelector: string;
       successText: string;
       ifCondition: string;
+      addAction: string;
+      removeAction: string;
+      branchRunsInOrder: string;
+      nestedCondition: string;
+      selectorKind: string;
+      selectorKindAuto: string;
+      nestingLimitReached: string;
       textContains: string;
       textNotContains: string;
       elementVisible: string;
@@ -1070,6 +1077,13 @@ export interface Translations {
       successSelector: "成功选择器",
       successText: "成功文本",
       ifCondition: "条件类型",
+      addAction: "+ 添加动作",
+      removeAction: "移除",
+      branchRunsInOrder: "按顺序依次执行",
+      nestedCondition: "嵌套条件（if / else）",
+      selectorKind: "选择器类型",
+      selectorKindAuto: "自动（/ 开头当 XPath，否则先试 CSS，再当文本）",
+      nestingLimitReached: "已达嵌套上限，这一层不能再放条件",
       textContains: "页面包含文字",
       textNotContains: "页面不包含文字",
       elementVisible: "元素可见",
@@ -1795,6 +1809,13 @@ export interface Translations {
       successSelector: "Success Selector",
       successText: "Success Text",
       ifCondition: "If condition",
+      addAction: "+ Add action",
+      removeAction: "Remove",
+      branchRunsInOrder: "Run in order",
+      nestedCondition: "Nested condition (if / else)",
+      selectorKind: "Selector kind",
+      selectorKindAuto: "Auto (XPath if it starts with /, else CSS, else exact text)",
+      nestingLimitReached: "Nesting limit reached — no further conditions here",
       textContains: "Page contains text",
       textNotContains: "Page does NOT contain text",
       elementVisible: "Element is visible",

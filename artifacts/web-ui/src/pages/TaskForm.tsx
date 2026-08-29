@@ -63,31 +63,21 @@ import { useLang } from "@/contexts/lang-context";
 import type { Translations } from "@/i18n/translations";
 import type { WorkflowStep as ApiWorkflowStep } from "@workspace/api-client-react";
 
-const thenActionSchema = z
-  .object({
-    type: z.enum([
-      "click",
-      "fill",
-      "navigate",
-      "wait",
-      "keypress",
-      "screenshot",
-      "scroll",
-      "continue",
-      "exitSuccess",
-      "exitFailure",
-    ]),
-    selector: z.string().optional(),
-    selectorType: z.enum(["text", "css", "xpath"]).optional(),
-    url: z.string().optional(),
-    value: z.string().optional(),
-    ms: z.number().optional(),
-    key: z.string().optional(),
-    x: z.number().optional(),
-    y: z.number().optional(),
-    message: z.string().optional(),
-  })
-  .optional();
+/**
+ * A branch of an if/else, for the FORM only — the server and the generated client both
+ * validate this properly.
+ *
+ * Deliberately loose. A branch is one action or a list of them, and an action may itself
+ * be a condition carrying its own branches, so a faithful schema here would have to be
+ * recursive (z.lazy plus a hand-written type annotation) purely to re-check something two
+ * other layers already check. What this schema is actually for is stopping react-hook-form
+ * from discarding the field, and z.unknown() does that.
+ *
+ * It also cannot be the thing that breaks an existing task. The strict version it replaces
+ * listed ten action types and no arrays; a saved task using either new shape would have
+ * failed validation on open and lost its branches on save.
+ */
+const thenActionSchema = z.unknown().optional();
 
 const stepSchema = z.object({
   type: z.enum([
@@ -141,6 +131,7 @@ const stepSchema = z.object({
     .optional(),
   conditionValue: z.string().optional(),
   conditionSelector: z.string().optional(),
+  conditionSelectorType: z.enum(["auto", "css", "xpath", "text"]).optional(),
   maxReloads: z.number().optional(),
   thenAction: thenActionSchema,
   elseAction: thenActionSchema,
