@@ -549,6 +549,7 @@ export interface Translations {
       providerFieldHint: string;
       noDefaultProviderYet: string;
       proxyLabel: string;
+      fingerprintLabel: string;
       proxyNone: string;
       proxyWarpRotate: string;
       proxyCustom: string;
@@ -1287,6 +1288,7 @@ export interface Translations {
       providerFieldHint: "引擎、地址、Stealth、分辨率等都在「Providers」页配置，并使用该 provider 自己的并发上限。「默认」跟随 Providers 页里标为默认的那个。",
       noDefaultProviderYet: "目前还没有默认 provider，去 Providers 页设一个。",
       proxyLabel: "代理",
+      fingerprintLabel: "指纹",
       proxyNone: "不使用",
       proxyWarpRotate: "WARP 自动轮换",
       proxyCustom: "自定义",
@@ -1333,8 +1335,8 @@ export interface Translations {
       logLevelInfo: "常规（默认）",
       logLevelDebug: "调试：每一步的细节，排查任务失败时用",
       logLevelTrace: "追踪：极其啰嗦，只在需要时短时间开启",
-      navFingerprints: "指纹",
-      navProxies: "代理",
+      navFingerprints: "指纹管理",
+      navProxies: "代理管理",
       navProviders: "浏览器后端",
       testRun: "测试运行",
       testRunning: "测试中…",
@@ -2026,6 +2028,7 @@ export interface Translations {
       providerFieldHint: "Engine, address, stealth, resolution and the rest live on the Providers page, and each provider enforces its own concurrency limit. \"Default\" follows whichever one is starred there.",
       noDefaultProviderYet: "No default provider yet — set one on the Providers page.",
       proxyLabel: "Proxy",
+      fingerprintLabel: "Fingerprint",
       proxyNone: "None",
       proxyWarpRotate: "WARP (rotating)",
       proxyCustom: "Custom",
@@ -2072,8 +2075,8 @@ export interface Translations {
       logLevelInfo: "Normal (default)",
       logLevelDebug: "Debug: per-step detail, for working out why a task failed",
       logLevelTrace: "Trace: extremely verbose, turn on only briefly",
-      navFingerprints: "Fingerprints",
-      navProxies: "Proxies",
+      navFingerprints: "Fingerprint profiles",
+      navProxies: "Proxy profiles",
       navProviders: "Providers",
       testRun: "Test Run",
       testRunning: "Testing…",

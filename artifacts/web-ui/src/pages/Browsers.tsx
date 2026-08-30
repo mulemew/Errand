@@ -200,7 +200,7 @@ export default function Browsers() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">{t.navFingerprints}</Label>
+              <Label className="text-xs">{t.fingerprintLabel}</Label>
               <Select value={fingerprintId} onValueChange={setFingerprintId}>
                 <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -212,7 +212,7 @@ export default function Browsers() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">{t.navProxies}</Label>
+              <Label className="text-xs">{t.proxyLabel}</Label>
               <Select value={proxyId} onValueChange={setProxyId}>
                 <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
