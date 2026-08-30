@@ -19,6 +19,7 @@ import {
 } from "../lib/browserInstances";
 import type { BrowserProviderConfig } from "../automation/browser-provider";
 import { resolveProxyType } from "../automation/proxy-manager";
+import { loadSessionProfile, saveSessionProfileState } from "../lib/browserSessionStore";
 
 const router: IRouter = Router();
 
@@ -93,19 +94,73 @@ router.post("/browsers", async (req, res): Promise<void> => {
     providerId?: number | null;
     fingerprintProfileId?: number | null;
     proxyProfileId?: number | null;
+    /** Reopen a saved session: its cookies AND the environment they were made in. */
+    sessionProfileId?: number | null;
     startUrl?: string;
   };
   try {
-    const config = await buildConfig(body);
+    // Opening a profile is not "a new browser that happens to have cookies". A session is
+    // only valid in the environment it was established in — same fingerprint, same exit IP
+    // — so the profile's own provider/fingerprint/proxy are the defaults, and the request
+    // may override them but does not have to supply them. Sending a saved session out
+    // through a different exit IP is how a working login turns into a security prompt.
+    let seed: unknown | null = null;
+    let profile: {
+      providerId: number | null;
+      fingerprintProfileId: number | null;
+      proxyProfileId: number | null;
+      originUrl: string | null;
+      name: string;
+    } | null = null;
+
+    if (body.sessionProfileId != null) {
+      const [row] = await db
+        .select({
+          name: sessionProfilesTable.name,
+          providerId: sessionProfilesTable.providerId,
+          fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
+          proxyProfileId: sessionProfilesTable.proxyProfileId,
+          originUrl: sessionProfilesTable.originUrl,
+        })
+        .from(sessionProfilesTable)
+        .where(eq(sessionProfilesTable.id, body.sessionProfileId));
+      if (!row) {
+        res.status(404).json({ error: "No such session profile" });
+        return;
+      }
+      profile = row;
+      seed = await loadSessionProfile(body.sessionProfileId);
+      if (!seed) {
+        // The row exists but holds nothing usable. Opening anyway would look like the
+        // session simply expired, which is a much harder thing to diagnose than this.
+        res.status(422).json({
+          error: `Session profile "${row.name}" has no stored session — it was saved empty, or with a backend that could not produce one.`,
+        });
+        return;
+      }
+    }
+
+    const resolved = {
+      ...body,
+      providerId: body.providerId ?? profile?.providerId ?? null,
+      fingerprintProfileId: body.fingerprintProfileId ?? profile?.fingerprintProfileId ?? null,
+      proxyProfileId: body.proxyProfileId ?? profile?.proxyProfileId ?? null,
+    };
+    const config = await buildConfig(resolved);
+    if (seed) (config as { storageState?: unknown }).storageState = seed;
+
     const inst = await launchInstance({
-      name: (body.name ?? "").trim() || "browser",
+      name: (body.name ?? "").trim() || profile?.name || "browser",
       config,
-      providerId: body.providerId ?? null,
-      fingerprintProfileId: body.fingerprintProfileId ?? null,
-      proxyProfileId: body.proxyProfileId ?? null,
-      startUrl: (body.startUrl ?? "").trim() || undefined,
+      providerId: resolved.providerId,
+      fingerprintProfileId: resolved.fingerprintProfileId,
+      proxyProfileId: resolved.proxyProfileId,
+      sessionProfileId: body.sessionProfileId ?? null,
+      // Land where the session was last used, so reopening shows the logged-in page rather
+      // than a blank tab you have to navigate yourself.
+      startUrl: (body.startUrl ?? "").trim() || profile?.originUrl || undefined,
     });
-    res.status(201).json({ id: inst.id });
+    res.status(201).json({ id: inst.id, sessionProfileId: body.sessionProfileId ?? null });
   } catch (err) {
     logger.error({ err }, "Failed to launch a browser instance");
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -146,6 +201,22 @@ router.post("/browsers/:id/save-session", async (req, res): Promise<void> => {
     return;
   }
   const name = String((req.body as { name?: string })?.name ?? "").trim();
+  // A browser opened FROM a profile updates that profile unless it is being deliberately
+  // saved under a new name. Without this, "save" on a reopened browser quietly forks a
+  // second copy every time, and the list fills with near-identical entries of which only
+  // the newest is current.
+  if (!name && inst.sessionProfileId != null) {
+    const state = await dumpInstanceSession(inst);
+    if (!state) {
+      res.status(422).json({ error: "This backend did not return a session (no storageState and no cookie jar)." });
+      return;
+    }
+    const ok = await saveSessionProfileState(inst.sessionProfileId, state);
+    res.status(ok ? 200 : 500).json(
+      ok ? { id: inst.sessionProfileId, updated: true } : { error: "Could not write the session back" },
+    );
+    return;
+  }
   if (!name) {
     res.status(400).json({ error: "name is required" });
     return;

@@ -2,6 +2,7 @@ import { createBrowserProvider, type BrowserProvider, type BrowserProviderConfig
 import type { PageAdapter } from "../automation/page-adapter";
 import { logger } from "../lib/logger";
 import { clearView } from "../lib/taskViews";
+import { saveSessionProfileState } from "../lib/browserSessionStore";
 
 /**
  * Long-lived browsers you drive by hand.
@@ -14,6 +15,17 @@ import { clearView } from "../lib/taskViews";
  *
  * Kept in memory on purpose: the instance IS the live browser. Nothing here survives a
  * restart, and it should not pretend to — the sidecar's own TTL reaps whatever is orphaned.
+ *
+ * WHAT DOES survive is the session profile it is bound to. An instance opened from a
+ * profile writes its cookies back into that profile when it closes, so closing and
+ * reopening is continuous the way a desktop browser is: the running window is disposable,
+ * the identity is not. Everything the identity needs already lives in that row — the
+ * storage state, and the provider/fingerprint/proxy the session was established in — so
+ * reopening lands in the same environment rather than merely the same cookies.
+ *
+ * The limit worth knowing: a storage state is cookies and localStorage. IndexedDB, service
+ * workers and the HTTP cache are NOT in it. Sites that keep their login in IndexedDB will
+ * still ask you to sign in again.
  */
 export interface BrowserInstance {
   id: string;
@@ -21,6 +33,8 @@ export interface BrowserInstance {
   providerId: number | null;
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
+  /** The profile this browser was opened from, and the one it saves back into on close. */
+  sessionProfileId: number | null;
   createdAt: number;
   lastUsedAt: number;
   url: string;
@@ -55,6 +69,7 @@ export async function launchInstance(opts: {
   providerId: number | null;
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
+  sessionProfileId?: number | null;
   startUrl?: string;
 }): Promise<BrowserInstance> {
   let dumper: (() => Promise<unknown>) | null = null;
@@ -85,6 +100,7 @@ export async function launchInstance(opts: {
     providerId: opts.providerId,
     fingerprintProfileId: opts.fingerprintProfileId,
     proxyProfileId: opts.proxyProfileId,
+    sessionProfileId: opts.sessionProfileId ?? null,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     url: (() => {
@@ -106,6 +122,26 @@ export async function launchInstance(opts: {
 export async function stopInstance(id: string): Promise<boolean> {
   const inst = instances.get(id);
   if (!inst) return false;
+
+  // Save BEFORE closing, and before removing it from the map: the dump goes through the
+  // live context, so there is exactly one moment when it can be taken. Closing first and
+  // saving after would silently store nothing, which is the same as losing the login.
+  if (inst.sessionProfileId != null) {
+    try {
+      const state = await dumpInstanceSession(inst);
+      if (state) {
+        await saveSessionProfileState(inst.sessionProfileId, state);
+        logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
+      } else {
+        // Deliberately NOT an error, and deliberately not destructive: a backend with no
+        // storageState and no cookie jar leaves the stored session exactly as it was.
+        logger.warn({ id }, "Nothing to save on close — the stored profile is left untouched");
+      }
+    } catch (err) {
+      logger.warn({ err, id }, "Could not save the session on close — the stored profile is unchanged");
+    }
+  }
+
   instances.delete(id);
   clearView(id);
   try {

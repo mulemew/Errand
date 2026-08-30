@@ -752,6 +752,10 @@ export interface Translations {
       sessionProfileNamePrompt: string;
       sessionProfileSaved: string;
       sessionProfiles: string;
+      openProfile: string;
+      openInNewWindow: string;
+      reopenedFromProfile: string;
+      savedBackToProfile: string;
       sessionProfilesHint: string;
       noSessionProfiles: string;
       defaultValue: string;
@@ -1486,6 +1490,10 @@ export interface Translations {
       sessionProfileNamePrompt: "给这份会话起个名字：",
       sessionProfileSaved: "会话档案已保存",
       sessionProfiles: "会话档案",
+      openProfile: "打开",
+      openInNewWindow: "在新窗口打开",
+      reopenedFromProfile: "已从会话档案打开，关闭时会自动写回",
+      savedBackToProfile: "已写回会话档案",
       sessionProfilesHint: "在登录步骤开启 Cookie 模式后就能选中：任务还没有自己的会话时，用这份档案作为起点，之后任务会保存自己的。",
       noSessionProfiles: "还没有保存过会话档案。",
       defaultValue: "默认",
@@ -2221,6 +2229,10 @@ export interface Translations {
       sessionProfileNamePrompt: "Name this session profile:",
       sessionProfileSaved: "Session profile saved",
       sessionProfiles: "Session profiles",
+      openProfile: "Open",
+      openInNewWindow: "Open in a new window",
+      reopenedFromProfile: "Opened from a saved profile — it saves back on close",
+      savedBackToProfile: "Saved back to its profile",
       sessionProfilesHint: "Selectable on a login step once cookie mode is on: while the task has no session of its own, this profile is the starting point, and the task saves its own from then on.",
       noSessionProfiles: "No session profiles saved yet.",
       defaultValue: "Default",

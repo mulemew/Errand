@@ -151,6 +151,36 @@ export default function Browsers() {
     }
   };
 
+  /**
+   * Reopen a saved profile as a running browser.
+   *
+   * Only the id is sent. The server resolves the provider, fingerprint and proxy from the
+   * profile itself, because a session is only valid in the environment it was made in —
+   * sending saved cookies out through a different exit IP turns a working login into a
+   * security prompt. It also lands on the page the session was last used on, so what you
+   * get is the logged-in site rather than a blank tab.
+   */
+  const openProfile = async (sessionProfileId: number) => {
+    try {
+      const r = await fetch(`${BASE}/api/browsers`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionProfileId }),
+      });
+      const data = (await r.json()) as { id?: string; error?: string };
+      if (!r.ok || !data.id) {
+        toast({ title: t.browserLaunchFailed, description: data.error, variant: "destructive" });
+        return;
+      }
+      toast({ title: t.reopenedFromProfile, variant: "success" });
+      load();
+      setViewing({ id: data.id, name: "" } as never);
+    } catch (err) {
+      toast({ title: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    }
+  };
+
   const deleteProfile = async (id: number) => {
     await fetch(`${BASE}/api/session-profiles/${id}`, { method: "DELETE", credentials: "same-origin" });
     load();
@@ -283,6 +313,10 @@ export default function Browsers() {
                     {refName(providers, p.providerId)} · {refName(fingerprints, p.fingerprintProfileId)} · {refName(proxies, p.proxyProfileId)}
                   </p>
                 </div>
+                <Button variant="outline" size="sm" className="h-7 text-xs shrink-0"
+                  onClick={() => void openProfile(p.id)}>
+                  {t.openProfile}
+                </Button>
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive"
                   onClick={() => void deleteProfile(p.id)}>
                   <Trash2 className="h-4 w-4" />
@@ -298,7 +332,26 @@ export default function Browsers() {
           without stopping it. */}
       <Dialog open={viewing !== null} onOpenChange={(o) => !o && setViewing(null)}>
         <DialogContent className="max-w-6xl w-full p-2">
-          <p className="text-xs text-muted-foreground px-1 pb-2">{t.liveViewHint}</p>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-2">
+            <p className="text-xs text-muted-foreground">{t.liveViewHint}</p>
+            {viewing && (
+              // A real window, not an iframe: KasmVNC's clipboard and file transfer want
+              // the focus and the permissions of a top-level document, and a browser you
+              // are actually using should not be trapped in a modal the size of a card.
+              <Button
+                variant="outline" size="sm" className="h-7 text-xs shrink-0"
+                onClick={() =>
+                  window.open(
+                    `${BASE}/api/live-view/${viewing.id}/`,
+                    `liveview-${viewing.id}`,
+                    "noopener,width=1280,height=800",
+                  )
+                }
+              >
+                {t.openInNewWindow}
+              </Button>
+            )}
+          </div>
           {viewing && (
             <iframe
               // THIS instance's own display. Asking for the provider showed the sidecar's

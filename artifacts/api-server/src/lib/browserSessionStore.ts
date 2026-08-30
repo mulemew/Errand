@@ -110,6 +110,29 @@ export function taskUsesCookieMode(steps: unknown): {
  * either. Kept separate because the two answer different questions: a task's session is
  * "what this task last logged in as", a profile is "an identity you prepared deliberately".
  */
+/**
+ * Write a session back into the profile it came from.
+ *
+ * The other half of loadSessionProfile, and what makes a saved profile behave like a
+ * browser you closed rather than a snapshot you took once: open it, log in, do whatever a
+ * site needs, close it — and the cookies you ended up with are the ones you get next time.
+ *
+ * Only ever called with a state that was actually dumped; a failed dump leaves the stored
+ * one alone rather than replacing a working session with nothing.
+ */
+export async function saveSessionProfileState(id: number, state: unknown): Promise<boolean> {
+  try {
+    await db
+      .update(sessionProfilesTable)
+      .set({ storageState: { enc: encrypt(JSON.stringify(state)) }, updatedAt: new Date() })
+      .where(eq(sessionProfilesTable.id, id));
+    return true;
+  } catch (err) {
+    logger.warn({ err, id }, "Could not write the session back to its profile");
+    return false;
+  }
+}
+
 export async function loadSessionProfile(id: number): Promise<unknown | null> {
   try {
     const [row] = await db.select().from(sessionProfilesTable).where(eq(sessionProfilesTable.id, id));
