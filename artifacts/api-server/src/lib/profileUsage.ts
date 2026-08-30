@@ -17,6 +17,8 @@ export interface UsageMaps {
   provider: Map<number, TaskRef[]>;
   fingerprint: Map<number, TaskRef[]>;
   proxy: Map<number, TaskRef[]>;
+  /** Saved credentials, which are referenced by a login STEP rather than browserConfig. */
+  credential: Map<number, TaskRef[]>;
 }
 
 type TaskBrowserConfig = {
@@ -26,7 +28,12 @@ type TaskBrowserConfig = {
 } | null;
 
 export async function loadUsageMaps(): Promise<UsageMaps> {
-  const maps: UsageMaps = { provider: new Map(), fingerprint: new Map(), proxy: new Map() };
+  const maps: UsageMaps = {
+    provider: new Map(),
+    fingerprint: new Map(),
+    proxy: new Map(),
+    credential: new Map(),
+  };
   const add = (map: Map<number, TaskRef[]>, id: unknown, task: TaskRef) => {
     const key = Number(id);
     if (!Number.isFinite(key) || key <= 0) return;
@@ -37,16 +44,34 @@ export async function loadUsageMaps(): Promise<UsageMaps> {
 
   try {
     const rows = await db
-      .select({ id: tasksTable.id, name: tasksTable.name, browserConfig: tasksTable.browserConfig })
+      .select({
+        id: tasksTable.id,
+        name: tasksTable.name,
+        browserConfig: tasksTable.browserConfig,
+        steps: tasksTable.steps,
+      })
       .from(tasksTable)
       .orderBy(tasksTable.name);
     for (const row of rows) {
-      const bc = row.browserConfig as TaskBrowserConfig;
-      if (!bc) continue;
       const task: TaskRef = { id: row.id, name: row.name };
-      add(maps.provider, bc.providerId, task);
-      add(maps.fingerprint, bc.fingerprintProfileId, task);
-      add(maps.proxy, bc.proxyProfileId, task);
+      const bc = row.browserConfig as TaskBrowserConfig;
+      if (bc) {
+        add(maps.provider, bc.providerId, task);
+        add(maps.fingerprint, bc.fingerprintProfileId, task);
+        add(maps.proxy, bc.proxyProfileId, task);
+      }
+      // A task can reference several credentials — one per login step — so each is counted
+      // once per task, not once per step.
+      const steps = row.steps as Array<Record<string, unknown>> | null;
+      if (Array.isArray(steps)) {
+        const seen = new Set<number>();
+        for (const st of steps) {
+          const cid = Number(st?.credentialId);
+          if (!Number.isFinite(cid) || cid <= 0 || seen.has(cid)) continue;
+          seen.add(cid);
+          add(maps.credential, cid, task);
+        }
+      }
     }
   } catch {
     // Usage is decoration: a failure here must never stop the list itself rendering.

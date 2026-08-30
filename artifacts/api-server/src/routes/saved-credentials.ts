@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { loadUsageMaps } from "../lib/profileUsage";
   import { db, savedCredentialsTable, eq } from "@workspace/db";
   import { encrypt, decrypt } from "../lib/encryption";
 import { normalizeTotpSecret } from "../lib/totp";
@@ -32,7 +33,8 @@ import { normalizeTotpSecret } from "../lib/totp";
       })
       .from(savedCredentialsTable)
       .orderBy(savedCredentialsTable.name);
-    res.json(rows);
+    const usage = await loadUsageMaps();
+    res.json(rows.map((r) => ({ ...r, usedBy: usage.credential.get(r.id) ?? [] })));
   });
 
   router.post("/saved-credentials", async (req, res): Promise<void> => {

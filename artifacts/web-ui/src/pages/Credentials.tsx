@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { UsedByTasks, type TaskRef } from "@/components/UsedByTasks";
   import { KeyRound, Plus, Trash2, Pencil, Eye, EyeOff, ShieldCheck, Loader2 } from "lucide-react";
   import { Button } from "@/components/ui/button";
   import { Input } from "@/components/ui/input";
@@ -17,6 +18,8 @@ import { useState, useEffect } from "react";
     username: string;
     createdAt: string;
     updatedAt: string;
+    /** Tasks whose login step references this credential. */
+    usedBy?: TaskRef[];
   }
 
   interface CredentialForm {
@@ -211,6 +214,7 @@ import { useState, useEffect } from "react";
                       TOTP: <span className="text-foreground select-all">{revealData.totpSecret}</span>
                     </div>
                   )}
+                  <UsedByTasks tasks={c.usedBy} />
                 </CardContent>
               </Card>
             ))}
@@ -276,7 +280,21 @@ import { useState, useEffect } from "react";
           <AlertDialogContent className="bg-background border-border">
             <AlertDialogHeader>
               <AlertDialogTitle>{t.confirmDeleteCred}</AlertDialogTitle>
-              <AlertDialogDescription>{t.confirmDeleteCredDesc}</AlertDialogDescription>
+              <AlertDialogDescription>
+                {t.confirmDeleteCredDesc}
+                {(() => {
+                  const used = credentials.find((c) => c.id === deleteId)?.usedBy ?? [];
+                  if (used.length === 0) return null;
+                  return (
+                    <span className="mt-2 block text-amber-600 dark:text-amber-400">
+                      {t.deleteInUseWarning}
+                      <span className="mt-1 block max-h-40 overflow-y-auto font-mono text-xs">
+                        {used.map((x) => x.name).join(", ")}
+                      </span>
+                    </span>
+                  );
+                })()}
+              </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>{t.cancel}</AlertDialogCancel>
