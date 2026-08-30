@@ -17,7 +17,11 @@
 FROM --platform=$BUILDPLATFORM node:20-bookworm AS deps
 
 WORKDIR /workspace
-RUN npm install -g pnpm
+# Pinned to the same major the workflow's typecheck job installs. Unpinned, this took
+# whatever npm called latest, and pnpm 12 stopped honouring the workspace's
+# onlyBuiltDependencies — the image then failed to build on a commit that touched no
+# dependency at all.
+RUN npm install -g pnpm@10
 
 # Manifests only (plus lib/, whose sources both builders need anyway) so that a
 # code change does not invalidate the install layer.

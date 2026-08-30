@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
   && rm -rf /var/lib/apt/lists/*
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm (same major as the Dockerfile and CI)
+RUN npm install -g pnpm@10
 
 # Point Puppeteer to system Chromium (skip bundled download)
 ENV PUPPETEER_SKIP_DOWNLOAD=true
