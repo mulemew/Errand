@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Monitor, Plus, Square, Loader2, Save, Trash2, Globe } from "lucide-react";
+import { Monitor, Plus, Square, Loader2, Trash2, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -128,28 +128,6 @@ export default function Browsers() {
     }
   };
 
-  const saveSession = async (inst: Instance) => {
-    const profileName = window.prompt(t.sessionProfileNamePrompt, inst.name);
-    if (!profileName?.trim()) return;
-    setBusyId(inst.id);
-    try {
-      const res = await fetch(`${BASE}/api/browsers/${inst.id}/save-session`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: profileName.trim() }),
-      });
-      const data = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        toast({ title: t.saveFailed, description: data.error, variant: "destructive" });
-        return;
-      }
-      toast({ title: t.sessionProfileSaved, variant: "success" });
-      load();
-    } finally {
-      setBusyId(null);
-    }
-  };
 
   /**
    * Reopen a saved profile as a running browser.
@@ -280,11 +258,7 @@ export default function Browsers() {
                     <Globe className="h-4 w-4" />
                   </Button>
                 )}
-                <Button variant="ghost" size="icon" className="h-7 w-7" title={t.saveAsSessionProfile}
-                  onClick={() => void saveSession(inst)} disabled={busyId === inst.id}>
-                  <Save className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title={t.stopBrowser}
+                <Button variant="ghost" size="icon" className="h-7 w-7" title={t.stopBrowser}
                   onClick={() => void stop(inst.id)} disabled={busyId === inst.id}>
                   <Square className="h-4 w-4" />
                 </Button>
@@ -294,7 +268,7 @@ export default function Browsers() {
         </CardContent>
       </Card>
 
-      {/* ── Saved sessions ── */}
+      {/* ── Closed browsers: kept, reopenable ── */}
       <Card className="border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm">{t.sessionProfiles}</CardTitle>

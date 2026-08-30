@@ -120,6 +120,34 @@ export function taskUsesCookieMode(steps: unknown): {
  * Only ever called with a state that was actually dumped; a failed dump leaves the stored
  * one alone rather than replacing a working session with nothing.
  */
+/** Create a profile from a running browser, so a closed one can be opened again. */
+export async function createSessionProfile(opts: {
+  name: string;
+  state: unknown;
+  providerId: number | null;
+  fingerprintProfileId: number | null;
+  proxyProfileId: number | null;
+  originUrl: string | null;
+}): Promise<number | null> {
+  try {
+    const [row] = await db
+      .insert(sessionProfilesTable)
+      .values({
+        name: opts.name,
+        storageState: { enc: encrypt(JSON.stringify(opts.state)) },
+        providerId: opts.providerId,
+        fingerprintProfileId: opts.fingerprintProfileId,
+        proxyProfileId: opts.proxyProfileId,
+        originUrl: opts.originUrl,
+      })
+      .returning({ id: sessionProfilesTable.id });
+    return row?.id ?? null;
+  } catch (err) {
+    logger.warn({ err, name: opts.name }, "Could not save the closed browser as a profile");
+    return null;
+  }
+}
+
 export async function saveSessionProfileState(id: number, state: unknown): Promise<boolean> {
   try {
     await db

@@ -2,7 +2,7 @@ import { createBrowserProvider, type BrowserProvider, type BrowserProviderConfig
 import type { PageAdapter } from "../automation/page-adapter";
 import { logger } from "../lib/logger";
 import { clearView } from "../lib/taskViews";
-import { saveSessionProfileState } from "../lib/browserSessionStore";
+import { saveSessionProfileState, createSessionProfile } from "../lib/browserSessionStore";
 
 /**
  * Long-lived browsers you drive by hand.
@@ -122,27 +122,42 @@ export async function stopInstance(id: string): Promise<boolean> {
   const inst = instances.get(id);
   if (!inst) return false;
 
-  // Save BEFORE closing: the dump goes through the live context, so closing first would
-  // silently store nothing.
-  if (inst.sessionProfileId != null) {
-    try {
-      // Bounded: the dump talks to the browser over the websocket, and an unresponsive one
-      // would otherwise hold the close open forever — including stopAllInstances on
-      // shutdown. Losing one save is recoverable; a shutdown that never finishes is not.
-      const state = await Promise.race([
-        dumpInstanceSession(inst),
-        new Promise<null>((r) => setTimeout(() => r(null), SESSION_DUMP_TIMEOUT_MS)),
-      ]);
-      if (state) {
-        await saveSessionProfileState(inst.sessionProfileId, state);
-        logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
-      } else {
-        // Not destructive: a failed dump leaves the stored session as it was.
-        logger.warn({ id }, "Nothing to save on close — the stored profile is left untouched");
-      }
-    } catch (err) {
-      logger.warn({ err, id }, "Could not save the session on close — the stored profile is unchanged");
+  // Closing KEEPS the browser: one opened from a profile writes back into it, one created
+  // from scratch becomes a profile. Deleting the profile is what destroys it.
+  //
+  // The dump must happen before the context closes, and is bounded — an unresponsive
+  // browser would otherwise hold the close open, including stopAllInstances on shutdown.
+  try {
+    const state = await Promise.race([
+      dumpInstanceSession(inst),
+      new Promise<null>((r) => setTimeout(() => r(null), SESSION_DUMP_TIMEOUT_MS)),
+    ]);
+    if (!state) {
+      // Not destructive: a failed dump leaves an existing profile as it was, and does not
+      // create an empty one that would look like a session that expired.
+      logger.warn({ id }, "Nothing to save on close");
+    } else if (inst.sessionProfileId != null) {
+      await saveSessionProfileState(inst.sessionProfileId, state);
+      logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
+    } else {
+      const newId = await createSessionProfile({
+        name: inst.name,
+        state,
+        providerId: inst.providerId,
+        fingerprintProfileId: inst.fingerprintProfileId,
+        proxyProfileId: inst.proxyProfileId,
+        originUrl: (() => {
+          try {
+            return inst.page.url();
+          } catch {
+            return null;
+          }
+        })(),
+      });
+      if (newId != null) logger.info({ id, sessionProfileId: newId }, "Closed browser saved so it can be reopened");
     }
+  } catch (err) {
+    logger.warn({ err, id }, "Could not save the session on close");
   }
 
   instances.delete(id);
