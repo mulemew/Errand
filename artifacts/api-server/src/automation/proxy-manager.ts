@@ -786,23 +786,12 @@ async function parseWarp(): Promise<Record<string, unknown>> {
 }
 
 /**
- * `https://host:port` — an HTTP proxy you reach over TLS.
+ * `https://host:port` — an HTTP proxy reached over TLS.
  *
- * This does NOT go to the browser. Firefox accepts the setting and then refuses the
- * connection with SSL_ERROR_UNKNOWN, because these proxies almost universally present a
- * self-signed certificate (the one this was written for identifies itself as "Zoraxy
- * Self-host") and there is no per-proxy exception to make: Firefox validates the proxy's
- * certificate against the same store as any site, and the only switches that would let it
- * through are global ones. Turning off certificate validation so that a proxy works would
- * also turn it off for every site the browser then visits, which is a far worse trade than
- * the problem being solved.
- *
- * So sing-box terminates that TLS instead and offers the browser an ordinary local SOCKS5.
- * `insecure` applies to exactly one hop — this process to the proxy — and the browser's own
- * validation of the sites it visits is untouched.
- *
- * Anti-detect browsers make the other choice, which is why one of them will open a page
- * through a proxy like this and we would not. It is not a capability they have and we lack.
+ * Never handed to the browser: these proxies are usually self-signed, Firefox refuses them
+ * with SSL_ERROR_UNKNOWN, and the only switches that would let one through are global —
+ * they would disable certificate checks for every site too. sing-box terminates that TLS
+ * instead, so `insecure` covers exactly one hop and the browser's own validation is intact.
  */
 function parseHttpsProxy(link: string): Record<string, unknown> {
   const u = new URL(link.trim());

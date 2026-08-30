@@ -44,12 +44,8 @@ export interface ConditionalAction {
 }
 
 /**
- * What a branch runs: one action, or several in order.
- *
- * BOTH SHAPES ARE ACCEPTED FOREVER. Every task already in the database stores a single
- * object here, and a config format that needs a migration to keep working is a config
- * format that breaks production on the day it ships. `asActionList` normalises the two at
- * the point of use; nothing is ever rewritten on disk.
+ * What a branch runs: one action, or several in order. Both shapes stay valid — every task
+ * in the database stores a single object, and nothing is ever rewritten on disk.
  */
 export type BranchAction = ConditionalAction | ConditionalAction[];
 
@@ -60,12 +56,8 @@ function asActionList(a: BranchAction | undefined): ConditionalAction[] {
 }
 
 /**
- * How deep if/else nesting may go.
- *
- * A cycle is not actually reachable — steps are JSON, JSON is a tree, and a tree cannot
- * contain itself — so this is not cycle protection. It is protection against a config
- * nested far enough to exhaust the stack, and a bound on how much work one step can
- * quietly turn into. Ten is far past anything a person will build by hand.
+ * How deep if/else nesting may go. Not cycle protection — steps are JSON and cannot contain
+ * themselves — but a bound on stack depth and on how much work one step becomes.
  */
 const MAX_CONDITION_DEPTH = 10;
 
@@ -82,10 +74,8 @@ type ConditionMode = "visible" | "usable";
 /**
  * The in-page half of condition matching: XPath, CSS over all matches, and exact text.
  *
- * Deliberately NOT the whole story — see probeCondition. This runs inside the page, so it
- * only knows standard DOM selectors. `page.$()` goes through Playwright's engine instead,
- * which understands extensions like `:has-text("…")` that `document.querySelectorAll`
- * rejects outright. A production task depends on exactly that.
+ * Only standard DOM selectors — Playwright extensions like `:has-text()` throw here, which
+ * is why probeCondition tries page.$() first.
  */
 const IN_PAGE_PROBE = (arg: unknown) => {
   const { sel, kind } = arg as { sel: string; kind: string };
@@ -134,8 +124,8 @@ const IN_PAGE_PROBE = (arg: unknown) => {
   } else if (kind === "css") {
     hits = byCss(); how = "css";
   } else {
-    // "Valid CSS" is NOT enough to decide: `Pause` parses fine as a type selector for a
-    // <pause> element, it just never matches anything. CSS wins only if it MATCHES.
+    // "Parses as CSS" is not enough: `Pause` is a valid type selector that matches nothing.
+    // CSS wins only if it actually matches.
     hits = byCss(); how = "css";
     if (!hits.length) { hits = byText(); how = hits.length ? "text" : "css"; }
   }
@@ -162,39 +152,18 @@ const ONE_ELEMENT_PROBE = (el: Element) => {
 /**
  * Answer an element condition, keeping every path that already worked.
  *
- * STRICTLY ADDITIVE, and that is the entire design constraint. Each condition keeps the
- * mechanism it has always used as its FIRST attempt, so a configuration that works today
- * takes the identical route to the identical answer. The new XPath and text handling only
- * ever runs where the old mechanism found nothing — which is where the old behaviour was
- * to report "no such element" regardless.
+ * Strictly additive: each condition keeps its original mechanism as the FIRST attempt, so
+ * anything working today takes the identical route to the identical answer. XPath and text
+ * handling only run where the old code already found nothing.
  *
- * What each one used to do, and therefore still does first:
+ *   visible  page.$(sel) — Playwright's engine, first match. That engine is what makes
+ *            `button:has-text(…)` work; running the same string in-page would throw.
+ *   usable   querySelectorAll in-page, ANY match — first-match would answer differently
+ *            when the first hit is disabled and a later one is not.
  *
- *   visible  page.$(sel) — Playwright's selector engine, first match. That engine is why
- *            `button:has-text("Renew")` works, and task 51 in production depends on it.
- *            Running the same string inside the page would throw and silently answer "not
- *            visible".
- *   usable   querySelectorAll inside the page, ANY match. First-match would give a
- *            different answer on a page where the first match is disabled and a later one
- *            is not.
- *
- * What the old visible path actually could not do, measured against a live camoufox
- * session rather than assumed:
- *
- *     page.$('button:has-text("Pause")')  -> FOUND      (Playwright extension)
- *     page.$('//button[@id="b"]')         -> FOUND      (bare XPath, auto-detected)
- *     page.$('text=Pause')                -> FOUND
- *     page.$('Pause')                     -> null       <- the real gap
- *
- * So XPath was never the broken case on this backend, whatever the shape of the bug
- * report: Playwright detects a leading "//" by itself. PLAIN TEXT is what silently
- * failed — element_visible with `연장하기` returned null and answered "not visible",
- * while element_clickable with the same string worked, because only that one had a text
- * fallback. The seleniumbase backend is the one where XPath genuinely fails, since its
- * page.$ goes to Selenium and only speaks CSS; the in-page XPath branch below covers it.
- *
- * No task in production stores an XPath in a condition today (checked), so none of this
- * changes an existing run.
+ * On the Playwright backend a bare XPath already worked (it auto-detects a leading "//");
+ * plain text is what silently returned "not visible". Selenium is the backend where XPath
+ * genuinely fails, and the in-page branch below covers it.
  */
 async function probeCondition(
   page: PageAdapter,
@@ -317,21 +286,11 @@ export class TaskExitError extends Error {
 }
 
 /**
- * Upper bound on a wait step. Seven days, not sixty seconds.
+ * Upper bound on a wait step. The old 60s cap clamped silently, so a wait step could not do
+ * the one thing it exists for. The lockup it guarded against is handled by slicing the wait
+ * below instead. Seven days also keeps clear of setTimeout's ~24.8-day ceiling.
  *
- * The old cap silently clamped every wait to 60s "to prevent runner lockup", which made the
- * one thing a wait step is for — parking on a page for hours while something on the far end
- * finishes — quietly impossible: the step reported success, having waited a minute.
- *
- * The lockup it feared is handled properly below instead: the wait is served in short
- * slices and gives up the moment the run is cancelled or times out, so a multi-hour wait is
- * no less interruptible than a one-second one. The bound that remains is a sanity limit,
- * and it also keeps us clear of setTimeout's ~24.8-day ceiling, past which a timer fires
- * immediately instead of late.
- *
- * NOTE for anyone parking a task for hours: the TASK TIMEOUT still applies on top of this
- * (Settings → 30 min by default; 0 disables it). A long wait under a short task timeout is
- * killed by the timeout, not by this.
+ * The TASK TIMEOUT still applies on top (Settings, 30 min by default; 0 disables it).
  */
 const MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -339,12 +298,9 @@ const MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
 const WAIT_SLICE_MS = 1_000;
 
 /**
- * The runner's "should this stop?" predicate, published for the wait step.
- *
- * executeWorkflowSteps already polls it BETWEEN steps, which is enough for steps that
- * finish quickly and useless for one that is deliberately parked for six hours. Rather than
- * thread the callback through executeStep and every one of its call sites, the loop stashes
- * it here for the duration of the run.
+ * The runner's "should this stop?" predicate, published for the wait step. The loop polls it
+ * between steps; a wait parked for hours has to poll it itself. Stashed here rather than
+ * threaded through executeStep and every call site.
  */
 let _shouldCancelHook: (() => boolean) | undefined;
 

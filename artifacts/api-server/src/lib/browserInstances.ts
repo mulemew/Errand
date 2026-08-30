@@ -16,16 +16,12 @@ import { saveSessionProfileState } from "../lib/browserSessionStore";
  * Kept in memory on purpose: the instance IS the live browser. Nothing here survives a
  * restart, and it should not pretend to — the sidecar's own TTL reaps whatever is orphaned.
  *
- * WHAT DOES survive is the session profile it is bound to. An instance opened from a
- * profile writes its cookies back into that profile when it closes, so closing and
- * reopening is continuous the way a desktop browser is: the running window is disposable,
- * the identity is not. Everything the identity needs already lives in that row — the
- * storage state, and the provider/fingerprint/proxy the session was established in — so
+ * The session profile it is bound to DOES survive: an instance opened from one writes its
+ * cookies back on close, and the row also carries the provider/fingerprint/proxy, so
  * reopening lands in the same environment rather than merely the same cookies.
  *
- * The limit worth knowing: a storage state is cookies and localStorage. IndexedDB, service
- * workers and the HTTP cache are NOT in it. Sites that keep their login in IndexedDB will
- * still ask you to sign in again.
+ * Limit: a storage state is cookies and localStorage only. Sites keeping their login in
+ * IndexedDB will ask you to sign in again.
  */
 export interface BrowserInstance {
   id: string;
@@ -43,6 +39,9 @@ export interface BrowserInstance {
   /** Playwright storageState dumper, when the backend supports one. */
   dumpStorageState: (() => Promise<unknown>) | null;
 }
+
+/** How long a session dump may take before the close gives up on it. */
+const SESSION_DUMP_TIMEOUT_MS = 15_000;
 
 const instances = new Map<string, BrowserInstance>();
 
@@ -123,18 +122,22 @@ export async function stopInstance(id: string): Promise<boolean> {
   const inst = instances.get(id);
   if (!inst) return false;
 
-  // Save BEFORE closing, and before removing it from the map: the dump goes through the
-  // live context, so there is exactly one moment when it can be taken. Closing first and
-  // saving after would silently store nothing, which is the same as losing the login.
+  // Save BEFORE closing: the dump goes through the live context, so closing first would
+  // silently store nothing.
   if (inst.sessionProfileId != null) {
     try {
-      const state = await dumpInstanceSession(inst);
+      // Bounded: the dump talks to the browser over the websocket, and an unresponsive one
+      // would otherwise hold the close open forever — including stopAllInstances on
+      // shutdown. Losing one save is recoverable; a shutdown that never finishes is not.
+      const state = await Promise.race([
+        dumpInstanceSession(inst),
+        new Promise<null>((r) => setTimeout(() => r(null), SESSION_DUMP_TIMEOUT_MS)),
+      ]);
       if (state) {
         await saveSessionProfileState(inst.sessionProfileId, state);
         logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
       } else {
-        // Deliberately NOT an error, and deliberately not destructive: a backend with no
-        // storageState and no cookie jar leaves the stored session exactly as it was.
+        // Not destructive: a failed dump leaves the stored session as it was.
         logger.warn({ id }, "Nothing to save on close — the stored profile is left untouched");
       }
     } catch (err) {

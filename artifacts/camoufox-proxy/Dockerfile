@@ -7,23 +7,10 @@ FROM python:3.11-slim-bookworm
 # on the checkbox, the press is delivered to the widget's host, and the box never reacts.
 # OS-level input is what the SeleniumBase sidecar has always used to clear the same widget
 # (uc_gui_click_captcha), and it became possible here once every session got its own Xvfb.
-# KasmVNC replaces the Xvfb + x11vnc + websockify trio with ONE process (Xvnc), which is
-# an X server, a VNC server and a web server at once. Three reasons, in order of how much
-# they cost us:
-#
-#  1. x11vnc leaked 62 SysV shared-memory segments per instance because it was SIGKILLed on
-#     teardown, and `kernel.shmmni` is 4096 — about 66 sessions before shmget started
-#     failing for EVERY new x11vnc. It then died on startup while Xvfb and websockify came
-#     up fine, leaving a view that connects, completes the WebSocket upgrade, and shows a
-#     blank screen forever with no error anywhere. Removing x11vnc removes that failure
-#     mode rather than managing it.
-#  2. Clipboard, and file upload/download into the session, which noVNC-over-x11vnc cannot
-#     do. (Seamless clipboard needs a Chromium-based CLIENT browser — Chrome, Edge. Firefox
-#     users get the manual clipboard panel.)
-#  3. One process per display instead of three, so teardown has one thing to get right.
-#
-# Pinned rather than "latest": this is the one piece of the image whose behaviour the live
-# view depends on completely, and a silent major bump would be found by a black screen.
+# KasmVNC's Xvnc is the X server, VNC server and web server in one, replacing
+# Xvfb + x11vnc + websockify. It also brings clipboard and file transfer, which
+# noVNC-over-x11vnc cannot do. (Seamless clipboard needs a Chromium-based client browser.)
+# Pinned: a silent major bump here would show up as a black live view.
 ARG KASMVNC_VERSION=1.5.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb xdotool ca-certificates curl \
@@ -37,8 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get install -y --no-install-recommends /tmp/kasmvnc.deb \
   && rm -f /tmp/kasmvnc.deb \
   && rm -rf /var/lib/apt/lists/* \
-  # Fail the BUILD, not the first live view. An image that starts fine and only reveals at
-  # runtime that it cannot serve a screen is the failure this check exists to prevent.
+  # Fail the build, not the first live view.
   && command -v Xvnc && command -v xdotool && command -v Xvfb
 
 # Run as a NON-ROOT user (uid 1000, matching the cf-proxy sidecar so host-side ownership
@@ -71,11 +57,10 @@ ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
 ENV PORT=7318
 EXPOSE 7318
-# Live view, served by KasmVNC itself (see entrypoint.sh). One port per display: the
-# container-wide one here, and one per session allocated from CAMOUFOX_VIEW_PORT_BASE.
+# One view port per display: this container-wide one, plus one per session from
+# CAMOUFOX_VIEW_PORT_BASE. Downloads live in the browser's own home so "Save as…" lands
+# somewhere the viewer can reach.
 ENV VNC_PORT=7900
-# Where KasmVNC puts files a user uploads into the session, and picks up downloads from.
-# Inside the browser's own home so a page's "Save as…" lands somewhere the viewer can see.
 ENV KASM_DOWNLOAD_DIR=/home/app/Downloads
 EXPOSE 7900
 
