@@ -845,7 +845,12 @@ components:
           description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
         proxyType:
           type: ["string", "null"]
-          enum: [http, socks5, warp, vless, vmess, trojan, hy2, tuic, ss]
+          enum: [http, socks5, httpsProxy, warp, vless, vmess, trojan, hy2, tuic, ss]
+          description: >-
+            httpsProxy is an HTTP proxy reached over TLS (https://host:port). It is a
+            separate type because it cannot be handed to the browser: these proxies
+            almost always present a self-signed certificate and Firefox refuses them,
+            so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.
         warpRotations:
           type: ["integer", "null"]
           description: >

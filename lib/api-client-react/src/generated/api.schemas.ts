@@ -441,6 +441,7 @@ export const TaskBrowserConfigProvider = {
 } as const;
 
 /**
+ * httpsProxy is an HTTP proxy reached over TLS (https://host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.
  * @nullable
  */
 export type TaskBrowserConfigProxyType =
@@ -450,6 +451,7 @@ export type TaskBrowserConfigProxyType =
 export const TaskBrowserConfigProxyType = {
   http: "http",
   socks5: "socks5",
+  httpsProxy: "httpsProxy",
   warp: "warp",
   vless: "vless",
   vmess: "vmess",
@@ -511,7 +513,10 @@ seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
    * @nullable
    */
   proxyUrl?: string | null;
-  /** @nullable */
+  /**
+   * httpsProxy is an HTTP proxy reached over TLS (https://host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.
+   * @nullable
+   */
   proxyType?: TaskBrowserConfigProxyType;
   /**
    * WARP only. How many times to register a fresh WARP identity (new exit IP) and retry when Google refuses the reCAPTCHA audio challenge for the current IP. sing-box restarts on the same local SOCKS port, so the browser is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.

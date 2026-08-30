@@ -346,6 +346,7 @@ export const ListTasksResponseItem = zod.object({
             .enum([
               "http",
               "socks5",
+              "httpsProxy",
               "warp",
               "vless",
               "vmess",
@@ -354,7 +355,10 @@ export const ListTasksResponseItem = zod.object({
               "tuic",
               "ss",
             ])
-            .nullish(),
+            .nullish()
+            .describe(
+              "httpsProxy is an HTTP proxy reached over TLS (https:\/\/host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.",
+            ),
           warpRotations: zod
             .number()
             .nullish()
@@ -683,6 +687,7 @@ export const CreateTaskBody = zod.object({
             .enum([
               "http",
               "socks5",
+              "httpsProxy",
               "warp",
               "vless",
               "vmess",
@@ -691,7 +696,10 @@ export const CreateTaskBody = zod.object({
               "tuic",
               "ss",
             ])
-            .nullish(),
+            .nullish()
+            .describe(
+              "httpsProxy is an HTTP proxy reached over TLS (https:\/\/host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.",
+            ),
           warpRotations: zod
             .number()
             .nullish()
@@ -1052,6 +1060,7 @@ export const GetTaskResponse = zod
               .enum([
                 "http",
                 "socks5",
+                "httpsProxy",
                 "warp",
                 "vless",
                 "vmess",
@@ -1060,7 +1069,10 @@ export const GetTaskResponse = zod
                 "tuic",
                 "ss",
               ])
-              .nullish(),
+              .nullish()
+              .describe(
+                "httpsProxy is an HTTP proxy reached over TLS (https:\/\/host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.",
+              ),
             warpRotations: zod
               .number()
               .nullish()
@@ -1406,6 +1418,7 @@ export const UpdateTaskBody = zod.object({
             .enum([
               "http",
               "socks5",
+              "httpsProxy",
               "warp",
               "vless",
               "vmess",
@@ -1414,7 +1427,10 @@ export const UpdateTaskBody = zod.object({
               "tuic",
               "ss",
             ])
-            .nullish(),
+            .nullish()
+            .describe(
+              "httpsProxy is an HTTP proxy reached over TLS (https:\/\/host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.",
+            ),
           warpRotations: zod
             .number()
             .nullish()
@@ -1756,6 +1772,7 @@ export const UpdateTaskResponse = zod.object({
             .enum([
               "http",
               "socks5",
+              "httpsProxy",
               "warp",
               "vless",
               "vmess",
@@ -1764,7 +1781,10 @@ export const UpdateTaskResponse = zod.object({
               "tuic",
               "ss",
             ])
-            .nullish(),
+            .nullish()
+            .describe(
+              "httpsProxy is an HTTP proxy reached over TLS (https:\/\/host:port). It is a separate type because it cannot be handed to the browser: these proxies almost always present a self-signed certificate and Firefox refuses them, so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.",
+            ),
           warpRotations: zod
             .number()
             .nullish()

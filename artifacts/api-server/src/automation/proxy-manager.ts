@@ -48,6 +48,8 @@ import { trackChild } from "../lib/child-registry";
 export type ProxyType =
   | "http"
   | "socks5"
+  /** An HTTP proxy reached over TLS — `https://host:port`. Needs the sing-box helper. */
+  | "httpsProxy"
   | "warp"
   | "vless"
   | "vmess"
@@ -144,6 +146,7 @@ export interface ResolvedProxy {
 }
 
 const SINGBOX_PROTOCOLS: ProxyType[] = [
+  "httpsProxy",
   "warp",
   "vless",
   "vmess",
@@ -216,6 +219,9 @@ export function resolveProxyType(cfg: ProxyConfig): ProxyType | null {
   // not a claim about the wire version — normalizeProxyUrl preserves socks4/socks4a in
   // the URL that the browser actually receives.
   if (/^socks(4a|4|5h|5)?:\/\//i.test(url)) return "socks5";
+  // An HTTPS proxy is an HTTP proxy you reach over TLS, and it is NOT the passthrough case:
+  // see startLocalProxy. Checked before the http branch, which would otherwise swallow it.
+  if (/^https:\/\//i.test(url)) return "httpsProxy";
   if (/^https?:\/\//i.test(url)) return "http";
   if (/^vless:\/\//i.test(url)) return "vless";
   if (/^vmess:\/\//i.test(url)) return "vmess";
@@ -779,6 +785,45 @@ async function parseWarp(): Promise<Record<string, unknown>> {
   return refreshWarpIdentity();
 }
 
+/**
+ * `https://host:port` — an HTTP proxy you reach over TLS.
+ *
+ * This does NOT go to the browser. Firefox accepts the setting and then refuses the
+ * connection with SSL_ERROR_UNKNOWN, because these proxies almost universally present a
+ * self-signed certificate (the one this was written for identifies itself as "Zoraxy
+ * Self-host") and there is no per-proxy exception to make: Firefox validates the proxy's
+ * certificate against the same store as any site, and the only switches that would let it
+ * through are global ones. Turning off certificate validation so that a proxy works would
+ * also turn it off for every site the browser then visits, which is a far worse trade than
+ * the problem being solved.
+ *
+ * So sing-box terminates that TLS instead and offers the browser an ordinary local SOCKS5.
+ * `insecure` applies to exactly one hop — this process to the proxy — and the browser's own
+ * validation of the sites it visits is untouched.
+ *
+ * Anti-detect browsers make the other choice, which is why one of them will open a page
+ * through a proxy like this and we would not. It is not a capability they have and we lack.
+ */
+function parseHttpsProxy(link: string): Record<string, unknown> {
+  const u = new URL(link.trim());
+  const out: Record<string, unknown> = {
+    type: "http",
+    tag: "proxy",
+    server: u.hostname,
+    server_port: Number(u.port) || 443,
+    tls: {
+      enabled: true,
+      // Verified against the real endpoint: with verification on, the handshake fails; with
+      // it off, traffic flows and the exit IP is the proxy's.
+      insecure: true,
+      server_name: u.hostname,
+    },
+  };
+  if (u.username) out.username = decodeURIComponent(u.username);
+  if (u.password) out.password = decodeURIComponent(u.password);
+  return out;
+}
+
 async function buildOutbound(type: ProxyType, link: string): Promise<Record<string, unknown>> {
   switch (type) {
     case "vmess":
@@ -793,6 +838,8 @@ async function buildOutbound(type: ProxyType, link: string): Promise<Record<stri
       return parseTuic(link);
     case "ss":
       return parseSs(link);
+    case "httpsProxy":
+      return parseHttpsProxy(link);
     case "warp":
       return parseWarp();
     default:
@@ -997,6 +1044,7 @@ export async function startLocalProxy(
 export const PROXY_TYPE_LABELS: Record<ProxyType, string> = {
   http: "HTTP/HTTPS",
   socks5: "SOCKS5",
+  httpsProxy: "HTTPS proxy (TLS)",
   warp: "Cloudflare WARP",
   vless: "VLESS",
   vmess: "VMess",
