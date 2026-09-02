@@ -152,6 +152,8 @@ import { pool } from "@workspace/db";
     "created_at"             timestamptz NOT NULL DEFAULT now(),
     "updated_at"             timestamptz NOT NULL DEFAULT now()
   );
+
+  ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "autostart" boolean NOT NULL DEFAULT false;
   `;
 
   export async function runMigrations(): Promise<void> {

@@ -6,6 +6,7 @@
   import { logger, setConfiguredLevel } from "./lib/logger";
   import { initScheduler } from "./scheduler";
   import { backfillExitGeo } from "./routes/tasks";
+  import { restoreAutostartBrowsers } from "./routes/browsers";
   import { startProviderHealthPolling, seedProvidersFromSettings, autoBindTasksToProviders, ensureDefaultProvider, releaseOrphanCamoufoxSessions } from "./automation/providers";
   import { installSignalHandlers } from "./lib/child-registry";
   import { runMigrations } from "./lib/migrations";
@@ -109,6 +110,9 @@
     await initScheduler();
     // Fill exit-geo for pre-existing tasks in the background (non-blocking).
     void backfillExitGeo();
+    // Same treatment for the browsers marked autostart: each one launches a real Firefox in
+    // the sidecar, and none of that should hold the port closed.
+    void restoreAutostartBrowsers();
     // One-time: seed a provider from the current Settings backend so the page isn't empty
     // after the config moved out of Settings; then keep provider health fresh.
     await seedProvidersFromSettings();

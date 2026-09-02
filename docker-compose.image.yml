@@ -98,6 +98,11 @@
 
     app:
       image: ghcr.io/mulemew/errand:latest
+      # Long enough for stopAllInstances to dump every open browser's cookies before the
+      # kernel takes over. Docker's default is 10s and one dump alone is allowed 15s, so a
+      # deploy could SIGKILL the app mid-save — a hand-driven browser that was open at that
+      # moment lost its session, and under the old code lost its row with it.
+      stop_grace_period: 45s
       environment:
         DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@db:5432/autoops}
         PORT: "8080"

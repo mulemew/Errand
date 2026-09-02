@@ -740,6 +740,10 @@ export interface Translations {
       randomFingerprintEachRun: string;
       liveViewTitle: string;
       liveViewHint: string;
+      autostartLabel: string;
+      autostartHint: string;
+      autostartShort: string;
+      reconnectView: string;
       browserStatusRunning: string;
       browserStatusStopped: string;
       noBrowsersYet: string;
@@ -1482,6 +1486,10 @@ export interface Translations {
       randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
       liveViewTitle: "实时预览",
       liveViewHint: "这是该浏览器真实的屏幕，可以直接操作。",
+      autostartLabel: "开机自动打开",
+      autostartHint: "服务器重启后自动把这个浏览器重新打开。每个都是一整个 Firefox，按需开启。",
+      autostartShort: "自动打开",
+      reconnectView: "重新连接",
       browserStatusRunning: "运行中",
       browserStatusStopped: "已停止",
       noBrowsersYet: "还没有指纹浏览器。新建一个，登录一次，之后每次打开都还是登录状态。",
@@ -2225,6 +2233,10 @@ export interface Translations {
       randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
       liveViewTitle: "Live view",
       liveViewHint: "This browser's real screen. You can drive it directly.",
+      autostartLabel: "Open on startup",
+      autostartHint: "Reopen this browser after the server restarts. Each one is a whole Firefox, so turn it on only where you need it.",
+      autostartShort: "autostart",
+      reconnectView: "Reconnect",
       browserStatusRunning: "Running",
       browserStatusStopped: "Stopped",
       noBrowsersYet: "No fingerprint browsers yet. Create one, sign in once, and it stays signed in every time you open it.",

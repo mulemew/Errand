@@ -6,12 +6,15 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { osMeta, ExitFlag, type ExitGeo } from "@/components/EnvBadges";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/contexts/lang-context";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-interface Ref { id: number; name: string; type?: string }
+/** The list endpoints select whole rows, so the fields the badges need are already here. */
+interface Ref { id: number; name: string; type?: string; os?: string | null; exitGeo?: ExitGeo | null }
 interface Instance {
   id: string;
   name: string;
@@ -29,6 +32,7 @@ interface SessionProfile {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   originUrl: string | null;
+  autostart: boolean;
   updatedAt: string;
 }
 
@@ -47,6 +51,9 @@ interface Row {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   url: string | null;
+  autostart: boolean;
+  /** When the process started, for the uptime counter. Only set while running. */
+  startedAt: number | null;
   sortAt: number;
 }
 
@@ -60,8 +67,29 @@ const EMPTY_ROW: Row = {
   fingerprintProfileId: null,
   proxyProfileId: null,
   url: null,
+  autostart: false,
+  startedAt: null,
   sortAt: 0,
 };
+
+/**
+ * How long this browser has been up, ticking.
+ *
+ * Not a formatted timestamp: what you want to know about a browser you left open is how
+ * long it has been sitting there, and that only reads right if it moves.
+ */
+function Uptime({ since }: { since: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor(secs / 3600) % 24;
+  const m = Math.floor(secs / 60) % 60;
+  return <>{d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`}</>;
+}
 
 /**
  * Long-lived browsers you drive by hand.
@@ -82,10 +110,18 @@ export default function Browsers() {
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [viewing, setViewing] = useState<{ id: string; name: string } | null>(null);
+  /**
+   * Bumped to remount the iframe, and left at 0 until the dialog has actually been laid
+   * out. noVNC sizes its canvas once, from the container, at connect time — connecting
+   * inside a dialog that is still animating in gave it a container with no size and a
+   * canvas to match, which is the empty blue screen. A new tab never had the problem
+   * because a tab is full size before the client loads.
+   */
+  const [viewEpoch, setViewEpoch] = useState(0);
 
   // The editor doubles as the creator: editing.key === "new" means "new".
   const [editing, setEditing] = useState<Row | null>(null);
-  const [form, setForm] = useState({ name: "", fingerprintId: NONE, proxyId: NONE, startUrl: "" });
+  const [form, setForm] = useState({ name: "", fingerprintId: NONE, proxyId: NONE, startUrl: "", autostart: false });
   const [saving, setSaving] = useState(false);
 
   const load = () => {
@@ -98,6 +134,20 @@ export default function Browsers() {
       .then((d: SessionProfile[]) => setProfiles(Array.isArray(d) ? d : []))
       .catch(() => {});
   };
+
+  // Wait for the dialog to be open AND laid out before the client connects. Two frames:
+  // the first is the one that mounts the dialog, the second is after its layout.
+  useEffect(() => {
+    if (viewing === null) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setViewEpoch((n) => (n === 0 ? 1 : n)));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [viewing]);
 
   useEffect(() => {
     const pick = (url: string, set: (v: Ref[]) => void) =>
@@ -136,6 +186,8 @@ export default function Browsers() {
         fingerprintProfileId: p.fingerprintProfileId,
         proxyProfileId: p.proxyProfileId,
         url: inst?.url ?? p.originUrl,
+        autostart: p.autostart === true,
+        startedAt: inst?.createdAt ?? null,
         sortAt: Date.parse(p.updatedAt) || 0,
       };
     });
@@ -152,6 +204,8 @@ export default function Browsers() {
         fingerprintProfileId: i.fingerprintProfileId,
         proxyProfileId: i.proxyProfileId,
         url: i.url,
+        autostart: false,
+        startedAt: i.createdAt,
         sortAt: i.createdAt,
       });
     }
@@ -169,6 +223,7 @@ export default function Browsers() {
       fingerprintId: row?.fingerprintProfileId != null ? String(row.fingerprintProfileId) : NONE,
       proxyId: row?.proxyProfileId != null ? String(row.proxyProfileId) : NONE,
       startUrl: "",
+      autostart: row?.autostart ?? false,
     });
   };
 
@@ -191,6 +246,7 @@ export default function Browsers() {
             fingerprintProfileId,
             proxyProfileId,
             startUrl: form.startUrl.trim() || undefined,
+            autostart: form.autostart,
           }),
         });
         const data = (await res.json()) as { id?: string; error?: string };
@@ -208,7 +264,12 @@ export default function Browsers() {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.name.trim(), fingerprintProfileId, proxyProfileId }),
+        body: JSON.stringify({
+          name: form.name.trim(),
+          fingerprintProfileId,
+          proxyProfileId,
+          autostart: form.autostart,
+        }),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -320,10 +381,35 @@ export default function Browsers() {
                     <p className="text-sm font-medium truncate">{row.name}</p>
                     <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
                     <p className="text-[10px] text-muted-foreground">
-                      {running ? t.browserStatusRunning : t.browserStatusStopped} ·{" "}
+                      {running ? (
+                        <>
+                          {t.browserStatusRunning} · <Uptime since={row.startedAt ?? Date.now()} />
+                        </>
+                      ) : (
+                        t.browserStatusStopped
+                      )}
+                      {" · "}
                       {refName(fingerprints, row.fingerprintProfileId)} · {refName(proxies, row.proxyProfileId)}
+                      {row.autostart && <> · {t.autostartShort}</>}
                     </p>
                   </div>
+
+                  {/* Same two marks as a task row: which OS the fingerprint claims, and
+                      where its traffic comes out. */}
+                  {(() => {
+                    const fp = fingerprints.find((f) => f.id === row.fingerprintProfileId);
+                    const { Icon, label } = osMeta(fp?.os);
+                    return (
+                      <span className="shrink-0 text-muted-foreground" title={`${label}${fp ? ` · ${fp.name}` : ""}`}>
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                    );
+                  })()}
+                  <ExitFlag
+                    geo={proxies.find((p) => p.id === row.proxyProfileId)?.exitGeo}
+                    label={refName(proxies, row.proxyProfileId)}
+                    className="flex items-center shrink-0"
+                  />
 
                   {running ? (
                     <>
@@ -428,6 +514,17 @@ export default function Browsers() {
             ) : (
               <p className="text-[11px] text-muted-foreground">{t.envAppliesNextOpen}</p>
             )}
+            <div className="flex items-start justify-between gap-3 pt-1">
+              <div className="min-w-0">
+                <Label className="text-xs">{t.autostartLabel}</Label>
+                <p className="text-[11px] text-muted-foreground">{t.autostartHint}</p>
+              </div>
+              <Switch
+                checked={form.autostart}
+                onCheckedChange={(v) => setForm({ ...form, autostart: v })}
+                className="mt-0.5 shrink-0"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setEditing(null)}>{t.cancel}</Button>
@@ -442,7 +539,14 @@ export default function Browsers() {
       {/* Live screen. Mounting the iframe is what opens the connection, so it exists only
           while the dialog is open — closing it puts the browser back in the background
           without stopping it. */}
-      <Dialog open={viewing !== null} onOpenChange={(o) => !o && setViewing(null)}>
+      <Dialog
+        open={viewing !== null}
+        onOpenChange={(o) => {
+          if (o) return;
+          setViewing(null);
+          setViewEpoch(0);
+        }}
+      >
         <DialogContent className="max-w-6xl w-full p-2">
           {/* No wrapping: the button used to follow a paragraph of text in a flex-wrap row
               and dropped onto a second line that the dialog clipped, which read as "the
@@ -468,9 +572,18 @@ export default function Browsers() {
                 {t.openInNewWindow}
               </Button>
             )}
+            {viewing && (
+              <Button
+                variant="ghost" size="sm" className="h-7 text-xs shrink-0"
+                onClick={() => setViewEpoch((n) => n + 1)}
+              >
+                {t.reconnectView}
+              </Button>
+            )}
           </div>
-          {viewing && (
+          {viewing && viewEpoch > 0 ? (
             <iframe
+              key={viewEpoch}
               // THIS instance's own display. Asking for the provider showed the sidecar's
               // shared screen, where nothing is drawn — a black rectangle, every time.
               src={`${BASE}/api/live-view/${viewing.id}/`}
@@ -478,6 +591,13 @@ export default function Browsers() {
               className="w-full rounded border border-border bg-black"
               style={{ height: "70vh" }}
             />
+          ) : (
+            <div
+              className="w-full rounded border border-border bg-black flex items-center justify-center"
+              style={{ height: "70vh" }}
+            >
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
           )}
         </DialogContent>
       </Dialog>

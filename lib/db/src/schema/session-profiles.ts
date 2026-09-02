@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -25,6 +25,8 @@ export const sessionProfilesTable = pgTable("session_profiles", {
   proxyProfileId: integer("proxy_profile_id"),
   /** Where it was captured — shown in the picker so a profile is recognisable. */
   originUrl: text("origin_url"),
+  /** Open this browser again on startup. Off by default: each one is a whole Firefox. */
+  autostart: boolean("autostart").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

@@ -128,6 +128,7 @@ export async function createSessionProfile(opts: {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   originUrl: string | null;
+  autostart?: boolean;
 }): Promise<number | null> {
   try {
     const [row] = await db
@@ -139,6 +140,7 @@ export async function createSessionProfile(opts: {
         fingerprintProfileId: opts.fingerprintProfileId,
         proxyProfileId: opts.proxyProfileId,
         originUrl: opts.originUrl,
+        autostart: opts.autostart ?? false,
       })
       .returning({ id: sessionProfilesTable.id });
     return row?.id ?? null;

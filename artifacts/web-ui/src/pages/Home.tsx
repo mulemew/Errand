@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useListTasks, useGetTasksSummary, useRunTask, useGetTasksHistory, useToggleTaskEnabled, getListTasksQueryKey, getGetTasksSummaryQueryKey, getGetTasksHistoryQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { Plus, Play, Clock, CheckCircle2, XCircle, Activity, Loader2, ArrowRight, AlertTriangle, X, BarChart2, CalendarClock, Timer, Copy, Archive, Download, Upload, Search, FolderPlus, GripVertical } from "lucide-react";
-import { FaWindows, FaApple, FaLinux, FaAndroid } from "react-icons/fa";
-import type { IconType } from "react-icons";
+import { osMeta, ExitFlag, type ExitGeo } from "@/components/EnvBadges";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -128,17 +127,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   // ── Exit-IP flag + fingerprint OS badge (task list) ──────────────────────────
 
-  // fingerprint OS → real brand logo (react-icons). Empty/unknown defaults to Linux
-  // (the default fingerprint), so every task shows a proper platform icon.
-  function osMeta(os?: string | null): { Icon: IconType; label: string } {
-    const v = (os ?? "").toLowerCase();
-    if (v.includes("win")) return { Icon: FaWindows, label: "Windows" };
-    if (v.includes("mac") || v.includes("darwin") || v.includes("apple") || v.includes("ios") || v.includes("iphone")) return { Icon: FaApple, label: "macOS / iOS" };
-    if (v.includes("android")) return { Icon: FaAndroid, label: "Android" };
-    return { Icon: FaLinux, label: v ? "Linux" : "Linux (default)" };
-  }
-
-  type TaskGeo = { direct?: boolean; ok?: boolean; exitIp?: string; country?: string; countryCode?: string; city?: string; region?: string };
+  type TaskGeo = ExitGeo;
 
   interface RecentRun { success: boolean; runAt: string; durationMs: number | null }
 
@@ -191,33 +180,6 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
     );
   }
 
-  // Country-flag badge for a task row, read from the task's CACHED exit_geo
-  // (resolved in the background on create/update). No live query on render.
-  // Rendered as an <img> (flagcdn) rather than a flag emoji — Windows browsers
-  // don't render regional-indicator flag emoji, they show the letters instead.
-  function TaskExitFlag({ geo, label }: { geo?: TaskGeo | null; label?: string | null }) {
-    const cc = geo?.countryCode?.toLowerCase();
-    if (!geo?.ok || !cc || cc.length !== 2) return null;
-    const loc = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
-    // When the task uses a saved proxy profile, show the profile NAME (from the proxy
-    // page) rather than the raw exit IP/geo details.
-    const tip = label
-      ? label
-      : `${geo.direct ? "Host exit IP" : "Proxy exit IP"}: ${geo.exitIp ?? ""}${loc ? " · " + loc : ""}`;
-    return (
-      <span className="flex items-center border-l border-border pl-3" title={tip}>
-        <img
-          src={`https://flagcdn.com/20x15/${cc}.png`}
-          srcSet={`https://flagcdn.com/40x30/${cc}.png 2x`}
-          width={20}
-          height={15}
-          alt={geo.countryCode}
-          loading="lazy"
-          className="rounded-[1px]"
-        />
-      </span>
-    );
-  }
   // ────────────────────────────────────────────────────────────────────────────
 
   // ── Next-run countdown ────────────────────────────────────────────────────────
@@ -906,7 +868,7 @@ export default function Home() {
                           </span>
                         );
                       })()}
-                      <TaskExitFlag
+                      <ExitFlag
                         geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo}
                         label={(task as unknown as { proxyLabel?: string | null }).proxyLabel}
                       />

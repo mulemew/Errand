@@ -97,6 +97,7 @@ router.post("/browsers", async (req, res): Promise<void> => {
     /** Reopen a saved session: its cookies AND the environment they were made in. */
     sessionProfileId?: number | null;
     startUrl?: string;
+    autostart?: boolean;
   };
   try {
     // Opening a profile is not "a new browser that happens to have cookies". A session is
@@ -165,6 +166,7 @@ router.post("/browsers", async (req, res): Promise<void> => {
         fingerprintProfileId: resolved.fingerprintProfileId,
         proxyProfileId: resolved.proxyProfileId,
         originUrl: (body.startUrl ?? "").trim() || null,
+        autostart: body.autostart === true,
       });
     }
 
@@ -284,6 +286,7 @@ router.get("/session-profiles", async (_req, res): Promise<void> => {
       fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
       proxyProfileId: sessionProfilesTable.proxyProfileId,
       originUrl: sessionProfilesTable.originUrl,
+      autostart: sessionProfilesTable.autostart,
       updatedAt: sessionProfilesTable.updatedAt,
     })
     .from(sessionProfilesTable)
@@ -308,6 +311,8 @@ router.patch("/session-profiles/:id", async (req, res): Promise<void> => {
     name?: string;
     fingerprintProfileId?: number | null;
     proxyProfileId?: number | null;
+    /** Reopen this browser when the server starts. */
+    autostart?: boolean;
   };
   const patch: Record<string, unknown> = {};
   if (typeof body.name === "string") {
@@ -321,6 +326,7 @@ router.patch("/session-profiles/:id", async (req, res): Promise<void> => {
   // undefined means "not sent"; null means "clear it". They are different answers.
   if (body.fingerprintProfileId !== undefined) patch.fingerprintProfileId = body.fingerprintProfileId;
   if (body.proxyProfileId !== undefined) patch.proxyProfileId = body.proxyProfileId;
+  if (typeof body.autostart === "boolean") patch.autostart = body.autostart;
   if (Object.keys(patch).length === 0) {
     res.status(400).json({ error: "Nothing to update" });
     return;
@@ -352,5 +358,60 @@ router.delete("/session-profiles/:id", async (req, res): Promise<void> => {
   await db.delete(sessionProfilesTable).where(eq(sessionProfilesTable.id, id));
   res.json({ deleted: true });
 });
+
+/**
+ * Reopen the browsers marked autostart, once, at boot.
+ *
+ * A hand-driven browser is a process, and a process does not survive a restart — the app
+ * closes them on the way down (saving their cookies) and comes back with nothing running.
+ * For most that is right: they are opened when you want to use them. For the few that are
+ * meant to be permanently signed in somewhere, this puts them back.
+ *
+ * Deliberately sequential and best-effort: each one is a whole Firefox in the sidecar, and
+ * a single unreachable proxy must not stop the rest or delay the server coming up.
+ */
+export async function restoreAutostartBrowsers(): Promise<void> {
+  let rows: Array<{ id: number; name: string }> = [];
+  try {
+    rows = await db
+      .select({ id: sessionProfilesTable.id, name: sessionProfilesTable.name })
+      .from(sessionProfilesTable)
+      .where(eq(sessionProfilesTable.autostart, true));
+  } catch (err) {
+    logger.warn({ err }, "Could not read the autostart browsers");
+    return;
+  }
+  if (rows.length === 0) return;
+  logger.info({ count: rows.length }, "Reopening browsers marked autostart");
+  for (const row of rows) {
+    try {
+      const [full] = await db
+        .select({
+          providerId: sessionProfilesTable.providerId,
+          fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
+          proxyProfileId: sessionProfilesTable.proxyProfileId,
+          originUrl: sessionProfilesTable.originUrl,
+        })
+        .from(sessionProfilesTable)
+        .where(eq(sessionProfilesTable.id, row.id));
+      if (!full) continue;
+      const config = await buildConfig(full);
+      const seed = await loadSessionProfile(row.id);
+      if (seed) (config as { storageState?: unknown }).storageState = seed;
+      await launchInstance({
+        name: row.name,
+        config,
+        providerId: full.providerId,
+        fingerprintProfileId: full.fingerprintProfileId,
+        proxyProfileId: full.proxyProfileId,
+        sessionProfileId: row.id,
+        startUrl: full.originUrl || undefined,
+      });
+      logger.info({ sessionProfileId: row.id, name: row.name }, "Autostart browser reopened");
+    } catch (err) {
+      logger.warn({ err, sessionProfileId: row.id, name: row.name }, "Autostart browser did not reopen");
+    }
+  }
+}
 
 export default router;
