@@ -158,6 +158,7 @@ type BrowserProvider = "playwright" | "puppeteer" | "seleniumbase" | "camoufox";
 
 type ProxyType =
   | "http"
+  | "httpsProxy"
   | "socks5"
   | "warp"
   | "vless"
@@ -224,12 +225,14 @@ const defaultBrowserConfig: BrowserConfigState = {
 };
 
 /** Infer the proxyType from a manual proxy URL's scheme (the node-type dropdown was
- *  removed — the scheme in the URL already says what it is). Mirrors the api-server. */
+ *  removed — the scheme in the URL already says what it is). Mirrors the api-server.
+ *  https:// is its own type: it is an HTTP proxy reached over TLS, which the browser
+ *  cannot dial directly, so folding it onto "http" sent it down the passthrough path. */
 function inferProxyType(url: string): ProxyType {
   const scheme = (url.split("://")[0] || "").toLowerCase();
   const norm =
-    scheme === "socks5h" ? "socks5" : scheme === "https" ? "http" : scheme === "hysteria2" ? "hy2" : scheme;
-  const allowed: ProxyType[] = ["http", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"];
+    scheme === "socks5h" ? "socks5" : scheme === "https" ? "httpsProxy" : scheme === "hysteria2" ? "hy2" : scheme;
+  const allowed: ProxyType[] = ["http", "httpsProxy", "socks5", "vless", "vmess", "trojan", "hy2", "tuic", "ss"];
   return (allowed.includes(norm as ProxyType) ? norm : "http") as ProxyType;
 }
 

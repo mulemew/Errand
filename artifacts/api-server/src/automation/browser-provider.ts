@@ -633,8 +633,8 @@ class PlaywrightCDPProvider implements BrowserProvider {
 
     async newPage(): Promise<PageAdapter> {
       // For Playwright providers, proxy and ignoreHTTPS are context-level options —
-      // they work universally regardless of which remote service is in use.
-      if (this.config.proxyUrl) await assertProxyCertificateTrusted(this.config.proxyUrl);
+      // they work universally regardless of which remote service is in use. The proxy is
+      // resolved and checked in _makePageAdapter, where the browser actually receives it.
       const ws = buildWsUrl(this.config, false);
       const safeUrl = ws.replace(/([?&]token=)[^&]*/g, "$1***");
       logger.info({ wsEndpoint: safeUrl }, "Connecting to remote CDP browser (Playwright connectOverCDP)");
@@ -647,6 +647,7 @@ class PlaywrightCDPProvider implements BrowserProvider {
       const vp = resolveViewport(this.config);
       const ua = pickRandom(UA_POOL);
       const proxyServer = await resolveProxyForConfig(this.config, true);
+      if (proxyServer?.serverUrl) await assertProxyCertificateTrusted(proxyServer.serverUrl);
       const context = await browser.newContext({
         viewport: vp,
         userAgent: ua,
@@ -797,12 +798,12 @@ class CamoufoxProvider implements BrowserProvider {
     // Firefox (camoufox) can only speak http/socks proxies — a vless/vmess/… URL must
     // first be turned into a local sing-box SOCKS5. remoteConsumer=true so the helper is
     // reachable from the camoufox-proxy container. Plain http/socks5 pass straight through.
-    // Same refusal on this backend. Firefox has no exemption to offer even if we wanted one
-    // (SSL_ERROR_UNKNOWN, and HSTS sites will not take an exception at all), so failing here
-    // with the reason beats failing later without it.
-    if (this.config.proxyUrl) await assertProxyCertificateTrusted(this.config.proxyUrl);
+    // The certificate check comes AFTER this, on the URL the browser is actually handed: an
+    // https:// proxy is terminated by sing-box here and reaches Firefox as a local SOCKS5,
+    // so checking the raw URL first refused a proxy that never touches the browser.
     const resolvedProxy = await resolveProxyForConfig(this.config, true);
     const proxyServerUrl = resolvedProxy?.serverUrl ?? undefined;
+    if (proxyServerUrl) await assertProxyCertificateTrusted(proxyServerUrl);
 
     let res: Response;
     try {
@@ -1053,6 +1054,11 @@ const _screenOrigin = new WeakMap<object, { x: number; y: number }>();
 
 /**
  * Refuse an https:// proxy whose certificate does not validate.
+ *
+ * A backstop, not the main path: an https:// proxy is normally terminated by a local
+ * sing-box (parseHttpsProxy) and reaches the browser as a plain SOCKS5, so this sees the
+ * resolved URL and returns immediately. It still catches the case where a raw https:// URL
+ * would be handed to the browser directly.
  *
  * The alternative was to hand the browser an exemption, and both forms of that are worse
  * than not running:

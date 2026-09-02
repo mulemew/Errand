@@ -211,8 +211,14 @@ export function normalizeProxyUrl(raw: string): string {
 
 /** Infer the proxy type from an explicit type or the URL scheme. */
 export function resolveProxyType(cfg: ProxyConfig): ProxyType | null {
+  const rawUrl = (cfg.proxyUrl ?? "").trim();
+  // A stored "http" cannot tell http:// from https://: the UI folded both onto one type
+  // before httpsProxy existed, so every task saved with an https:// proxy carries "http"
+  // and would take the passthrough path into the browser. The URL is the stronger source
+  // here, and only for this one pair — every other stored type is left alone.
+  if (cfg.proxyType === "http" && /^https:\/\//i.test(rawUrl)) return "httpsProxy";
   if (cfg.proxyType) return cfg.proxyType;
-  const url = (cfg.proxyUrl ?? "").trim();
+  const url = rawUrl;
   if (!url) return null;
   // socks / socks4 / socks4a / socks5 / socks5h all land on the passthrough path.
   // "socks5" here is a ROUTING CATEGORY ("a SOCKS proxy the browser dials directly"),
