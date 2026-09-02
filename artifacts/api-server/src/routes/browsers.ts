@@ -19,7 +19,7 @@ import {
 } from "../lib/browserInstances";
 import type { BrowserProviderConfig } from "../automation/browser-provider";
 import { resolveProxyType } from "../automation/proxy-manager";
-import { loadSessionProfile, saveSessionProfileState } from "../lib/browserSessionStore";
+import { loadSessionProfile, saveSessionProfileState, createSessionProfile } from "../lib/browserSessionStore";
 
 const router: IRouter = Router();
 
@@ -149,18 +149,37 @@ router.post("/browsers", async (req, res): Promise<void> => {
     const config = await buildConfig(resolved);
     if (seed) (config as { storageState?: unknown }).storageState = seed;
 
+    const name = (body.name ?? "").trim() || profile?.name || "browser";
+
+    // A browser is a thing you keep, so it gets its row the moment it is created — not the
+    // first time it is closed. Creating it on close meant a brand-new browser existed only
+    // as a running process: nothing to rename, nothing to delete, and it vanished entirely
+    // if the app restarted before you closed it. The row starts with an empty session and
+    // fills in on close.
+    let boundProfileId = body.sessionProfileId ?? null;
+    if (boundProfileId == null) {
+      boundProfileId = await createSessionProfile({
+        name,
+        state: { cookies: [], origins: [] },
+        providerId: resolved.providerId,
+        fingerprintProfileId: resolved.fingerprintProfileId,
+        proxyProfileId: resolved.proxyProfileId,
+        originUrl: (body.startUrl ?? "").trim() || null,
+      });
+    }
+
     const inst = await launchInstance({
-      name: (body.name ?? "").trim() || profile?.name || "browser",
+      name,
       config,
       providerId: resolved.providerId,
       fingerprintProfileId: resolved.fingerprintProfileId,
       proxyProfileId: resolved.proxyProfileId,
-      sessionProfileId: body.sessionProfileId ?? null,
+      sessionProfileId: boundProfileId,
       // Land where the session was last used, so reopening shows the logged-in page rather
       // than a blank tab you have to navigate yourself.
       startUrl: (body.startUrl ?? "").trim() || profile?.originUrl || undefined,
     });
-    res.status(201).json({ id: inst.id, sessionProfileId: body.sessionProfileId ?? null });
+    res.status(201).json({ id: inst.id, sessionProfileId: boundProfileId });
   } catch (err) {
     logger.error({ err }, "Failed to launch a browser instance");
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -323,6 +342,12 @@ router.delete("/session-profiles/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) {
     res.status(400).json({ error: "Invalid id" });
     return;
+  }
+  // Closing keeps a browser; deleting destroys it. So this also takes down whatever is
+  // running from it — otherwise the row goes and the process stays, and the next close
+  // would write back into an id that no longer exists.
+  for (const inst of listInstances()) {
+    if (inst.sessionProfileId === id) await stopInstance(inst.id).catch(() => {});
   }
   await db.delete(sessionProfilesTable).where(eq(sessionProfilesTable.id, id));
   res.json({ deleted: true });

@@ -35,9 +35,9 @@ interface SessionProfile {
 /**
  * One row per browser, running or not.
  *
- * A saved profile and the process currently replaying it are the same browser to anyone
- * using this page, so they are one row. `profileId` is null for a browser that has never
- * been closed (nothing is saved yet); `instance` is null for one that is not running.
+ * A stored browser and the process currently running it are the same thing to anyone using
+ * this page, so they are one row. `instance` is null for one that is not running; a null
+ * `profileId` only happens if its row was deleted out from under a running process.
  */
 interface Row {
   key: string;
@@ -140,7 +140,8 @@ export default function Browsers() {
       };
     });
 
-    // A browser launched fresh has no profile row until it is closed for the first time.
+    // A process whose row was deleted while it ran still has to be listed, so it can be
+    // stopped rather than sitting there invisible.
     for (const i of instances) {
       if (i.sessionProfileId != null && profiles.some((p) => p.id === i.sessionProfileId)) continue;
       out.push({
@@ -316,14 +317,7 @@ export default function Browsers() {
                     title={running ? t.browserStatusRunning : t.browserStatusStopped}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">
-                      {row.name}
-                      {running && row.profileId == null && (
-                        <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
-                          ({t.browserUnsaved})
-                        </span>
-                      )}
-                    </p>
+                    <p className="text-sm font-medium truncate">{row.name}</p>
                     <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
                     <p className="text-[10px] text-muted-foreground">
                       {running ? t.browserStatusRunning : t.browserStatusStopped} ·{" "}
@@ -363,10 +357,12 @@ export default function Browsers() {
                   >
                     <Pencil className="h-4 w-4" />
                   </Button>
+                  {/* Deleting destroys the browser whether or not it is running — the
+                      server stops it first. Closing is the reversible one. */}
                   <Button
                     variant="ghost" size="icon" className="h-7 w-7 text-destructive"
-                    title={running ? t.cannotEditWhileRunning : t.deleteBrowserAction}
-                    disabled={running || row.profileId == null || busy}
+                    title={t.deleteBrowserAction}
+                    disabled={row.profileId == null || busy}
                     onClick={() => void remove(row)}
                   >
                     <Trash2 className="h-4 w-4" />

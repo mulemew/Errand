@@ -137,7 +137,13 @@ export async function stopInstance(id: string): Promise<boolean> {
       // create an empty one that would look like a session that expired.
       logger.warn({ id }, "Nothing to save on close");
     } else if (inst.sessionProfileId != null) {
-      await saveSessionProfileState(inst.sessionProfileId, state);
+      await saveSessionProfileState(inst.sessionProfileId, state, (() => {
+        try {
+          return inst.page.url();
+        } catch {
+          return null;
+        }
+      })());
       logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
     } else {
       const newId = await createSessionProfile({

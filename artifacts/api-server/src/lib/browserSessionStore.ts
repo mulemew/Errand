@@ -148,12 +148,19 @@ export async function createSessionProfile(opts: {
   }
 }
 
-export async function saveSessionProfileState(id: number, state: unknown): Promise<boolean> {
+export async function saveSessionProfileState(
+  id: number,
+  state: unknown,
+  originUrl?: string | null,
+): Promise<boolean> {
   try {
-    await db
-      .update(sessionProfilesTable)
-      .set({ storageState: { enc: encrypt(JSON.stringify(state)) }, updatedAt: new Date() })
-      .where(eq(sessionProfilesTable.id, id));
+    const patch: Record<string, unknown> = {
+      storageState: { enc: encrypt(JSON.stringify(state)) },
+      updatedAt: new Date(),
+    };
+    // Where it was when you closed it, so reopening resumes rather than restarts.
+    if (originUrl) patch.originUrl = originUrl;
+    await db.update(sessionProfilesTable).set(patch).where(eq(sessionProfilesTable.id, id));
     return true;
   } catch (err) {
     logger.warn({ err, id }, "Could not write the session back to its profile");

@@ -742,7 +742,6 @@ export interface Translations {
       liveViewHint: string;
       browserStatusRunning: string;
       browserStatusStopped: string;
-      browserUnsaved: string;
       noBrowsersYet: string;
       newFingerprintBrowser: string;
       editFingerprintBrowser: string;
@@ -1485,7 +1484,6 @@ export interface Translations {
       liveViewHint: "这是该浏览器真实的屏幕，可以直接操作。",
       browserStatusRunning: "运行中",
       browserStatusStopped: "已停止",
-      browserUnsaved: "未保存",
       noBrowsersYet: "还没有指纹浏览器。新建一个，登录一次，之后每次打开都还是登录状态。",
       newFingerprintBrowser: "新建指纹浏览器",
       editFingerprintBrowser: "编辑指纹浏览器",
@@ -2229,7 +2227,6 @@ export interface Translations {
       liveViewHint: "This browser's real screen. You can drive it directly.",
       browserStatusRunning: "Running",
       browserStatusStopped: "Stopped",
-      browserUnsaved: "unsaved",
       noBrowsersYet: "No fingerprint browsers yet. Create one, sign in once, and it stays signed in every time you open it.",
       newFingerprintBrowser: "New fingerprint browser",
       editFingerprintBrowser: "Edit fingerprint browser",
