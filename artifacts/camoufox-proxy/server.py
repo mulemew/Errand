@@ -762,11 +762,19 @@ def launch():
             # A browser someone is driving by hand is SUPPOSED to sit there for hours. The
             # age reaper below is the orphan net for task sessions that never called
             # /release, and it was killing these at 90 minutes with the app none the wiser.
-            "keep_alive": bool(opts.get("keepAlive")),
+            # Read from the REQUEST BODY, not from opts: _build_options maps the body to
+            # camoufox's own launch options and keepAlive is not one of them, so reading it
+            # there was always None and every hand-driven browser was still reaped at 90
+            # minutes — verified in production before this line was changed.
+            "keep_alive": bool(body.get("keepAlive")),
         }
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
-    print(f"[camoufox] launched {sid} ws={ws} os={opts.get('os')} display=:{_display}", flush=True)
+    print(
+        f"[camoufox] launched {sid} ws={ws} os={opts.get('os')} display=:{_display}"
+        f" keep_alive={bool(body.get('keepAlive'))}",
+        flush=True,
+    )
     # viewPort lets the app proxy THIS session's screen rather than the whole container's.
     return jsonify({"id": sid, "ws": ws, "viewPort": _view_port})
 
