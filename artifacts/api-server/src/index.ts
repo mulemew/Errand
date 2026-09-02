@@ -110,9 +110,6 @@
     await initScheduler();
     // Fill exit-geo for pre-existing tasks in the background (non-blocking).
     void backfillExitGeo();
-    // Same treatment for the browsers marked autostart: each one launches a real Firefox in
-    // the sidecar, and none of that should hold the port closed.
-    void restoreAutostartBrowsers();
     // One-time: seed a provider from the current Settings backend so the page isn't empty
     // after the config moved out of Settings; then keep provider health fresh.
     await seedProvidersFromSettings();
@@ -124,7 +121,15 @@
     await ensureDefaultProvider();
     // Tasks running at shutdown were reset to idle — kill the browser sessions they left
     // behind in the camoufox sidecars instead of letting them idle until the TTL reaper.
-    void releaseOrphanCamoufoxSessions();
+    //
+    // AWAITED, and the autostart restore comes after it, because /release-all kills every
+    // live session in the sidecar. Fired in parallel, it would have shot the browsers the
+    // restore had just launched — a race whose outcome depended on which HTTP call landed
+    // first, and the restore is the slow one (a Firefox per browser).
+    await releaseOrphanCamoufoxSessions();
+    // Browsers marked autostart. Not awaited: each is a real Firefox in the sidecar and
+    // none of that should hold up the rest of the boot.
+    void restoreAutostartBrowsers();
     startProviderHealthPolling();
   });
   
