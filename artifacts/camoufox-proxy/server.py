@@ -759,6 +759,10 @@ def launch():
         _servers[sid] = {
             "proc": proc, "ws": ws, "started": time.time(), "pgid": _pgid,
             "display": _display, "view_port": _view_port, "view_procs": _view_procs,
+            # A browser someone is driving by hand is SUPPOSED to sit there for hours. The
+            # age reaper below is the orphan net for task sessions that never called
+            # /release, and it was killing these at 90 minutes with the app none the wiser.
+            "keep_alive": bool(opts.get("keepAlive")),
         }
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
@@ -905,7 +909,9 @@ def _kill_group_of(entry):
 # the zombie and sets returncode — and (b) SIGTERM/kill sessions older than the TTL.
 # Must stay comfortably ABOVE the app's task timeout (default 30 min): the reaper cannot
 # tell "hung" from "still working", so a TTL equal to the task timeout would kill the
-# browser out from under a task that is merely slow. This is the orphan net, not a limit.
+# browser out from under a task that is merely slow. This is the orphan net, not a limit —
+# and sessions launched with keepAlive are exempt entirely, because a browser opened from
+# the fingerprint-browsers page is meant to stay open until someone closes it.
 _SESSION_TTL = int(os.getenv("CAMOUFOX_SESSION_TTL", "5400"))
 
 
@@ -1037,6 +1043,8 @@ def _reaper():
                         _servers.pop(sid, None)
                     print(f"[camoufox] reaped dead session {sid} (exit={proc.returncode})", flush=True)
                     continue
+                if e.get("keep_alive"):
+                    continue                                     # held open on purpose
                 if now - e.get("started", now) > _SESSION_TTL:  # hung / orphaned
                     _kill(proc)
                     _stop_session_display(e)

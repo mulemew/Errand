@@ -39,7 +39,8 @@ async function buildConfig(input: {
   // Assembled loosely and cast once at the end: BrowserProviderConfig is a wide union of
   // per-backend fields and writing it field-by-field through the typed shape would need a
   // cast at every assignment for no extra safety.
-  const config: Record<string, unknown> = { provider: "playwright" };
+  // Every browser this file launches is one a person opens and leaves open.
+  const config: Record<string, unknown> = { provider: "playwright", keepAlive: true };
 
   if (input.providerId) {
     const [p] = await db.select().from(providersTable).where(eq(providersTable.id, input.providerId));

@@ -45,7 +45,35 @@ const SESSION_DUMP_TIMEOUT_MS = 15_000;
 
 const instances = new Map<string, BrowserInstance>();
 
+/**
+ * Forget instances whose browser is gone.
+ *
+ * The sidecar can take a session down without telling us — its age reaper used to do
+ * exactly that at 90 minutes — and the map kept listing the browser as running long after
+ * there was nothing behind it. You could still see it, still press things, and the only
+ * symptom was a live view with no screen to show.
+ *
+ * Nothing is saved here: the page is already closed, so there is no session left to dump,
+ * and the stored profile keeps whatever it had.
+ */
+function pruneDeadInstances(): void {
+  for (const [id, inst] of instances) {
+    let dead = false;
+    try {
+      dead = inst.page.isClosed();
+    } catch {
+      dead = true;
+    }
+    if (!dead) continue;
+    instances.delete(id);
+    clearView(id);
+    logger.warn({ id, name: inst.name }, "Browser instance vanished — dropping it from the list");
+    void inst.provider.close().catch(() => {});
+  }
+}
+
 export function listInstances(): Array<Omit<BrowserInstance, "provider" | "page" | "dumpStorageState">> {
+  pruneDeadInstances();
   return [...instances.values()].map(({ provider: _p, page: _pg, dumpStorageState: _d, ...rest }) => ({
     ...rest,
     url: (() => {

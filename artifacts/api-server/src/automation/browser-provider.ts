@@ -128,6 +128,8 @@ export interface BrowserProviderConfig {
      * ─ Puppeteer:  injected as --ignore-certificate-errors via ?launch= (browserless).
      */
     ignoreHTTPS?: boolean;
+    /** Held open until someone closes it — the sidecar must not reap it for age. */
+    keepAlive?: boolean;
     /**
      * Browser viewport width in pixels. If both viewportWidth and viewportHeight
      * are set, the specified dimensions are used for every session. Otherwise a
@@ -818,6 +820,8 @@ class CamoufoxProvider implements BrowserProvider {
           // camoufox knobs from the provider (undefined = sidecar default).
           ...(this.config.humanize != null ? { humanize: this.config.humanize } : {}),
           ...(this.config.blockWebrtc != null ? { blockWebrtc: this.config.blockWebrtc } : {}),
+          // Exempt from the sidecar's age reaper. Set only for browsers opened by hand.
+          ...(this.config.keepAlive ? { keepAlive: true } : {}),
           proxy: parseProxyForCamoufox(proxyServerUrl),
           // The saved profile's fixed fingerprint (browserforge pickle or preset); the
           // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).

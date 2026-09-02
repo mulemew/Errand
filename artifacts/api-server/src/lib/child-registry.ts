@@ -60,13 +60,16 @@ export function installSignalHandlers(onShutdown?: () => Promise<void> | void): 
   const shutdown = async (reason: string, code: number): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    const killed = killAllChildren();
-    logger.info({ reason, killedHelpers: killed }, "Shutting down — helper processes reaped");
+    // The hook saves open browsers' sessions; the helpers it may still need are killed
+    // after, not before. Reaping first meant tearing down a running session's proxy while
+    // the thing that was about to save that session was still working.
     try {
       await onShutdown?.();
     } catch (err) {
       logger.warn({ err }, "shutdown hook failed");
     }
+    const killed = killAllChildren();
+    logger.info({ reason, killedHelpers: killed }, "Shutting down — helper processes reaped");
     process.exit(code);
   };
 
