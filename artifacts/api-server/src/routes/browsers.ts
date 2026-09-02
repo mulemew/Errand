@@ -272,6 +272,52 @@ router.get("/session-profiles", async (_req, res): Promise<void> => {
   res.json(rows);
 });
 
+/**
+ * Rename a saved browser, or move it to a different fingerprint/proxy.
+ *
+ * The stored session itself is never touched. Changing the environment does not migrate
+ * the cookies into it — it changes where they will be REPLAYED next time, which is exactly
+ * what you want after rotating a proxy and nothing more than that.
+ */
+router.patch("/session-profiles/:id", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id ?? "", 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const body = req.body as {
+    name?: string;
+    fingerprintProfileId?: number | null;
+    proxyProfileId?: number | null;
+  };
+  const patch: Record<string, unknown> = {};
+  if (typeof body.name === "string") {
+    const name = body.name.trim();
+    if (!name) {
+      res.status(400).json({ error: "Name cannot be empty" });
+      return;
+    }
+    patch.name = name;
+  }
+  // undefined means "not sent"; null means "clear it". They are different answers.
+  if (body.fingerprintProfileId !== undefined) patch.fingerprintProfileId = body.fingerprintProfileId;
+  if (body.proxyProfileId !== undefined) patch.proxyProfileId = body.proxyProfileId;
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "Nothing to update" });
+    return;
+  }
+  const [row] = await db
+    .update(sessionProfilesTable)
+    .set(patch)
+    .where(eq(sessionProfilesTable.id, id))
+    .returning({ id: sessionProfilesTable.id });
+  if (!row) {
+    res.status(404).json({ error: "No such session profile" });
+    return;
+  }
+  res.json({ updated: true });
+});
+
 router.delete("/session-profiles/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id ?? "", 10);
   if (isNaN(id)) {

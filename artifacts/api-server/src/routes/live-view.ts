@@ -39,9 +39,11 @@ async function liveViewTarget(id: string): Promise<{ host: string; port: number 
   if (id.startsWith("bi_")) {
     const own = getView(id);
     if (own) return own;
-    // Still starting, or the sidecar had no display left and put it on the shared :99.
-    const inst = getInstance(id);
-    return inst?.providerId ? providerTarget(inst.providerId) : null;
+    // No fallback to the provider's container-wide display. Nothing is ever drawn there, so
+    // falling back showed a bare desktop — a blue screen that looks like a broken viewer
+    // rather than what it is, which is "this browser has no display of its own". The caller
+    // turns a null into an explicit answer instead.
+    return null;
   }
 
   const taskMatch = id.match(/^task-(\d+)$/);
@@ -85,6 +87,13 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
   const viewId = req.params.id ?? "";
   const target = await liveViewTarget(viewId);
   if (!target) {
+    if (viewId.startsWith("bi_") && getInstance(viewId)) {
+      res.status(503).json({
+        error:
+          "This browser is running but has no screen of its own — the sidecar had no free display when it started. Close it and open it again.",
+      });
+      return;
+    }
     res.status(404).json({ error: "This provider has no live view (camoufox only)" });
     return;
   }

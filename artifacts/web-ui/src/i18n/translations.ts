@@ -740,25 +740,29 @@ export interface Translations {
       randomFingerprintEachRun: string;
       liveViewTitle: string;
       liveViewHint: string;
+      browserStatusRunning: string;
+      browserStatusStopped: string;
+      browserUnsaved: string;
+      noBrowsersYet: string;
+      newFingerprintBrowser: string;
+      editFingerprintBrowser: string;
+      editBrowserAction: string;
+      deleteBrowserAction: string;
+      deleteBrowserConfirm: string;
+      cannotEditWhileRunning: string;
+      envAppliesNextOpen: string;
       navBrowsers: string;
       browsersIntro: string;
-      newBrowserInstance: string;
       browserNameExample: string;
       launchBrowser: string;
       browserLaunchFailed: string;
-      runningBrowsers: string;
-      noRunningBrowsers: string;
       stopBrowser: string;
       saveAsSessionProfile: string;
       sessionProfileNamePrompt: string;
       sessionProfileSaved: string;
-      sessionProfiles: string;
       openProfile: string;
       openInNewWindow: string;
-      reopenedFromProfile: string;
       savedBackToProfile: string;
-      sessionProfilesHint: string;
-      noSessionProfiles: string;
       defaultValue: string;
       sessionProfileField: string;
       sessionProfileFieldHint: string;
@@ -1478,26 +1482,30 @@ export interface Translations {
       osRandomLabel: "随机",
       randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
       liveViewTitle: "实时预览",
-      liveViewHint: "看到的是这个后端浏览器真实的屏幕。需要在 sidecar 上设置 VNC_ENABLE=1 和 VNC_PASSWORD 并重启；画面通过本站代理，不用额外开端口。",
+      liveViewHint: "这是该浏览器真实的屏幕，可以直接操作。",
+      browserStatusRunning: "运行中",
+      browserStatusStopped: "已停止",
+      browserUnsaved: "未保存",
+      noBrowsersYet: "还没有指纹浏览器。新建一个，登录一次，之后每次打开都还是登录状态。",
+      newFingerprintBrowser: "新建指纹浏览器",
+      editFingerprintBrowser: "编辑指纹浏览器",
+      editBrowserAction: "编辑",
+      deleteBrowserAction: "删除（连同登录状态一起销毁）",
+      deleteBrowserConfirm: "删除后登录状态一起销毁，无法恢复。确定删除吗？",
+      cannotEditWhileRunning: "运行中不能改，先关闭",
+      envAppliesNextOpen: "指纹和代理的改动在下次打开时生效，已保存的登录状态不会动。",
       navBrowsers: "指纹浏览器",
-      browsersIntro: "用「后端 + 指纹 + 代理」组成一个环境，开一个常驻浏览器自己操作：手工注册、过掉脚本搞不定的验证，然后把登录状态存成会话档案。任务用同一套环境选中它，环境就完全一致了。",
-      newBrowserInstance: "新建浏览器实例",
+      browsersIntro: "每一行是一个长期存在的浏览器，有自己的指纹和代理。打开它自己操作——手工注册、过掉脚本搞不定的验证——关掉时登录状态自动保存，下次打开还在。任务选中同一个，跑在完全一样的环境里。",
       browserNameExample: "例如：注册用-美国住宅",
       launchBrowser: "启动浏览器",
       browserLaunchFailed: "浏览器启动失败",
-      runningBrowsers: "运行中的实例",
-      noRunningBrowsers: "当前没有运行中的浏览器实例。",
       stopBrowser: "关闭（保留，可再次打开）",
       saveAsSessionProfile: "保存为会话档案",
       sessionProfileNamePrompt: "给这份会话起个名字：",
       sessionProfileSaved: "会话档案已保存",
-      sessionProfiles: "已关闭的浏览器",
       openProfile: "打开",
       openInNewWindow: "在新窗口打开",
-      reopenedFromProfile: "已从会话档案打开，关闭时会自动写回",
       savedBackToProfile: "已写回会话档案",
-      sessionProfilesHint: "关闭的浏览器保留在这里，可再次打开，登录态还在。也可以在登录步骤的 Cookie 模式里选作起点。",
-      noSessionProfiles: "还没有保存过会话档案。",
       defaultValue: "默认",
       sessionProfileField: "会话档案",
       sessionProfileFieldHint: "选一个在「浏览器」页手工登录后保存的会话。注意后端/指纹/代理要和这里选的一致，否则站点会看到环境突变。",
@@ -2218,26 +2226,30 @@ export interface Translations {
       osRandomLabel: "random",
       randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
       liveViewTitle: "Live view",
-      liveViewHint: "The real screen of this backend's browser. Requires VNC_ENABLE=1 and VNC_PASSWORD on the sidecar; the stream is proxied by this app, so no extra port is exposed.",
+      liveViewHint: "This browser's real screen. You can drive it directly.",
+      browserStatusRunning: "Running",
+      browserStatusStopped: "Stopped",
+      browserUnsaved: "unsaved",
+      noBrowsersYet: "No fingerprint browsers yet. Create one, sign in once, and it stays signed in every time you open it.",
+      newFingerprintBrowser: "New fingerprint browser",
+      editFingerprintBrowser: "Edit fingerprint browser",
+      editBrowserAction: "Edit",
+      deleteBrowserAction: "Delete (destroys the saved session too)",
+      deleteBrowserConfirm: "Deleting also destroys the saved sign-in, and cannot be undone. Delete it?",
+      cannotEditWhileRunning: "Close it first to edit",
+      envAppliesNextOpen: "A new fingerprint or proxy takes effect the next time it opens. The saved sign-in is left alone.",
       navBrowsers: "Fingerprint browsers",
-      browsersIntro: "Compose an environment from a backend, a fingerprint and a proxy, then keep a browser open and drive it yourself: register by hand, clear what a script cannot, and save the signed-in state as a session profile. A task that selects it with the same three settings runs in an identical environment.",
-      newBrowserInstance: "New browser instance",
+      browsersIntro: "Each row is a long-lived browser with its own fingerprint and proxy. Open one and drive it yourself — register by hand, clear what a script cannot — and closing it saves the sign-in, so it is still there next time. A task that selects the same one runs in an identical environment.",
       browserNameExample: "e.g. signup / US residential",
       launchBrowser: "Launch browser",
       browserLaunchFailed: "Could not launch the browser",
-      runningBrowsers: "Running instances",
-      noRunningBrowsers: "No browser instances are running.",
       stopBrowser: "Close (kept, can be reopened)",
       saveAsSessionProfile: "Save as a session profile",
       sessionProfileNamePrompt: "Name this session profile:",
       sessionProfileSaved: "Session profile saved",
-      sessionProfiles: "Closed browsers",
       openProfile: "Open",
       openInNewWindow: "Open in a new window",
-      reopenedFromProfile: "Opened from a saved profile — it saves back on close",
       savedBackToProfile: "Saved back to its profile",
-      sessionProfilesHint: "A closed browser is kept here and reopens still signed in. Also selectable as a starting point on a login step in cookie mode.",
-      noSessionProfiles: "No session profiles saved yet.",
       defaultValue: "Default",
       sessionProfileField: "Session profile",
       sessionProfileFieldHint: "A session captured by hand on the Browsers page. Use the same backend, fingerprint and proxy as it was captured with, or the site sees the environment change underneath the cookies.",

@@ -21,6 +21,7 @@ import random
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -515,6 +516,18 @@ def _xvnc_argv(display: int, view_port: int) -> list:
     ]
 
 
+def _wait_port(port: int, timeout: float = 10.0) -> bool:
+    """True once something accepts a TCP connection on 127.0.0.1:port."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
 def _start_session_display():
     """A KasmVNC server for one session: its own X display, its own view port.
 
@@ -571,6 +584,14 @@ def _start_session_display():
             time.sleep(0.1)
         if not ready:
             raise RuntimeError(f"X server for :{n} never created its socket")
+
+        # …and then for the VIEW PORT, which is a separate thing Xvnc sets up after the X
+        # socket. Reporting the port before it listens is what made the live view open on a
+        # bare blue screen and stay there: the app proxied to a port nothing answered on,
+        # while a second attempt moments later worked. Waiting here costs a few hundred ms
+        # and removes the race rather than papering over it with a retry in the viewer.
+        if view_port and not _wait_port(view_port):
+            raise RuntimeError(f"Xvnc for :{n} never listened on {view_port}")
 
         print(f"[display] :{n} up (view port {view_port})", flush=True)
         return n, view_port, procs

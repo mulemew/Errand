@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
-import { Monitor, Plus, Square, Loader2, Trash2, Globe } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/contexts/lang-context";
 
@@ -18,6 +18,7 @@ interface Instance {
   providerId: number | null;
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
+  sessionProfileId: number | null;
   createdAt: number;
   url: string;
 }
@@ -31,15 +32,43 @@ interface SessionProfile {
   updatedAt: string;
 }
 
+/**
+ * One row per browser, running or not.
+ *
+ * A saved profile and the process currently replaying it are the same browser to anyone
+ * using this page, so they are one row. `profileId` is null for a browser that has never
+ * been closed (nothing is saved yet); `instance` is null for one that is not running.
+ */
+interface Row {
+  key: string;
+  profileId: number | null;
+  instance: Instance | null;
+  name: string;
+  fingerprintProfileId: number | null;
+  proxyProfileId: number | null;
+  url: string | null;
+  sortAt: number;
+}
+
 const NONE = "none";
+
+const EMPTY_ROW: Row = {
+  key: "new",
+  profileId: null,
+  instance: null,
+  name: "",
+  fingerprintProfileId: null,
+  proxyProfileId: null,
+  url: null,
+  sortAt: 0,
+};
 
 /**
  * Long-lived browsers you drive by hand.
  *
- * A task's browser lives for one run and is thrown away. These are held open until you stop
- * them, in a chosen environment (backend + fingerprint + proxy), so you can do the things a
- * script cannot — register an account, clear a challenge that needs a human — and then save
- * the resulting session for a task that will run in the SAME environment.
+ * A task's browser lives for one run and is thrown away. These are kept: closing one saves
+ * its cookies, reopening replays them into the same fingerprint and the same exit IP, and a
+ * task can select the result to run in an identical environment.
  */
 export default function Browsers() {
   const { t } = useLang();
@@ -51,14 +80,13 @@ export default function Browsers() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [profiles, setProfiles] = useState<SessionProfile[]>([]);
 
-  const [name, setName] = useState("");
-  const [providerId, setProviderId] = useState(NONE);
-  const [fingerprintId, setFingerprintId] = useState(NONE);
-  const [proxyId, setProxyId] = useState(NONE);
-  const [startUrl, setStartUrl] = useState("");
-  const [launching, setLaunching] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [viewing, setViewing] = useState<Instance | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<{ id: string; name: string } | null>(null);
+
+  // The editor doubles as the creator: editing.key === "new" means "new".
+  const [editing, setEditing] = useState<Row | null>(null);
+  const [form, setForm] = useState({ name: "", fingerprintId: NONE, proxyId: NONE, startUrl: "" });
+  const [saving, setSaving] = useState(false);
 
   const load = () => {
     void fetch(`${BASE}/api/browsers`, { credentials: "same-origin" })
@@ -87,121 +115,289 @@ export default function Browsers() {
     return () => clearInterval(timer);
   }, []);
 
-  const launch = async () => {
-    setLaunching(true);
+  // Only camoufox carries a fingerprint, a live view and a session dump, so it is the only
+  // backend these can run on — settled here instead of being offered as a question.
+  const camoufoxProviderId = useMemo(
+    () => providers.find((p) => p.type === "camoufox")?.id ?? null,
+    [providers],
+  );
+
+  const rows: Row[] = useMemo(() => {
+    const byProfile = new Map<number, Instance>();
+    for (const i of instances) if (i.sessionProfileId != null) byProfile.set(i.sessionProfileId, i);
+
+    const out: Row[] = profiles.map((p) => {
+      const inst = byProfile.get(p.id) ?? null;
+      return {
+        key: `p${p.id}`,
+        profileId: p.id,
+        instance: inst,
+        name: inst?.name || p.name,
+        fingerprintProfileId: p.fingerprintProfileId,
+        proxyProfileId: p.proxyProfileId,
+        url: inst?.url ?? p.originUrl,
+        sortAt: Date.parse(p.updatedAt) || 0,
+      };
+    });
+
+    // A browser launched fresh has no profile row until it is closed for the first time.
+    for (const i of instances) {
+      if (i.sessionProfileId != null && profiles.some((p) => p.id === i.sessionProfileId)) continue;
+      out.push({
+        key: i.id,
+        profileId: null,
+        instance: i,
+        name: i.name,
+        fingerprintProfileId: i.fingerprintProfileId,
+        proxyProfileId: i.proxyProfileId,
+        url: i.url,
+        sortAt: i.createdAt,
+      });
+    }
+
+    // Running first — those are the ones you are about to touch.
+    return out.sort(
+      (a, b) => (a.instance ? 0 : 1) - (b.instance ? 0 : 1) || b.sortAt - a.sortAt,
+    );
+  }, [instances, profiles]);
+
+  const openEditor = (row: Row | null) => {
+    setEditing(row ?? EMPTY_ROW);
+    setForm({
+      name: row?.name ?? "",
+      fingerprintId: row?.fingerprintProfileId != null ? String(row.fingerprintProfileId) : NONE,
+      proxyId: row?.proxyProfileId != null ? String(row.proxyProfileId) : NONE,
+      startUrl: "",
+    });
+  };
+
+  const isNew = editing !== null && editing.key === "new";
+
+  const submitEditor = async () => {
+    if (!editing) return;
+    setSaving(true);
+    const fingerprintProfileId = form.fingerprintId === NONE ? null : Number(form.fingerprintId);
+    const proxyProfileId = form.proxyId === NONE ? null : Number(form.proxyId);
     try {
-      const res = await fetch(`${BASE}/api/browsers`, {
-        method: "POST",
+      if (isNew) {
+        const res = await fetch(`${BASE}/api/browsers`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: form.name.trim() || undefined,
+            providerId: camoufoxProviderId,
+            fingerprintProfileId,
+            proxyProfileId,
+            startUrl: form.startUrl.trim() || undefined,
+          }),
+        });
+        const data = (await res.json()) as { id?: string; error?: string };
+        if (!res.ok) {
+          toast({ title: t.browserLaunchFailed, description: data.error, variant: "destructive" });
+          return;
+        }
+        setEditing(null);
+        load();
+        if (data.id) setViewing({ id: data.id, name: form.name.trim() });
+        return;
+      }
+      if (editing.profileId == null) return;
+      const res = await fetch(`${BASE}/api/session-profiles/${editing.profileId}`, {
+        method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim() || undefined,
-          providerId: providerId === NONE ? null : Number(providerId),
-          fingerprintProfileId: fingerprintId === NONE ? null : Number(fingerprintId),
-          proxyProfileId: proxyId === NONE ? null : Number(proxyId),
-          startUrl: startUrl.trim() || undefined,
-        }),
+        body: JSON.stringify({ name: form.name.trim(), fingerprintProfileId, proxyProfileId }),
       });
-      const data = (await res.json()) as { id?: string; error?: string };
       if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
         toast({ title: t.browserLaunchFailed, description: data.error, variant: "destructive" });
         return;
       }
-      setName("");
-      setStartUrl("");
+      setEditing(null);
       load();
     } catch {
       toast({ title: t.networkError, variant: "destructive" });
     } finally {
-      setLaunching(false);
+      setSaving(false);
     }
   };
-
-  const stop = async (id: string) => {
-    setBusyId(id);
-    try {
-      await fetch(`${BASE}/api/browsers/${id}`, { method: "DELETE", credentials: "same-origin" });
-      if (viewing?.id === id) setViewing(null);
-      load();
-    } finally {
-      setBusyId(null);
-    }
-  };
-
 
   /**
-   * Reopen a saved profile as a running browser.
+   * Reopen a saved browser.
    *
-   * Only the id is sent. The server resolves the provider, fingerprint and proxy from the
-   * profile itself, because a session is only valid in the environment it was made in —
-   * sending saved cookies out through a different exit IP turns a working login into a
-   * security prompt. It also lands on the page the session was last used on, so what you
-   * get is the logged-in site rather than a blank tab.
+   * Only the id is sent. The server resolves the fingerprint and proxy from the profile
+   * itself, because a session is only valid in the environment it was made in — sending
+   * saved cookies out through a different exit IP turns a working login into a security
+   * prompt. It also lands on the page the session was last used on.
    */
-  const openProfile = async (sessionProfileId: number) => {
+  const open = async (row: Row) => {
+    if (row.profileId == null) return;
+    setBusyKey(row.key);
     try {
       const r = await fetch(`${BASE}/api/browsers`, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionProfileId }),
+        body: JSON.stringify({ sessionProfileId: row.profileId }),
       });
       const data = (await r.json()) as { id?: string; error?: string };
       if (!r.ok || !data.id) {
         toast({ title: t.browserLaunchFailed, description: data.error, variant: "destructive" });
         return;
       }
-      toast({ title: t.reopenedFromProfile, variant: "success" });
       load();
-      setViewing({ id: data.id, name: "" } as never);
+      setViewing({ id: data.id, name: row.name });
     } catch (err) {
       toast({ title: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    } finally {
+      setBusyKey(null);
     }
   };
 
-  const deleteProfile = async (id: number) => {
-    await fetch(`${BASE}/api/session-profiles/${id}`, { method: "DELETE", credentials: "same-origin" });
-    load();
+  const stop = async (row: Row) => {
+    if (!row.instance) return;
+    setBusyKey(row.key);
+    try {
+      await fetch(`${BASE}/api/browsers/${row.instance.id}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (viewing?.id === row.instance.id) setViewing(null);
+      load();
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const remove = async (row: Row) => {
+    if (row.profileId == null) return;
+    if (!window.confirm(t.deleteBrowserConfirm)) return;
+    setBusyKey(row.key);
+    try {
+      await fetch(`${BASE}/api/session-profiles/${row.profileId}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      load();
+    } finally {
+      setBusyKey(null);
+    }
   };
 
   const refName = (list: Ref[], id: number | null) => list.find((r) => r.id === id)?.name ?? t.noneValue;
-  const canPreview = (inst: Instance) =>
-    providers.find((p) => p.id === inst.providerId)?.type === "camoufox";
 
   return (
     <div className="max-w-4xl mx-auto p-4 md:p-6 space-y-4">
-      <div className="flex items-center gap-2">
-        <Monitor className="h-5 w-5 text-primary" />
-        <h1 className="text-lg font-semibold">{t.navBrowsers}</h1>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Monitor className="h-5 w-5 text-primary" />
+          <h1 className="text-lg font-semibold">{t.navBrowsers}</h1>
+        </div>
+        <Button size="sm" className="gap-2" onClick={() => openEditor(null)}>
+          <Plus className="h-4 w-4" />
+          {t.newFingerprintBrowser}
+        </Button>
       </div>
       <p className="text-xs text-muted-foreground -mt-2">{t.browsersIntro}</p>
 
-      {/* ── New instance ── */}
       <Card className="border-border">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm">{t.newBrowserInstance}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <CardContent className="p-2 space-y-2">
+          {rows.length === 0 ? (
+            <p className="text-xs text-muted-foreground p-2">{t.noBrowsersYet}</p>
+          ) : (
+            rows.map((row) => {
+              const running = row.instance !== null;
+              const busy = busyKey === row.key;
+              return (
+                <div key={row.key} className="flex items-center gap-2 p-2 rounded border border-border">
+                  <span
+                    className={`h-2 w-2 rounded-full shrink-0 ${running ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
+                    title={running ? t.browserStatusRunning : t.browserStatusStopped}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">
+                      {row.name}
+                      {running && row.profileId == null && (
+                        <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                          ({t.browserUnsaved})
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {running ? t.browserStatusRunning : t.browserStatusStopped} ·{" "}
+                      {refName(fingerprints, row.fingerprintProfileId)} · {refName(proxies, row.proxyProfileId)}
+                    </p>
+                  </div>
+
+                  {running ? (
+                    <>
+                      <Button
+                        variant="ghost" size="icon" className="h-7 w-7" title={t.liveViewTitle}
+                        onClick={() => setViewing({ id: row.instance!.id, name: row.name })}
+                      >
+                        <Globe className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon" className="h-7 w-7" title={t.stopBrowser}
+                        onClick={() => void stop(row)} disabled={busy}
+                      >
+                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="ghost" size="icon" className="h-7 w-7" title={t.openProfile}
+                      onClick={() => void open(row)} disabled={busy}
+                    >
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    </Button>
+                  )}
+
+                  <Button
+                    variant="ghost" size="icon" className="h-7 w-7"
+                    title={running ? t.cannotEditWhileRunning : t.editBrowserAction}
+                    disabled={running || row.profileId == null}
+                    onClick={() => openEditor(row)}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost" size="icon" className="h-7 w-7 text-destructive"
+                    title={running ? t.cannotEditWhileRunning : t.deleteBrowserAction}
+                    disabled={running || row.profileId == null || busy}
+                    onClick={() => void remove(row)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── New / edit ── */}
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">
+              {isNew ? t.newFingerprintBrowser : t.editFingerprintBrowser}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
             <div className="space-y-1.5">
               <Label className="text-xs">{t.fieldName}</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t.browserNameExample} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{t.navProviders}</Label>
-              <Select value={providerId} onValueChange={setProviderId}>
-                <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>{t.defaultValue}</SelectItem>
-                  {providers.map((p) => (
-                    <SelectItem key={p.id} value={String(p.id)}>{p.name}（{p.type}）</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder={t.browserNameExample}
+              />
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">{t.fingerprintLabel}</Label>
-              <Select value={fingerprintId} onValueChange={setFingerprintId}>
+              <Select value={form.fingerprintId} onValueChange={(v) => setForm({ ...form, fingerprintId: v })}>
                 <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NONE}>{t.noneValue}</SelectItem>
@@ -213,7 +409,7 @@ export default function Browsers() {
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">{t.proxyLabel}</Label>
-              <Select value={proxyId} onValueChange={setProxyId}>
+              <Select value={form.proxyId} onValueChange={(v) => setForm({ ...form, proxyId: v })}>
                 <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NONE}>{t.noneValue}</SelectItem>
@@ -223,91 +419,42 @@ export default function Browsers() {
                 </SelectContent>
               </Select>
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t.startingUrl}</Label>
-            <Input value={startUrl} onChange={(e) => setStartUrl(e.target.value)} placeholder="https://example.com" className="font-mono text-sm" />
-          </div>
-          <Button onClick={launch} disabled={launching} className="gap-2">
-            {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            {t.launchBrowser}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* ── Running instances ── */}
-      <Card className="border-border">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm">{t.runningBrowsers}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {instances.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t.noRunningBrowsers}</p>
-          ) : (
-            instances.map((inst) => (
-              <div key={inst.id} className="flex items-center gap-2 p-2 rounded border border-border">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{inst.name}</p>
-                  <p className="text-[11px] text-muted-foreground font-mono truncate">{inst.url}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {refName(providers, inst.providerId)} · {refName(fingerprints, inst.fingerprintProfileId)} · {refName(proxies, inst.proxyProfileId)}
-                  </p>
-                </div>
-                {canPreview(inst) && (
-                  <Button variant="ghost" size="icon" className="h-7 w-7" title={t.liveViewTitle} onClick={() => setViewing(inst)}>
-                    <Globe className="h-4 w-4" />
-                  </Button>
-                )}
-                <Button variant="ghost" size="icon" className="h-7 w-7" title={t.stopBrowser}
-                  onClick={() => void stop(inst.id)} disabled={busyId === inst.id}>
-                  <Square className="h-4 w-4" />
-                </Button>
+            {isNew ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">{t.startingUrl}</Label>
+                <Input
+                  value={form.startUrl}
+                  onChange={(e) => setForm({ ...form, startUrl: e.target.value })}
+                  placeholder="https://example.com"
+                  className="font-mono text-sm"
+                />
               </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      {/* ── Closed browsers: kept, reopenable ── */}
-      <Card className="border-border">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm">{t.sessionProfiles}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="text-xs text-muted-foreground">{t.sessionProfilesHint}</p>
-          {profiles.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t.noSessionProfiles}</p>
-          ) : (
-            profiles.map((p) => (
-              <div key={p.id} className="flex items-center gap-2 p-2 rounded border border-border">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{p.name}</p>
-                  <p className="text-[11px] text-muted-foreground font-mono truncate">{p.originUrl ?? ""}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {refName(providers, p.providerId)} · {refName(fingerprints, p.fingerprintProfileId)} · {refName(proxies, p.proxyProfileId)}
-                  </p>
-                </div>
-                <Button variant="outline" size="sm" className="h-7 text-xs shrink-0"
-                  onClick={() => void openProfile(p.id)}>
-                  {t.openProfile}
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive"
-                  onClick={() => void deleteProfile(p.id)}>
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">{t.envAppliesNextOpen}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setEditing(null)}>{t.cancel}</Button>
+            <Button size="sm" className="gap-2" onClick={() => void submitEditor()} disabled={saving}>
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {isNew ? t.launchBrowser : t.saveChanges}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Live screen. Mounting the iframe is what opens the connection, so it exists only
           while the dialog is open — closing it puts the browser back in the background
           without stopping it. */}
       <Dialog open={viewing !== null} onOpenChange={(o) => !o && setViewing(null)}>
         <DialogContent className="max-w-6xl w-full p-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-2">
-            <p className="text-xs text-muted-foreground">{t.liveViewHint}</p>
+          {/* No wrapping: the button used to follow a paragraph of text in a flex-wrap row
+              and dropped onto a second line that the dialog clipped, which read as "the
+              option is sometimes missing". */}
+          <div className="flex items-center gap-2 px-1 pb-2 pr-8">
+            <p className="text-xs text-muted-foreground min-w-0 flex-1 truncate">
+              {viewing?.name || t.liveViewTitle}
+            </p>
             {viewing && (
               // A real window, not an iframe: KasmVNC's clipboard and file transfer want
               // the focus and the permissions of a top-level document, and a browser you
