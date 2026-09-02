@@ -327,6 +327,27 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
   // asking for a limit. Retries are excluded: a retry is the same run trying again, and
   // letting one consume a slot would mean two failures could quietly eat a window.
 
+  /** What the timer does when it goes off, from either arming path. */
+  async function fireAndRearm(): Promise<void> {
+    try {
+      const [task] = await db
+        .select({ enabled: tasksTable.enabled, cronExpression: tasksTable.cronExpression })
+        .from(tasksTable)
+        .where(eq(tasksTable.id, taskId));
+      if (!task?.enabled || !task.cronExpression || !parseRandomSchedule(task.cronExpression)) {
+        randomScheduleTimeouts.delete(taskId);
+        return;
+      }
+      logger.info({ taskId, windowMinutes, runsPerWindow }, "Random-interval task run triggered");
+      await runTask(taskId, false, "cron");
+    } catch (err) {
+      logger.error({ taskId, err }, "Random-interval task run failed");
+    } finally {
+      // Re-arm from the run that just happened, whatever its outcome.
+      scheduleWindow().catch((err: unknown) => logger.error({ taskId, err }, "scheduleWindow error"));
+    }
+  }
+
   async function scheduleWindow(): Promise<void> {
     const now = Date.now();
     const timeouts: ReturnType<typeof setTimeout>[] = [];
@@ -381,6 +402,35 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
       nextRunMs = now + 5_000 + Math.random() * Math.min(windowMs * 0.05, 5 * 60 * 1000);
     }
 
+    // A next run that is already pending is KEPT, not re-rolled.
+    //
+    // scheduleWindow runs on three occasions, and only one of them wants a new draw: after
+    // a run finishes (the stored time is then in the past, so the check below lets it
+    // through). The other two are a task edit and a server restart, both of which call
+    // scheduleTask for every task — and every one of those was silently reshuffling a
+    // random task's next run. Renaming a task moved it; a deploy moved all of them; the
+    // countdown on screen changed for no reason the user could see.
+    //
+    // An edit that changes the SCHEDULE clears next_run_at in the update route, so this
+    // preserves nothing in the case where it should not.
+    let pending: Date | null = null;
+    try {
+      const [row] = await db.select({ nextRunAt: tasksTable.nextRunAt }).from(tasksTable).where(eq(tasksTable.id, taskId));
+      pending = row?.nextRunAt ?? null;
+    } catch { /* unreadable — fall through to the fresh draw */ }
+    const pendingMs = pending ? new Date(pending).getTime() : 0;
+    if (pendingMs > now && pendingMs <= windowEndMs) {
+      nextRunMs = pendingMs;
+      logger.info({ taskId, nextRunAt: new Date(nextRunMs).toISOString() }, "Random-interval task kept its pending next run");
+      setLongTimeout(
+        () => { void fireAndRearm(); },
+        nextRunMs - now,
+        timeouts,
+      );
+      randomScheduleTimeouts.set(taskId, timeouts);
+      return;
+    }
+
     db.update(tasksTable).set({ nextRunAt: new Date(nextRunMs) }).where(eq(tasksTable.id, taskId)).catch(() => {});
     logger.info(
       {
@@ -399,27 +449,7 @@ function scheduleRandomTask(taskId: number, windowMinutes: number, runsPerWindow
     );
 
     setLongTimeout(
-      () => {
-        void (async () => {
-          try {
-            const [task] = await db
-              .select({ enabled: tasksTable.enabled, cronExpression: tasksTable.cronExpression })
-              .from(tasksTable)
-              .where(eq(tasksTable.id, taskId));
-            if (!task?.enabled || !task.cronExpression || !parseRandomSchedule(task.cronExpression)) {
-              randomScheduleTimeouts.delete(taskId);
-              return;
-            }
-            logger.info({ taskId, windowMinutes, runsPerWindow }, "Random-interval task run triggered");
-            await runTask(taskId, false, "cron");
-          } catch (err) {
-            logger.error({ taskId, err }, "Random-interval task run failed");
-          } finally {
-            // Re-arm from the run that just happened, whatever its outcome.
-            scheduleWindow().catch((err: unknown) => logger.error({ taskId, err }, "scheduleWindow error"));
-          }
-        })();
-      },
+      () => { void fireAndRearm(); },
       nextRunMs - now,
       timeouts,
     );

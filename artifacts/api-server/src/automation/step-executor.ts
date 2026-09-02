@@ -5,7 +5,7 @@ import { logger } from "../lib/logger";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
 import { detectLoginState } from "./login-verify";
-import { pageHasSuccessText } from "./success-text";
+import { pageHasSuccessText, selectorIsVisible, CRITERION_WAIT_MS } from "./success-text";
 import { detectAndHandleCaptcha } from "./captcha";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
@@ -1338,7 +1338,21 @@ async function isSessionAuthenticated(
   successText?: string,
   opts?: { settleMs?: number },
 ): Promise<boolean> {
-  const deadline = Date.now() + (opts?.settleMs ?? Number(process.env.SESSION_PROBE_MS ?? 8000));
+  // Same budget as the form path, for the same criterion.
+  //
+  // The MATCHER was unified and the BUDGET was not, which left the same disagreement in a
+  // new place: 8s here against 25s there. A dashboard that fetches its content after it
+  // renders — the case the 25s was raised for — passed the form check and failed this one,
+  // so cookie mode declared a perfectly good session dead and logged in on top of it.
+  //
+  // Without a criterion nothing is being waited FOR (the heuristics below read whatever is
+  // on the page now), so the short budget stays: waiting longer would only delay a login
+  // that is going to happen anyway.
+  const hasConfiguredCriterion = !!(successText?.trim() || successSelector?.trim());
+  const budgetMs =
+    opts?.settleMs ??
+    (hasConfiguredCriterion ? CRITERION_WAIT_MS : Number(process.env.SESSION_PROBE_MS ?? 8000));
+  const deadline = Date.now() + budgetMs;
   for (let attempt = 1; ; attempt++) {
     const done = await probeSessionOnce(page, successSelector, successText, attempt);
     if (done !== null) return done;
@@ -1384,22 +1398,15 @@ async function probeSessionOnce(
     } catch {}
   }
   if (successSelector) {
+    // The shared check, not a second copy of it. This one was identical to selectorIsVisible
+    // by luck rather than by construction, and the text check next to it had already drifted
+    // once with exactly that excuse.
     try {
-      const el = await page.$(successSelector);
-      if (el) {
-        const visible = await el.evaluate((e: Element) => {
-          const style = window.getComputedStyle(e);
-          const rect = e.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0;
-        }).catch(() => false) as boolean;
-        if (visible) {
-          logger.debug({ attempt, successSelector }, "Session check: success SELECTOR matched and is visible");
-          return true;
-        }
-        logger.debug({ attempt, successSelector }, "Session check: success selector matched but is not visible yet");
-      } else if (successSelector) {
-        logger.debug({ attempt, successSelector }, "Session check: success selector has not appeared yet");
+      if (await selectorIsVisible(page, successSelector)) {
+        logger.debug({ attempt, successSelector }, "Session check: success SELECTOR matched and is visible");
+        return true;
       }
+      logger.debug({ attempt, successSelector }, "Session check: success selector not visible yet");
     } catch {}
   }
   if (hasCriterion) {
