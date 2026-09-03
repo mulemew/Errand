@@ -145,6 +145,64 @@ interface TokenDetection {
   sitekey: string | null;
 }
 
+/**
+ * Does this Turnstile have anything a person could interact with?
+ *
+ * `turnstile.render()` inserts an empty `cf-turnstile-response` input the moment it runs,
+ * so "a Turnstile exists on this page" is true long before — and sometimes instead of —
+ * "a Turnstile is blocking us". hoster24 renders one explicitly labelled `unsichtbar`
+ * (invisible) whose token its OWN script fetches when the Google credential comes back:
+ *
+ *     <div id="turnstileGoogle"></div>
+ *     _tsGoogleId = turnstile.render('#turnstileGoogle', { ... })
+ *     body: JSON.stringify({ credential: response.credential, turnstileToken: gToken })
+ *
+ * There is no checkbox, there never will be, and no token appears until the site asks for
+ * one. Waiting for it and then hunting for a checkbox reported "captcha needs resolution"
+ * on a page with no captcha in the way.
+ *
+ * Measured from the host container rather than the iframe: Turnstile's iframe lives in a
+ * CLOSED shadow root, so the document cannot see it, while the div it was rendered into is
+ * ordinary DOM. A managed widget makes that div about 300x65; an invisible one leaves it at
+ * nothing.
+ */
+async function turnstileInteractiveSurface(page: PageAdapter): Promise<{ visible: boolean; detail: string }> {
+  // A real widget frame is interactive whatever the container measures.
+  try {
+    const frame = page
+      .frames()
+      .map((f) => { try { return f.url(); } catch { return ""; } })
+      .find((u) => u.includes("challenges.cloudflare.com") || u.includes("turnstile"));
+    if (frame) return { visible: true, detail: "widget frame present" };
+  } catch { /* not every adapter exposes frames() */ }
+
+  return (await page
+    .evaluate(() => {
+      const hosts = new Set<Element>();
+      for (const sel of [".cf-turnstile", "[data-sitekey]", "[id*='turnstile']", "[class*='turnstile']"]) {
+        for (const el of Array.from(document.querySelectorAll(sel))) hosts.add(el);
+      }
+      // The input's own parent is the host when the site used a bare div with no class.
+      for (const el of Array.from(document.querySelectorAll("input[name='cf-turnstile-response']"))) {
+        if (el.parentElement) hosts.add(el.parentElement);
+      }
+      let best = 0;
+      for (const el of hosts) {
+        const style = window.getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden") continue;
+        const r = el.getBoundingClientRect();
+        best = Math.max(best, Math.min(r.width, r.height));
+      }
+      // 10px: a rendered checkbox is tens of pixels tall, and a 1-2px container is the
+      // sizing artefact of an invisible widget rather than something to aim at.
+      return { visible: best >= 10, detail: `largest host min-dimension ${Math.round(best)}px` };
+    })
+    .catch(() => ({ visible: true, detail: "could not measure — assuming interactive" }))) as {
+    visible: boolean;
+    detail: string;
+  };
+}
+
 async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | null> {
   // ── 0. Cloudflare Turnstile in reCAPTCHA-compatibility mode ───────────────
   // Some sites embed Cloudflare Turnstile but render
@@ -189,12 +247,25 @@ async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | n
     // a container/sitekey — never on its own.
     const hasWidget = !!(cfInput || cfIframe || cfContainer || isTurnstileKey);
     const detected = hasWidget || (!!cfScript && !!sitekey);
-    return { detected, sitekey };
-  }) as { detected: boolean; sitekey: string | null };
+    const via = [
+      cfInput && "response-input",
+      cfIframe && "iframe",
+      cfContainer && ".cf-turnstile",
+      isTurnstileKey && "0x-sitekey",
+      !hasWidget && cfScript && sitekey && "script+sitekey",
+    ]
+      .filter(Boolean)
+      .join(",");
+    return { detected, sitekey, via };
+  }) as { detected: boolean; sitekey: string | null; via: string };
 
   if (turnstile.detected) {
+    // WHICH fingerprint matched, not just that one did. "Turnstile detected, sitekey null"
+    // is the same line whether a full challenge is blocking the page or a site merely
+    // called turnstile.render() and left an empty response input behind, and telling those
+    // apart from the log is the whole job when a task reports a captcha nobody can see.
     logger.warn(
-      { type: "Turnstile", sitekey: turnstile.sitekey },
+      { type: "Turnstile", sitekey: turnstile.sitekey, via: turnstile.via },
       "Turnstile detected (incl. reCAPTCHA-compatibility mode)",
     );
     return { type: "Turnstile", sitekey: turnstile.sitekey };
@@ -951,6 +1022,24 @@ export async function detectAndHandleCaptcha(
       if (await checkTurnstileToken()) {
         logger.info("Turnstile auto-solved (token present after full wait)");
         return { detected: true, solved: true, message: "Turnstile widget auto-solved (managed mode)" };
+      }
+
+      // Nothing rendered to interact with: the widget is invisible and the page drives it
+      // itself. Not a gate, so do not treat it as one — the click phase below would find
+      // no checkbox (correctly) and report needs-attention on a page with no captcha in
+      // the way. Checked after the wait above so a widget that was merely slow to render
+      // has already had its chance.
+      {
+        const surface = await turnstileInteractiveSurface(page);
+        if (!surface.visible) {
+          logger.info({ detail: surface.detail }, "Turnstile is invisible — the page fetches its own token; continuing");
+          return {
+            detected: true,
+            solved: false,
+            needsAttention: false,
+            message: `Invisible Turnstile (${surface.detail}) — no widget to solve; the page requests its own token`,
+          };
+        }
       }
 
       // ── Phase 2: Token not auto-populated — try clicking the checkbox ──
