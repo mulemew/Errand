@@ -23,10 +23,13 @@ export const sessionProfilesTable = pgTable("session_profiles", {
   providerId: integer("provider_id"),
   fingerprintProfileId: integer("fingerprint_profile_id"),
   proxyProfileId: integer("proxy_profile_id"),
-  /** Where it was captured, and where it was left — updated on every close. */
+  /**
+   * Where it will open next: whatever it was showing when it closed, or whatever you typed
+   * over that in the editor. One column, because those are the same fact — "the page this
+   * browser is on" — and a second one holding a permanent override only existed to make
+   * "leave the box alone" mean something different from "type the same thing".
+   */
   originUrl: text("origin_url"),
-  /** Where YOU want it to open. Set: always opens here. Empty: resumes from originUrl. */
-  startUrl: text("start_url"),
   /** Every tab that was open at close, so reopening restores the whole window. */
   openUrls: jsonb("open_urls"),
   /** Open this browser again on startup. Off by default: each one is a whole Firefox. */

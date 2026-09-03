@@ -32,7 +32,6 @@ interface SessionProfile {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   originUrl: string | null;
-  startUrl: string | null;
   autostart: boolean;
   updatedAt: string;
 }
@@ -51,9 +50,8 @@ interface Row {
   name: string;
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
+  /** Where it is, which is where it will open next. */
   url: string | null;
-  /** Where it should open, when that is not "wherever it was left". */
-  startUrl: string;
   autostart: boolean;
   /** When the process started, for the uptime counter. Only set while running. */
   startedAt: number | null;
@@ -70,7 +68,6 @@ const EMPTY_ROW: Row = {
   fingerprintProfileId: null,
   proxyProfileId: null,
   url: null,
-  startUrl: "",
   autostart: false,
   startedAt: null,
   sortAt: 0,
@@ -126,15 +123,6 @@ export default function Browsers() {
   // The editor doubles as the creator: editing.key === "new" means "new".
   const [editing, setEditing] = useState<Row | null>(null);
   const [form, setForm] = useState({ name: "", fingerprintId: NONE, proxyId: NONE, startUrl: "", autostart: false });
-  /**
-   * What the URL box was filled with, and whether that value was an override already.
-   *
-   * The box shows where the browser IS, so you can see it and change it. Leaving it alone
-   * therefore has to mean "carry on resuming", not "pin it here forever" — otherwise
-   * opening the dialog and pressing save would quietly freeze the browser to one page.
-   * Only a value you actually changed becomes an override.
-   */
-  const [urlSeed, setUrlSeed] = useState({ value: "", wasOverride: false });
   const [saving, setSaving] = useState(false);
 
   const load = () => {
@@ -199,7 +187,6 @@ export default function Browsers() {
         fingerprintProfileId: p.fingerprintProfileId,
         proxyProfileId: p.proxyProfileId,
         url: inst?.url ?? p.originUrl,
-        startUrl: p.startUrl ?? "",
         autostart: p.autostart === true,
         startedAt: inst?.createdAt ?? null,
         sortAt: Date.parse(p.updatedAt) || 0,
@@ -218,7 +205,6 @@ export default function Browsers() {
         fingerprintProfileId: i.fingerprintProfileId,
         proxyProfileId: i.proxyProfileId,
         url: i.url,
-        startUrl: "",
         autostart: false,
         startedAt: i.createdAt,
         sortAt: i.createdAt,
@@ -232,9 +218,9 @@ export default function Browsers() {
   }, [instances, profiles]);
 
   const openEditor = (row: Row | null) => {
-    // An override if one is set, otherwise wherever it is right now — which is what it will
-    // reopen at if nothing here changes.
-    const seed = row ? row.startUrl || row.url || "" : "";
+    // Where it is now, which is where it will open next. Saving it back unchanged is a
+    // no-op rather than a decision, which is why there is nothing clever here.
+    const seed = row?.url ?? "";
     setEditing(row ?? EMPTY_ROW);
     setForm({
       name: row?.name ?? "",
@@ -243,7 +229,6 @@ export default function Browsers() {
       startUrl: seed,
       autostart: row?.autostart ?? false,
     });
-    setUrlSeed({ value: seed, wasOverride: !!row?.startUrl });
   };
 
   const isNew = editing !== null && editing.key === "new";
@@ -288,12 +273,7 @@ export default function Browsers() {
           fingerprintProfileId,
           proxyProfileId,
           autostart: form.autostart,
-          // Unchanged, and it was only ever a display of the current page: send "" so the
-          // column stays clear and the browser goes on resuming where it was left.
-          startUrl:
-            !urlSeed.wasOverride && form.startUrl.trim() === urlSeed.value.trim()
-              ? ""
-              : form.startUrl.trim(),
+          startUrl: form.startUrl.trim(),
         }),
       });
       if (!res.ok) {

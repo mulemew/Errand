@@ -112,7 +112,6 @@ router.post("/browsers", async (req, res): Promise<void> => {
       fingerprintProfileId: number | null;
       proxyProfileId: number | null;
       originUrl: string | null;
-      startUrl: string | null;
       openUrls: unknown;
       name: string;
     } | null = null;
@@ -125,7 +124,6 @@ router.post("/browsers", async (req, res): Promise<void> => {
           fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
           proxyProfileId: sessionProfilesTable.proxyProfileId,
           originUrl: sessionProfilesTable.originUrl,
-          startUrl: sessionProfilesTable.startUrl,
           openUrls: sessionProfilesTable.openUrls,
         })
         .from(sessionProfilesTable)
@@ -187,9 +185,7 @@ router.post("/browsers", async (req, res): Promise<void> => {
       sessionProfileId: boundProfileId,
       // Land where the session was last used, so reopening shows the logged-in page rather
       // than a blank tab you have to navigate yourself.
-      // A start page you set is where it opens, every time. Without one it resumes from
-      // wherever it was when you closed it.
-      startUrl: (body.startUrl ?? "").trim() || profile?.startUrl || profile?.originUrl || undefined,
+      startUrl: (body.startUrl ?? "").trim() || profile?.originUrl || undefined,
       restoreTabs: Array.isArray(profile?.openUrls)
         ? (profile.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
         : [],
@@ -299,7 +295,6 @@ router.get("/session-profiles", async (_req, res): Promise<void> => {
       fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
       proxyProfileId: sessionProfilesTable.proxyProfileId,
       originUrl: sessionProfilesTable.originUrl,
-      startUrl: sessionProfilesTable.startUrl,
       autostart: sessionProfilesTable.autostart,
       updatedAt: sessionProfilesTable.updatedAt,
     })
@@ -327,7 +322,8 @@ router.patch("/session-profiles/:id", async (req, res): Promise<void> => {
     proxyProfileId?: number | null;
     /** Reopen this browser when the server starts. */
     autostart?: boolean;
-    /** Where it should open. Empty string clears it, and it resumes where it left off. */
+    /** Where it opens next. Overwrites the stored last position; the next close
+     *  overwrites it again with wherever you ended up. */
     startUrl?: string | null;
   };
   const patch: Record<string, unknown> = {};
@@ -343,7 +339,7 @@ router.patch("/session-profiles/:id", async (req, res): Promise<void> => {
   if (body.fingerprintProfileId !== undefined) patch.fingerprintProfileId = body.fingerprintProfileId;
   if (body.proxyProfileId !== undefined) patch.proxyProfileId = body.proxyProfileId;
   if (typeof body.autostart === "boolean") patch.autostart = body.autostart;
-  if (body.startUrl !== undefined) patch.startUrl = (body.startUrl ?? "").trim() || null;
+  if (body.startUrl !== undefined) patch.originUrl = (body.startUrl ?? "").trim() || null;
   if (Object.keys(patch).length === 0) {
     res.status(400).json({ error: "Nothing to update" });
     return;
@@ -408,7 +404,6 @@ export async function restoreAutostartBrowsers(): Promise<void> {
           fingerprintProfileId: sessionProfilesTable.fingerprintProfileId,
           proxyProfileId: sessionProfilesTable.proxyProfileId,
           originUrl: sessionProfilesTable.originUrl,
-          startUrl: sessionProfilesTable.startUrl,
           openUrls: sessionProfilesTable.openUrls,
         })
         .from(sessionProfilesTable)
@@ -424,7 +419,7 @@ export async function restoreAutostartBrowsers(): Promise<void> {
         fingerprintProfileId: full.fingerprintProfileId,
         proxyProfileId: full.proxyProfileId,
         sessionProfileId: row.id,
-        startUrl: full.startUrl || full.originUrl || undefined,
+        startUrl: full.originUrl || undefined,
         restoreTabs: Array.isArray(full.openUrls)
           ? (full.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
           : [],
