@@ -384,7 +384,16 @@ export default function Browsers() {
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{row.name}</p>
-                    <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
+                      {/* Under the name, at the end of the line it belongs to — not wedged
+                          between the environment marks and the buttons. */}
+                      {running && (
+                        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                          <Uptime since={row.startedAt ?? Date.now()} />
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* The environment, as marks rather than a sentence: the fingerprint's OS
@@ -409,12 +418,6 @@ export default function Browsers() {
                       <Zap className="h-3.5 w-3.5" />
                     </span>
                   )}
-                  {running && (
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground w-12 text-right">
-                      <Uptime since={row.startedAt ?? Date.now()} />
-                    </span>
-                  )}
-
                   {running ? (
                     <>
                       <Button
