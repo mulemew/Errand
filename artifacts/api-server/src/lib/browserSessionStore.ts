@@ -129,6 +129,7 @@ export async function createSessionProfile(opts: {
   proxyProfileId: number | null;
   originUrl: string | null;
   startUrl?: string | null;
+  openUrls?: string[];
   autostart?: boolean;
 }): Promise<number | null> {
   try {
@@ -142,6 +143,7 @@ export async function createSessionProfile(opts: {
         proxyProfileId: opts.proxyProfileId,
         originUrl: opts.originUrl,
         startUrl: opts.startUrl ?? null,
+        openUrls: opts.openUrls ?? null,
         autostart: opts.autostart ?? false,
       })
       .returning({ id: sessionProfilesTable.id });
@@ -155,7 +157,7 @@ export async function createSessionProfile(opts: {
 export async function saveSessionProfileState(
   id: number,
   state: unknown,
-  originUrl?: string | null,
+  meta?: { originUrl?: string | null; openUrls?: string[] },
 ): Promise<boolean> {
   try {
     const patch: Record<string, unknown> = {
@@ -163,7 +165,10 @@ export async function saveSessionProfileState(
       updatedAt: new Date(),
     };
     // Where it was when you closed it, so reopening resumes rather than restarts.
-    if (originUrl) patch.originUrl = originUrl;
+    if (meta?.originUrl) patch.originUrl = meta.originUrl;
+    // Written even when empty: a window you closed down to one tab should come back as one
+    // tab, not with yesterday's five.
+    if (meta?.openUrls) patch.openUrls = meta.openUrls;
     await db.update(sessionProfilesTable).set(patch).where(eq(sessionProfilesTable.id, id));
     return true;
   } catch (err) {

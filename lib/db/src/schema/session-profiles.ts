@@ -27,6 +27,8 @@ export const sessionProfilesTable = pgTable("session_profiles", {
   originUrl: text("origin_url"),
   /** Where YOU want it to open. Set: always opens here. Empty: resumes from originUrl. */
   startUrl: text("start_url"),
+  /** Every tab that was open at close, so reopening restores the whole window. */
+  openUrls: jsonb("open_urls"),
   /** Open this browser again on startup. Off by default: each one is a whole Firefox. */
   autostart: boolean("autostart").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

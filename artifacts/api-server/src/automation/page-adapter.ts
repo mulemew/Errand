@@ -97,6 +97,14 @@ export interface PageAdapter {
    * (e.g. a click opened a new tab without a switchToNewPage step).
    */
   getOpenPages(): PageAdapter[];
+  /**
+   * Open another tab in the same browser context.
+   *
+   * Not `provider.newPage()`, which for camoufox means "connect, make a context, make a
+   * page" — calling that again gives you a second BROWSER. Optional: only the Playwright
+   * wrapper can do it, and only the camoufox backend needs it.
+   */
+  openTab?(url?: string): Promise<PageAdapter>;
 }
 
 // ── Puppeteer wrapper ─────────────────────────────────────────────────────────
@@ -353,6 +361,15 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
           .pages()
           .filter((p) => !p.isClosed())
           .map((p) => wrapPlaywrightPage(p)),
+      openTab: async (url?: string) => {
+        const tab = await page.context().newPage();
+        if (url) {
+          await tab
+            .goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 })
+            .catch(() => { /* a tab that will not load is still a tab */ });
+        }
+        return wrapPlaywrightPage(tab);
+      },
     };
     return adapter;
   }

@@ -155,6 +155,7 @@ import { pool } from "@workspace/db";
 
   ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "autostart" boolean NOT NULL DEFAULT false;
   ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "start_url" text;
+  ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "open_urls" jsonb;
   `;
 
   export async function runMigrations(): Promise<void> {

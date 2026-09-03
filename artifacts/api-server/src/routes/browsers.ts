@@ -113,6 +113,7 @@ router.post("/browsers", async (req, res): Promise<void> => {
       proxyProfileId: number | null;
       originUrl: string | null;
       startUrl: string | null;
+      openUrls: unknown;
       name: string;
     } | null = null;
 
@@ -125,6 +126,7 @@ router.post("/browsers", async (req, res): Promise<void> => {
           proxyProfileId: sessionProfilesTable.proxyProfileId,
           originUrl: sessionProfilesTable.originUrl,
           startUrl: sessionProfilesTable.startUrl,
+          openUrls: sessionProfilesTable.openUrls,
         })
         .from(sessionProfilesTable)
         .where(eq(sessionProfilesTable.id, body.sessionProfileId));
@@ -186,6 +188,9 @@ router.post("/browsers", async (req, res): Promise<void> => {
       // A start page you set is where it opens, every time. Without one it resumes from
       // wherever it was when you closed it.
       startUrl: (body.startUrl ?? "").trim() || profile?.startUrl || profile?.originUrl || undefined,
+      restoreTabs: Array.isArray(profile?.openUrls)
+        ? (profile.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
+        : [],
     });
     res.status(201).json({ id: inst.id, sessionProfileId: boundProfileId });
   } catch (err) {
@@ -402,6 +407,7 @@ export async function restoreAutostartBrowsers(): Promise<void> {
           proxyProfileId: sessionProfilesTable.proxyProfileId,
           originUrl: sessionProfilesTable.originUrl,
           startUrl: sessionProfilesTable.startUrl,
+          openUrls: sessionProfilesTable.openUrls,
         })
         .from(sessionProfilesTable)
         .where(eq(sessionProfilesTable.id, row.id));
@@ -417,6 +423,9 @@ export async function restoreAutostartBrowsers(): Promise<void> {
         proxyProfileId: full.proxyProfileId,
         sessionProfileId: row.id,
         startUrl: full.startUrl || full.originUrl || undefined,
+        restoreTabs: Array.isArray(full.openUrls)
+          ? (full.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
+          : [],
       });
       logger.info({ sessionProfileId: row.id, name: row.name }, "Autostart browser reopened");
     } catch (err) {

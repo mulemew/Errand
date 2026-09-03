@@ -114,6 +114,8 @@ export async function launchInstance(opts: {
   proxyProfileId: number | null;
   sessionProfileId?: number | null;
   startUrl?: string;
+  /** The other tabs that were open at close. The first page goes to startUrl. */
+  restoreTabs?: string[];
 }): Promise<BrowserInstance> {
   let dumper: (() => Promise<unknown>) | null = null;
   // The id has to exist BEFORE the browser starts: it is also the name the sidecar's
@@ -135,6 +137,21 @@ export async function launchInstance(opts: {
     await page.goto(opts.startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((err) => {
       logger.warn({ err, url: opts.startUrl }, "Browser instance could not open its start URL");
     });
+  }
+
+  // The window as you left it, not just its first tab. Sequential and best-effort: one site
+  // that refuses to load must not cost you the rest of the tabs, and a burst of parallel
+  // navigations through one proxy is a good way to make several of them fail.
+  const extraTabs = (opts.restoreTabs ?? []).filter((u) => u && u !== opts.startUrl);
+  if (extraTabs.length && typeof page.openTab === "function") {
+    for (const url of extraTabs) {
+      try {
+        await page.openTab(url);
+      } catch (err) {
+        logger.warn({ err, url }, "Could not restore a tab");
+      }
+    }
+    logger.info({ id, count: extraTabs.length }, "Restored the tabs that were open at close");
   }
 
   const inst: BrowserInstance = {
@@ -162,6 +179,35 @@ export async function launchInstance(opts: {
   return inst;
 }
 
+/**
+ * Every tab worth reopening, in the order the context reports them.
+ *
+ * Blank tabs and internal pages are dropped — restoring `about:blank` five times is not
+ * restoring anything — and the list is capped so a runaway page that spawns tabs cannot
+ * turn one close into a hundred launches on the next open.
+ */
+const MAX_RESTORED_TABS = 20;
+
+function collectOpenUrls(inst: BrowserInstance): string[] {
+  try {
+    const seen = new Set<string>();
+    for (const pg of inst.page.getOpenPages()) {
+      let u = "";
+      try {
+        u = pg.url();
+      } catch {
+        continue;
+      }
+      if (!/^https?:\/\//i.test(u)) continue;
+      seen.add(u);
+      if (seen.size >= MAX_RESTORED_TABS) break;
+    }
+    return [...seen];
+  } catch {
+    return [];
+  }
+}
+
 export async function stopInstance(id: string): Promise<boolean> {
   const inst = instances.get(id);
   if (!inst) return false;
@@ -181,13 +227,16 @@ export async function stopInstance(id: string): Promise<boolean> {
       // create an empty one that would look like a session that expired.
       logger.warn({ id }, "Nothing to save on close");
     } else if (inst.sessionProfileId != null) {
-      await saveSessionProfileState(inst.sessionProfileId, state, (() => {
-        try {
-          return inst.page.url();
-        } catch {
-          return null;
-        }
-      })());
+      await saveSessionProfileState(inst.sessionProfileId, state, {
+        originUrl: (() => {
+          try {
+            return inst.page.url();
+          } catch {
+            return null;
+          }
+        })(),
+        openUrls: collectOpenUrls(inst),
+      });
       logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
     } else {
       const newId = await createSessionProfile({
