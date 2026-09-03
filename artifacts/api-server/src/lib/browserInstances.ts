@@ -35,6 +35,7 @@ export interface BrowserInstance {
   lastUsedAt: number;
   url: string;
   provider: BrowserProvider;
+  /** Reassigned when the tracked tab is closed and another is still open — see pruneDeadInstances. */
   page: PageAdapter;
   /** Playwright storageState dumper, when the backend supports one. */
   dumpStorageState: (() => Promise<unknown>) | null;
@@ -63,6 +64,21 @@ function pruneDeadInstances(): void {
       dead = inst.page.isClosed();
     } catch {
       dead = true;
+    }
+    // A closed TAB is not a closed browser. Opening a second tab and closing the first is
+    // an ordinary thing to do in a browser you are driving by hand, and it used to take the
+    // whole instance down with it: the tracked page was closed, so this called the browser
+    // dead and shut it down under the person using it. Adopt a surviving tab instead — and
+    // it becomes the one whose URL is saved on close, which is the right one anyway.
+    if (dead) {
+      try {
+        const alive = inst.page.getOpenPages().find((pg) => !pg.isClosed());
+        if (alive) {
+          inst.page = alive;
+          logger.info({ id, name: inst.name, url: alive.url() }, "Tracked tab was closed — following the surviving one");
+          continue;
+        }
+      } catch { /* the context itself is gone; fall through to dropping it */ }
     }
     if (!dead) continue;
     instances.delete(id);
