@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play, Zap, Eye, Clock } from "lucide-react";
+import { Monitor, Plus, Square, Loader2, Trash2, Pencil, Play, Zap, Eye, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -126,6 +126,15 @@ export default function Browsers() {
   // The editor doubles as the creator: editing.key === "new" means "new".
   const [editing, setEditing] = useState<Row | null>(null);
   const [form, setForm] = useState({ name: "", fingerprintId: NONE, proxyId: NONE, startUrl: "", autostart: false });
+  /**
+   * What the URL box was filled with, and whether that value was an override already.
+   *
+   * The box shows where the browser IS, so you can see it and change it. Leaving it alone
+   * therefore has to mean "carry on resuming", not "pin it here forever" — otherwise
+   * opening the dialog and pressing save would quietly freeze the browser to one page.
+   * Only a value you actually changed becomes an override.
+   */
+  const [urlSeed, setUrlSeed] = useState({ value: "", wasOverride: false });
   const [saving, setSaving] = useState(false);
 
   const load = () => {
@@ -223,14 +232,18 @@ export default function Browsers() {
   }, [instances, profiles]);
 
   const openEditor = (row: Row | null) => {
+    // An override if one is set, otherwise wherever it is right now — which is what it will
+    // reopen at if nothing here changes.
+    const seed = row ? row.startUrl || row.url || "" : "";
     setEditing(row ?? EMPTY_ROW);
     setForm({
       name: row?.name ?? "",
       fingerprintId: row?.fingerprintProfileId != null ? String(row.fingerprintProfileId) : NONE,
       proxyId: row?.proxyProfileId != null ? String(row.proxyProfileId) : NONE,
-      startUrl: row?.startUrl ?? "",
+      startUrl: seed,
       autostart: row?.autostart ?? false,
     });
+    setUrlSeed({ value: seed, wasOverride: !!row?.startUrl });
   };
 
   const isNew = editing !== null && editing.key === "new";
@@ -275,7 +288,12 @@ export default function Browsers() {
           fingerprintProfileId,
           proxyProfileId,
           autostart: form.autostart,
-          startUrl: form.startUrl.trim(),
+          // Unchanged, and it was only ever a display of the current page: send "" so the
+          // column stays clear and the browser goes on resuming where it was left.
+          startUrl:
+            !urlSeed.wasOverride && form.startUrl.trim() === urlSeed.value.trim()
+              ? ""
+              : form.startUrl.trim(),
         }),
       });
       if (!res.ok) {
@@ -394,12 +412,8 @@ export default function Browsers() {
                     <div className="min-w-0">
                       <p className="font-semibold text-foreground truncate">{row.name}</p>
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground font-mono">
-                        <span className="flex items-center gap-1 min-w-0">
-                          <Globe className="h-3 w-3 shrink-0" />
-                          <span className="truncate">{row.url || "about:blank"}</span>
-                        </span>
                         <span
-                          className="flex items-center border-l border-border pl-3 shrink-0"
+                          className="flex items-center shrink-0"
                           title={fp ? `${osLabel} · ${fp.name}` : osLabel}
                         >
                           <OsIcon className="h-3.5 w-3.5" />

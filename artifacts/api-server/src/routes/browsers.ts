@@ -171,7 +171,9 @@ router.post("/browsers", async (req, res): Promise<void> => {
         fingerprintProfileId: resolved.fingerprintProfileId,
         proxyProfileId: resolved.proxyProfileId,
         originUrl: (body.startUrl ?? "").trim() || null,
-        startUrl: (body.startUrl ?? "").trim() || null,
+        // NOT start_url. On a new browser this is just "where to go first"; freezing it as
+        // an override would mean the thing never resumes where it was left, which is the
+        // behaviour that actually matters. The override is set by editing it later.
         autostart: body.autostart === true,
       });
     }
