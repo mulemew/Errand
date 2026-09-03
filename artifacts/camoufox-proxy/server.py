@@ -770,9 +770,14 @@ def launch():
         }
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+    # locale/timezone are printed because "empty" is a DECISION here: geoip is on, so a
+    # blank locale means the exit IP picks the language, and the only way to tell that from
+    # "the profile said en-US" was to read the database.
     print(
         f"[camoufox] launched {sid} ws={ws} os={opts.get('os')} display=:{_display}"
-        f" keep_alive={bool(body.get('keepAlive'))}",
+        f" keep_alive={bool(body.get('keepAlive'))}"
+        f" locale={opts.get('locale') or 'AUTO(geoip)'}"
+        f" tz={opts.get('timezone') or 'AUTO(geoip)'}",
         flush=True,
     )
     # viewPort lets the app proxy THIS session's screen rather than the whole container's.

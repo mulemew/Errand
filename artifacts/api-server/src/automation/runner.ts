@@ -407,6 +407,14 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           logger.info({ taskId, proxyProfile: pp.name }, "Using saved proxy profile");
         }
       }
+      // Say when a task has NO fingerprint profile, not only when it has one. The absence
+      // was silent, and it is the more consequential state: with no profile there is no
+      // locale, camoufox runs with geoip on, and the language and timezone come from the
+      // exit IP — which is how a task the user believed was pinned to en-US had Google
+      // render its sign-in button in Romanian.
+      if (!_profileIds.fingerprintProfileId) {
+        logger.info({ taskId }, "No fingerprint profile on this task — locale/timezone will follow the exit IP");
+      }
       if (_profileIds.fingerprintProfileId) {
         const [fpr] = await db.select().from(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, _profileIds.fingerprintProfileId));
         if (fpr) {
