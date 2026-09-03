@@ -444,6 +444,7 @@ export interface Translations {
       screenFixedByFingerprint: string;
       optionalSuffix: string;
       autoFromProxyIp: string;
+      followsProxyIp: string;
       fingerprintSaved: string;
       fingerprintUpdated: string;
       fingerprintDeleted: string;
@@ -1194,6 +1195,7 @@ export interface Translations {
       screenFixedByFingerprint: "由生成的指纹决定",
       optionalSuffix: "可选",
       autoFromProxyIp: "留空 = 跟随代理出口 IP",
+      followsProxyIp: "跟随代理 IP",
       fingerprintSaved: "指纹已保存",
       fingerprintUpdated: "指纹已更新",
       fingerprintDeleted: "指纹已删除",
@@ -1940,6 +1942,7 @@ export interface Translations {
       screenFixedByFingerprint: "fixed by the generated fingerprint",
       optionalSuffix: "optional",
       autoFromProxyIp: "leave empty to follow the proxy's exit IP",
+      followsProxyIp: "follows proxy IP",
       fingerprintSaved: "Fingerprint saved",
       fingerprintUpdated: "Fingerprint updated",
       fingerprintDeleted: "Fingerprint deleted",

@@ -207,8 +207,12 @@ export default function FingerprintProfiles() {
                   <CardTitle className="text-sm font-semibold">{p.name}</CardTitle>
                   <p className="text-xs text-muted-foreground">
                     {OS_OPTIONS.find((o) => o.value === p.os)?.label ?? p.os}
-                    {p.config?.timezone ? ` · ${p.config.timezone}` : ""}
-                    {p.config?.locale ? ` · ${p.config.locale}` : ""}
+                    {/* An empty field is not "unset" — camoufox runs with geoip on, so it
+                        becomes the proxy's country. A profile called "…-en" with a blank
+                        language still speaks Romanian through a Romanian exit, and the row
+                        used to say nothing at all about that. */}
+                    {` · ${p.config?.timezone || t.followsProxyIp}`}
+                    {` · ${p.config?.locale || t.followsProxyIp}`}
                   </p>
                   <UsedByTasks tasks={p.usedBy} />
                 </div>
