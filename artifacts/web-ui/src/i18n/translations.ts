@@ -759,6 +759,7 @@ export interface Translations {
       launchBrowser: string;
       browserLaunchFailed: string;
       stopBrowser: string;
+      stopBrowserShort: string;
       saveAsSessionProfile: string;
       sessionProfileNamePrompt: string;
       sessionProfileSaved: string;
@@ -1504,6 +1505,7 @@ export interface Translations {
       launchBrowser: "启动浏览器",
       browserLaunchFailed: "浏览器启动失败",
       stopBrowser: "关闭（保留，可再次打开）",
+      stopBrowserShort: "关闭",
       saveAsSessionProfile: "保存为会话档案",
       sessionProfileNamePrompt: "给这份会话起个名字：",
       sessionProfileSaved: "会话档案已保存",
@@ -2250,6 +2252,7 @@ export interface Translations {
       launchBrowser: "Launch browser",
       browserLaunchFailed: "Could not launch the browser",
       stopBrowser: "Close (kept, can be reopened)",
+      stopBrowserShort: "Close",
       saveAsSessionProfile: "Save as a session profile",
       sessionProfileNamePrompt: "Name this session profile:",
       sessionProfileSaved: "Session profile saved",

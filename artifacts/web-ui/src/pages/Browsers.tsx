@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
-import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play, Zap } from "lucide-react";
+import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play, Zap, Eye, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
@@ -368,104 +368,125 @@ export default function Browsers() {
           {t.newFingerprintBrowser}
         </Button>
       </div>
-      <Card className="border-border">
-        <CardContent className="p-2 space-y-2">
-          {rows.length === 0 ? (
-            <p className="text-xs text-muted-foreground p-2">{t.noBrowsersYet}</p>
-          ) : (
-            rows.map((row) => {
-              const running = row.instance !== null;
-              const busy = busyKey === row.key;
-              return (
-                <div key={row.key} className="flex items-center gap-2 p-2 rounded border border-border">
-                  <span
-                    className={`h-2 w-2 rounded-full shrink-0 ${running ? "bg-emerald-500" : "bg-muted-foreground/40"}`}
-                    title={running ? t.browserStatusRunning : t.browserStatusStopped}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{row.name}</p>
-                    <div className="flex items-baseline gap-2">
-                      <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
-                      {/* Under the name, at the end of the line it belongs to — not wedged
-                          between the environment marks and the buttons. */}
-                      {running && (
-                        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                          <Uptime since={row.startedAt ?? Date.now()} />
+      <div className="space-y-3">
+        {rows.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t.noBrowsersYet}</p>
+        ) : (
+          rows.map((row) => {
+            const running = row.instance !== null;
+            const busy = busyKey === row.key;
+            const fp = fingerprints.find((f) => f.id === row.fingerprintProfileId);
+            const { Icon: OsIcon, label: osLabel } = osMeta(fp?.os);
+            return (
+              <div
+                key={row.key}
+                className="group flex flex-col border rounded-md shadow-sm transition-all duration-200 bg-card hover:bg-accent/30 border-border"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4">
+                  <div className="flex items-center gap-4 min-w-0">
+                    <div
+                      className={`h-10 w-10 rounded-sm flex items-center justify-center border shrink-0 ${
+                        running ? "bg-emerald-500/10 border-emerald-500/30" : "bg-muted border-border"
+                      }`}
+                    >
+                      <Monitor className={`h-5 w-5 ${running ? "text-emerald-500" : "text-muted-foreground"}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground truncate">{row.name}</p>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground font-mono">
+                        <span className="flex items-center gap-1 min-w-0">
+                          <Globe className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{row.url || "about:blank"}</span>
                         </span>
-                      )}
+                        <span
+                          className="flex items-center border-l border-border pl-3 shrink-0"
+                          title={fp ? `${osLabel} · ${fp.name}` : osLabel}
+                        >
+                          <OsIcon className="h-3.5 w-3.5" />
+                        </span>
+                        <ExitFlag
+                          geo={proxies.find((p) => p.id === row.proxyProfileId)?.exitGeo}
+                          label={refName(proxies, row.proxyProfileId)}
+                        />
+                        {running && (
+                          <span className="flex items-center gap-1 border-l border-border pl-3 shrink-0">
+                            <Clock className="h-3 w-3" />
+                            <Uptime since={row.startedAt ?? Date.now()} />
+                          </span>
+                        )}
+                        {row.autostart && (
+                          <span className="flex items-center border-l border-border pl-3 shrink-0" title={t.autostartLabel}>
+                            <Zap className="h-3.5 w-3.5" />
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  {/* The environment, as marks rather than a sentence: the fingerprint's OS
-                      and the proxy's exit country. Their names are in the tooltips — spelling
-                      them out again next to the icon said the same thing twice. */}
-                  {(() => {
-                    const fp = fingerprints.find((f) => f.id === row.fingerprintProfileId);
-                    const { Icon, label } = osMeta(fp?.os);
-                    return (
-                      <span className="shrink-0 text-muted-foreground" title={`${label}${fp ? ` · ${fp.name}` : ""}`}>
-                        <Icon className="h-3.5 w-3.5" />
-                      </span>
-                    );
-                  })()}
-                  <ExitFlag
-                    geo={proxies.find((p) => p.id === row.proxyProfileId)?.exitGeo}
-                    label={refName(proxies, row.proxyProfileId)}
-                    className="flex items-center shrink-0"
-                  />
-                  {row.autostart && (
-                    <span className="shrink-0 text-muted-foreground" title={t.autostartLabel}>
-                      <Zap className="h-3.5 w-3.5" />
-                    </span>
-                  )}
-                  {running ? (
-                    <>
+                  <div className="mt-4 sm:mt-0 flex items-center gap-3 shrink-0">
+                    <Badge
+                      variant="outline"
+                      className={`font-mono text-xs ${
+                        running
+                          ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                          : "bg-muted text-muted-foreground border-border"
+                      }`}
+                    >
+                      {running ? t.browserStatusRunning : t.browserStatusStopped}
+                    </Badge>
+                    <div className="h-8 w-[1px] bg-border mx-2 hidden sm:block" />
+                    {running ? (
                       <Button
-                        variant="ghost" size="icon" className="h-7 w-7" title={t.liveViewTitle}
-                        onClick={() => setViewing({ id: row.instance!.id, name: row.name })}
-                      >
-                        <Globe className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost" size="icon" className="h-7 w-7" title={t.stopBrowser}
+                        variant="outline" size="sm" className="gap-2 text-xs font-medium"
                         onClick={() => void stop(row)} disabled={busy}
                       >
-                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
+                        {t.stopBrowserShort}
                       </Button>
-                    </>
-                  ) : (
+                    ) : (
+                      <Button
+                        variant="outline" size="sm" className="gap-2 text-xs font-medium"
+                        onClick={() => void open(row)} disabled={busy}
+                      >
+                        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                        {t.openProfile}
+                      </Button>
+                    )}
                     <Button
-                      variant="ghost" size="icon" className="h-7 w-7" title={t.openProfile}
-                      onClick={() => void open(row)} disabled={busy}
+                      variant="ghost" size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      title={t.liveViewTitle} disabled={!running}
+                      onClick={() => running && setViewing({ id: row.instance!.id, name: row.name })}
                     >
-                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                      <Eye className="h-4 w-4" />
                     </Button>
-                  )}
-
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    title={running ? t.cannotEditWhileRunning : t.editBrowserAction}
-                    disabled={running || row.profileId == null}
-                    onClick={() => openEditor(row)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  {/* Deleting destroys the browser whether or not it is running — the
-                      server stops it first. Closing is the reversible one. */}
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7 text-destructive"
-                    title={t.deleteBrowserAction}
-                    disabled={row.profileId == null || busy}
-                    onClick={() => void remove(row)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                    <Button
+                      variant="ghost" size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      title={running ? t.cannotEditWhileRunning : t.editBrowserAction}
+                      disabled={running || row.profileId == null}
+                      onClick={() => openEditor(row)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    {/* Deleting destroys the browser whether or not it is running — the
+                        server stops it first. Closing is the reversible one. */}
+                    <Button
+                      variant="ghost" size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      title={t.deleteBrowserAction}
+                      disabled={row.profileId == null || busy}
+                      onClick={() => void remove(row)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-              );
-            })
-          )}
-        </CardContent>
-      </Card>
+              </div>
+            );
+          })
+        )}
+      </div>
 
       {/* ── New / edit ── */}
       <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
