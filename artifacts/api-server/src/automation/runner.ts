@@ -404,16 +404,15 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
           // saved with either left proxyType unset.
           const t = resolveProxyType({ proxyUrl: pp.url });
           if (t) (browserConfig as { proxyType?: string }).proxyType = t;
-          logger.info({ taskId, proxyProfile: pp.name }, "Using saved proxy profile");
+          logger.warn({ taskId, proxyProfile: pp.name }, "Using saved proxy profile");
         }
       }
-      // Say when a task has NO fingerprint profile, not only when it has one. The absence
-      // was silent, and it is the more consequential state: with no profile there is no
-      // locale, camoufox runs with geoip on, and the language and timezone come from the
-      // exit IP — which is how a task the user believed was pinned to en-US had Google
-      // render its sign-in button in Romanian.
+      // warn, not info. The saved log level in production is `warn`, so every info line
+      // here is discarded — which is how "the profile line is missing" got read as "no
+      // profile is bound" when it only ever meant "info is off". What a run used for its
+      // locale has to be legible at the level the server actually runs at.
       if (!_profileIds.fingerprintProfileId) {
-        logger.info({ taskId }, "No fingerprint profile on this task — locale/timezone will follow the exit IP");
+        logger.warn({ taskId }, "No fingerprint profile on this task — locale/timezone follow the exit IP");
       }
       if (_profileIds.fingerprintProfileId) {
         const [fpr] = await db.select().from(fingerprintProfilesTable).where(eq(fingerprintProfilesTable.id, _profileIds.fingerprintProfileId));
@@ -441,7 +440,10 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
             browserConfig.viewportWidth = w;
             browserConfig.viewportHeight = h;
           }
-          logger.info({ taskId, fingerprintProfile: fpr.name, os: fpr.os }, "Using saved fingerprint profile");
+          logger.warn(
+            { taskId, fingerprintProfile: fpr.name, os: fpr.os, locale: cfg.locale || "AUTO(exit IP)", timezone: cfg.timezone || "AUTO(exit IP)" },
+            "Using saved fingerprint profile",
+          );
         }
       }
 
