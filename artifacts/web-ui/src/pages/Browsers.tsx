@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play } from "lucide-react";
+import { Monitor, Plus, Square, Loader2, Trash2, Globe, Pencil, Play, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,7 @@ interface SessionProfile {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   originUrl: string | null;
+  startUrl: string | null;
   autostart: boolean;
   updatedAt: string;
 }
@@ -51,6 +52,8 @@ interface Row {
   fingerprintProfileId: number | null;
   proxyProfileId: number | null;
   url: string | null;
+  /** Where it should open, when that is not "wherever it was left". */
+  startUrl: string;
   autostart: boolean;
   /** When the process started, for the uptime counter. Only set while running. */
   startedAt: number | null;
@@ -67,6 +70,7 @@ const EMPTY_ROW: Row = {
   fingerprintProfileId: null,
   proxyProfileId: null,
   url: null,
+  startUrl: "",
   autostart: false,
   startedAt: null,
   sortAt: 0,
@@ -186,6 +190,7 @@ export default function Browsers() {
         fingerprintProfileId: p.fingerprintProfileId,
         proxyProfileId: p.proxyProfileId,
         url: inst?.url ?? p.originUrl,
+        startUrl: p.startUrl ?? "",
         autostart: p.autostart === true,
         startedAt: inst?.createdAt ?? null,
         sortAt: Date.parse(p.updatedAt) || 0,
@@ -204,6 +209,7 @@ export default function Browsers() {
         fingerprintProfileId: i.fingerprintProfileId,
         proxyProfileId: i.proxyProfileId,
         url: i.url,
+        startUrl: "",
         autostart: false,
         startedAt: i.createdAt,
         sortAt: i.createdAt,
@@ -222,7 +228,7 @@ export default function Browsers() {
       name: row?.name ?? "",
       fingerprintId: row?.fingerprintProfileId != null ? String(row.fingerprintProfileId) : NONE,
       proxyId: row?.proxyProfileId != null ? String(row.proxyProfileId) : NONE,
-      startUrl: "",
+      startUrl: row?.startUrl ?? "",
       autostart: row?.autostart ?? false,
     });
   };
@@ -269,6 +275,7 @@ export default function Browsers() {
           fingerprintProfileId,
           proxyProfileId,
           autostart: form.autostart,
+          startUrl: form.startUrl.trim(),
         }),
       });
       if (!res.ok) {
@@ -361,8 +368,6 @@ export default function Browsers() {
           {t.newFingerprintBrowser}
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground -mt-2">{t.browsersIntro}</p>
-
       <Card className="border-border">
         <CardContent className="p-2 space-y-2">
           {rows.length === 0 ? (
@@ -380,22 +385,11 @@ export default function Browsers() {
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate">{row.name}</p>
                     <p className="text-[11px] text-muted-foreground font-mono truncate">{row.url ?? ""}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {running ? (
-                        <>
-                          {t.browserStatusRunning} · <Uptime since={row.startedAt ?? Date.now()} />
-                        </>
-                      ) : (
-                        t.browserStatusStopped
-                      )}
-                      {" · "}
-                      {refName(fingerprints, row.fingerprintProfileId)} · {refName(proxies, row.proxyProfileId)}
-                      {row.autostart && <> · {t.autostartShort}</>}
-                    </p>
                   </div>
 
-                  {/* Same two marks as a task row: which OS the fingerprint claims, and
-                      where its traffic comes out. */}
+                  {/* The environment, as marks rather than a sentence: the fingerprint's OS
+                      and the proxy's exit country. Their names are in the tooltips — spelling
+                      them out again next to the icon said the same thing twice. */}
                   {(() => {
                     const fp = fingerprints.find((f) => f.id === row.fingerprintProfileId);
                     const { Icon, label } = osMeta(fp?.os);
@@ -410,6 +404,16 @@ export default function Browsers() {
                     label={refName(proxies, row.proxyProfileId)}
                     className="flex items-center shrink-0"
                   />
+                  {row.autostart && (
+                    <span className="shrink-0 text-muted-foreground" title={t.autostartLabel}>
+                      <Zap className="h-3.5 w-3.5" />
+                    </span>
+                  )}
+                  {running && (
+                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground w-12 text-right">
+                      <Uptime since={row.startedAt ?? Date.now()} />
+                    </span>
+                  )}
 
                   {running ? (
                     <>
@@ -501,19 +505,17 @@ export default function Browsers() {
                 </SelectContent>
               </Select>
             </div>
-            {isNew ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs">{t.startingUrl}</Label>
-                <Input
-                  value={form.startUrl}
-                  onChange={(e) => setForm({ ...form, startUrl: e.target.value })}
-                  placeholder="https://example.com"
-                  className="font-mono text-sm"
-                />
-              </div>
-            ) : (
-              <p className="text-[11px] text-muted-foreground">{t.envAppliesNextOpen}</p>
-            )}
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t.startingUrl}</Label>
+              <Input
+                value={form.startUrl}
+                onChange={(e) => setForm({ ...form, startUrl: e.target.value })}
+                placeholder="https://example.com"
+                className="font-mono text-sm"
+              />
+              <p className="text-[11px] text-muted-foreground">{t.startingUrlHint}</p>
+            </div>
+            {!isNew && <p className="text-[11px] text-muted-foreground">{t.envAppliesNextOpen}</p>}
             <div className="flex items-start justify-between gap-3 pt-1">
               <div className="min-w-0">
                 <Label className="text-xs">{t.autostartLabel}</Label>

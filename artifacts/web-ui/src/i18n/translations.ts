@@ -740,9 +740,9 @@ export interface Translations {
       randomFingerprintEachRun: string;
       liveViewTitle: string;
       liveViewHint: string;
+      startingUrlHint: string;
       autostartLabel: string;
       autostartHint: string;
-      autostartShort: string;
       reconnectView: string;
       browserStatusRunning: string;
       browserStatusStopped: string;
@@ -755,7 +755,6 @@ export interface Translations {
       cannotEditWhileRunning: string;
       envAppliesNextOpen: string;
       navBrowsers: string;
-      browsersIntro: string;
       browserNameExample: string;
       launchBrowser: string;
       browserLaunchFailed: string;
@@ -1486,9 +1485,9 @@ export interface Translations {
       randomFingerprintEachRun: "未绑定指纹档案 —— Camoufox 每次运行现生成一份全新的、内部自洽的指纹（不是容器的真实指纹）。",
       liveViewTitle: "实时预览",
       liveViewHint: "这是该浏览器真实的屏幕，可以直接操作。",
+      startingUrlHint: "留空则从上次关闭的位置继续。",
       autostartLabel: "开机自动打开",
       autostartHint: "服务器重启后自动把这个浏览器重新打开。每个都是一整个 Firefox，按需开启。",
-      autostartShort: "自动打开",
       reconnectView: "重新连接",
       browserStatusRunning: "运行中",
       browserStatusStopped: "已停止",
@@ -1501,7 +1500,6 @@ export interface Translations {
       cannotEditWhileRunning: "运行中不能改，先关闭",
       envAppliesNextOpen: "指纹和代理的改动在下次打开时生效，已保存的登录状态不会动。",
       navBrowsers: "指纹浏览器",
-      browsersIntro: "每一行是一个长期存在的浏览器，有自己的指纹和代理。打开它自己操作——手工注册、过掉脚本搞不定的验证——关掉时登录状态自动保存，下次打开还在。任务选中同一个，跑在完全一样的环境里。",
       browserNameExample: "例如：注册用-美国住宅",
       launchBrowser: "启动浏览器",
       browserLaunchFailed: "浏览器启动失败",
@@ -2233,9 +2231,9 @@ export interface Translations {
       randomFingerprintEachRun: "No fingerprint profile bound — Camoufox generates a fresh, internally consistent fingerprint on every run (never the container's own).",
       liveViewTitle: "Live view",
       liveViewHint: "This browser's real screen. You can drive it directly.",
+      startingUrlHint: "Leave empty to resume from wherever it was last closed.",
       autostartLabel: "Open on startup",
       autostartHint: "Reopen this browser after the server restarts. Each one is a whole Firefox, so turn it on only where you need it.",
-      autostartShort: "autostart",
       reconnectView: "Reconnect",
       browserStatusRunning: "Running",
       browserStatusStopped: "Stopped",
@@ -2248,7 +2246,6 @@ export interface Translations {
       cannotEditWhileRunning: "Close it first to edit",
       envAppliesNextOpen: "A new fingerprint or proxy takes effect the next time it opens. The saved sign-in is left alone.",
       navBrowsers: "Fingerprint browsers",
-      browsersIntro: "Each row is a long-lived browser with its own fingerprint and proxy. Open one and drive it yourself — register by hand, clear what a script cannot — and closing it saves the sign-in, so it is still there next time. A task that selects the same one runs in an identical environment.",
       browserNameExample: "e.g. signup / US residential",
       launchBrowser: "Launch browser",
       browserLaunchFailed: "Could not launch the browser",

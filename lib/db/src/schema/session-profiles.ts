@@ -23,8 +23,10 @@ export const sessionProfilesTable = pgTable("session_profiles", {
   providerId: integer("provider_id"),
   fingerprintProfileId: integer("fingerprint_profile_id"),
   proxyProfileId: integer("proxy_profile_id"),
-  /** Where it was captured — shown in the picker so a profile is recognisable. */
+  /** Where it was captured, and where it was left — updated on every close. */
   originUrl: text("origin_url"),
+  /** Where YOU want it to open. Set: always opens here. Empty: resumes from originUrl. */
+  startUrl: text("start_url"),
   /** Open this browser again on startup. Off by default: each one is a whole Firefox. */
   autostart: boolean("autostart").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
