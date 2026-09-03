@@ -155,6 +155,9 @@ import { pool } from "@workspace/db";
 
   ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "autostart" boolean NOT NULL DEFAULT false;
   ALTER TABLE "session_profiles" ADD COLUMN IF NOT EXISTS "open_urls" jsonb;
+  -- start_url existed for about two hours: a permanent override beside origin_url, which
+  -- only made "where does this open" ambiguous. origin_url is that answer on its own.
+  ALTER TABLE "session_profiles" DROP COLUMN IF EXISTS "start_url";
   `;
 
   export async function runMigrations(): Promise<void> {
