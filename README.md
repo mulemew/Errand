@@ -162,7 +162,6 @@ be in the environment, because they are needed before the database is readable:
 | `DATABASE_URL` | External DB only | PostgreSQL connection string |
 | `SESSION_SECRET` | No | Auto-generated on first run — set only to restore a backup |
 | `ENCRYPTION_KEY` | No | Auto-generated on first run — **never change it afterwards or saved credentials become unreadable** |
-| `CORS_ORIGINS` | No | Comma-separated allowed origins (not needed for same-origin) |
 | `PORT` | No | Host port (default `80`) |
 | `LOG_LEVEL` | No | Starting log level. Settings → Log level changes it live and takes precedence |
 | `BROWSERLESS_URL` | Browserless only | WebSocket endpoint (`wss://...`) |

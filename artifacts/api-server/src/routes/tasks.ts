@@ -1458,7 +1458,12 @@ router.get("/tasks/:id/step-screenshots/:filename", async (req, res): Promise<vo
   }
   const filePath = path.resolve(DATA_DIR, "screenshots", filename);
   const resolvedDataDir = path.resolve(DATA_DIR);
-  if (!filePath.startsWith(resolvedDataDir)) { res.status(403).json({ error: "Forbidden" }); return; }
+  // With the separator, like the other copy of this check further down. Without it
+  // "/app/data-export" passes a containment test for "/app/data".
+  if (!filePath.startsWith(resolvedDataDir + path.sep) && filePath !== resolvedDataDir) {
+    res.status(403).json({ error: "Forbidden" });
+    return;
+  }
   if (!fs.existsSync(filePath)) { res.status(404).json({ error: "Screenshot not found" }); return; }
   res.setHeader("Content-Type", "image/png");
   res.setHeader("Cache-Control", "public, max-age=86400, immutable");

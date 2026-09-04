@@ -77,7 +77,9 @@ if (existsSync(publicDir)) {
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, "Unhandled route error");
   if (res.headersSent) return;
-  res.status(500).json({ error: err.message ?? "Internal server error" });
+  // The message goes to the log, not to the client. It is written for whoever is holding
+  // a stack trace, and it names tables, paths and upstream hosts to anyone else.
+  res.status(500).json({ error: "Internal server error" });
 });
 
 // ── Startup: schema patches + stuck-task reset ────────────────────────────────────────────

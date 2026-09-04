@@ -320,7 +320,7 @@ export default function LogDetail() {
                             <Dialog>
                               <DialogTrigger asChild>
                                 <button type="button" className="mt-2 rounded overflow-hidden border border-border hover:border-primary/50 transition-colors cursor-zoom-in block">
-                                  <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = `<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">${t.screenshotExpired}</span>`; }} />
+                                  <img src={shotSrc} alt={"Step " + (step.stepIndex + 1) + " screenshot"} className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; { const p = (e.target as HTMLImageElement).parentElement!; const s = document.createElement("span"); s.className = "text-xs text-muted-foreground/60 font-mono px-2 py-1"; s.textContent = t.screenshotExpired; p.replaceChildren(s); } }} />
                                 </button>
                               </DialogTrigger>
                               <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">
@@ -343,7 +343,7 @@ export default function LogDetail() {
                         <Dialog>
                           <DialogTrigger asChild>
                             <button type="button" className="rounded overflow-hidden border border-amber-500/30 hover:border-amber-500/60 transition-colors cursor-zoom-in block">
-                              <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Final screenshot" className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; (e.target as HTMLImageElement).parentElement!.innerHTML = `<span class="text-xs text-muted-foreground/60 font-mono px-2 py-1">${t.screenshotExpired}</span>`; }} />
+                              <img src={`${BASE}/api/tasks/${taskId}/logs/${logId}/screenshot`} alt="Final screenshot" className="h-24 w-auto max-w-[180px] object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; { const p = (e.target as HTMLImageElement).parentElement!; const s = document.createElement("span"); s.className = "text-xs text-muted-foreground/60 font-mono px-2 py-1"; s.textContent = t.screenshotExpired; p.replaceChildren(s); } }} />
                             </button>
                           </DialogTrigger>
                           <DialogContent className="max-w-5xl bg-zinc-950 border-zinc-800 p-1">

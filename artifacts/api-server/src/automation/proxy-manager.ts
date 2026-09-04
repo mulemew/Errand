@@ -282,65 +282,23 @@ const RUNTIME_SINGBOX_PATH = path.join(
   "sing-box",
 );
 
-const SINGBOX_DOWNLOAD_VERSION = process.env.SINGBOX_VERSION?.trim() || "1.11.4";
-
-/** Guards against concurrent downloads racing each other. */
-let _singBoxInstallPromise: Promise<string | null> | null = null;
-
 /**
- * Ensure a sing-box binary is available, downloading it at runtime if the image
- * shipped without one. This is a safety net for already-deployed images (built
- * before the Dockerfile install was hardened): rather than hard-failing every
- * advanced-proxy task with "sing-box is not installed", we fetch the binary
- * into DATA_DIR (which persists on the mounted volume) on first use.
+ * Where sing-box comes from: the image, and only the image.
  *
- * Returns the resolved binary path, or null if it could not be installed
- * (e.g. no network access from the container).
+ * This used to fall back to downloading the release tarball at runtime, untarring it with
+ * `tar -xzf` through a shell, chmod 0755 and executing it — with no checksum and no
+ * signature, and a version that `SINGBOX_VERSION` could point elsewhere. That is a
+ * remote-code-execution path in the one place this workspace is otherwise careful about
+ * supply chain: pnpm-workspace.yaml holds every npm package for a day before installing it.
+ *
+ * The fallback existed for images built before the Dockerfile installed the binary. Every
+ * image since copies it from ghcr.io/sagernet/sing-box, and production has it at
+ * /usr/local/bin/sing-box with no runtime copy ever written — so the net effect of removing
+ * this is that a genuinely broken image now fails with a clear message instead of curing
+ * itself by fetching an executable off the internet.
  */
 async function ensureSingBox(): Promise<string | null> {
-  const existing = resolveSingBoxBin();
-  if (existing) return existing;
-  if (_singBoxInstallPromise) return _singBoxInstallPromise;
-
-  _singBoxInstallPromise = (async () => {
-    const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "amd64" : process.arch;
-    const version = SINGBOX_DOWNLOAD_VERSION;
-    const url =
-      `https://github.com/SagerNet/sing-box/releases/download/v${version}/` +
-      `sing-box-${version}-linux-${arch}.tar.gz`;
-    const dir = path.dirname(RUNTIME_SINGBOX_PATH);
-    const tmpTar = path.join(os.tmpdir(), `sing-box-${version}-${arch}.tar.gz`);
-    const tmpExtract = fs.mkdtempSync(path.join(os.tmpdir(), "singbox-dl-"));
-    try {
-      logger.warn({ url }, "sing-box binary missing — downloading at runtime (one-time)");
-      fs.mkdirSync(dir, { recursive: true });
-      const res = await fetch(url, { redirect: "follow" });
-      if (!res.ok || !res.body) {
-        throw new Error(`download failed: HTTP ${res.status}`);
-      }
-      const buf = Buffer.from(await res.arrayBuffer());
-      fs.writeFileSync(tmpTar, buf);
-      execSync(`tar -xzf ${JSON.stringify(tmpTar)} -C ${JSON.stringify(tmpExtract)}`, { stdio: "ignore" });
-      const extractedBin = path.join(tmpExtract, `sing-box-${version}-linux-${arch}`, "sing-box");
-      fs.copyFileSync(extractedBin, RUNTIME_SINGBOX_PATH);
-      fs.chmodSync(RUNTIME_SINGBOX_PATH, 0o755);
-      // Sanity-check the binary runs.
-      execSync(`${JSON.stringify(RUNTIME_SINGBOX_PATH)} version`, { stdio: "ignore" });
-      logger.info({ path: RUNTIME_SINGBOX_PATH }, "sing-box installed at runtime");
-      return RUNTIME_SINGBOX_PATH;
-    } catch (err) {
-      logger.error({ err }, "Runtime sing-box install failed");
-      return null;
-    } finally {
-      try { fs.rmSync(tmpTar, { force: true }); } catch { /* ignore */ }
-      try { fs.rmSync(tmpExtract, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
-  })();
-
-  const result = await _singBoxInstallPromise;
-  // Allow a retry on a later call if this attempt failed.
-  if (!result) _singBoxInstallPromise = null;
-  return result;
+  return resolveSingBoxBin();
 }
 
 /** Find a free localhost TCP port. */
@@ -763,7 +721,9 @@ function storeWarpIdentity(id: Record<string, unknown>): void {
   warpIdentity = id;
   try {
     fs.mkdirSync(path.dirname(WARP_CACHE_FILE), { recursive: true });
-    fs.writeFileSync(WARP_CACHE_FILE, JSON.stringify(id));
+    // 0600: this is a WireGuard private key, and unlike the sing-box config below it does
+    // not live inside a 0700 mkdtemp directory — it sits in DATA_DIR.
+    fs.writeFileSync(WARP_CACHE_FILE, JSON.stringify(id), { mode: 0o600 });
   } catch (err) {
     logger.warn({ err }, "could not persist WARP identity (will re-register after restart)");
   }

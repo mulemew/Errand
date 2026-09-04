@@ -8,8 +8,10 @@ services:
         POSTGRES_DB: autoops
       volumes:
         - pgdata:/var/lib/postgresql/data
-      ports:
-        - "5432:5432"
+      # No host port. The app reaches it over the compose network; publishing 5432 put a
+      # database holding encrypted credentials on the public internet of any host without a
+      # firewall, with POSTGRES_PASSWORD defaulting to "changeme". Use
+      # `docker compose exec db psql` when you need a shell on it.
       healthcheck:
         test: ["CMD-SHELL", "pg_isready -U autoops -d autoops"]
         interval: 5s

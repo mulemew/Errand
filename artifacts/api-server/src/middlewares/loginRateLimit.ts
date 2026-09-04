@@ -13,20 +13,39 @@ setInterval(() => {
 }, WINDOW_MS).unref();
 
 /**
- * Extract a single trusted IP from the request.
- * Only accepts the first x-forwarded-for value when it looks like a real IP
- * literal — rejects arbitrary strings to prevent header-spoofing bypass.
+ * Who to count this attempt against.
+ *
+ * NOT X-Forwarded-For, unless the deployment has said that header can be believed.
+ *
+ * The header is attacker-controlled: anyone can send any value, so a limiter keyed on it
+ * has no limit at all — a fresh value per request is a fresh bucket, and this guards the
+ * single password to an admin panel that hands back other systems' credentials in plain
+ * text. The previous version filtered for "things that look like an IP", which does not
+ * help, because an attacker picks valid-looking addresses. (It also let `abc` through:
+ * a, b and c are hex digits.)
+ *
+ * So the socket address is the default, and the header is honoured only when
+ * TRUST_PROXY_HOPS says how many proxies sit in front — what Express's `trust proxy`
+ * means, kept local so it governs this decision rather than everything. Behind one
+ * reverse proxy set it to 1: the entry counted from the right is then the address that
+ * proxy observed, which a client cannot forge by prepending entries of its own.
  */
+const TRUST_PROXY_HOPS = Math.max(0, Number(process.env.TRUST_PROXY_HOPS ?? 0) || 0);
+
 function getClientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string") {
-    const candidate = forwarded.split(",")[0].trim();
-    // Accept dotted-decimal IPv4 or hex-colon IPv6 only
-    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(candidate) || /^[0-9a-f:]+$/i.test(candidate)) {
-      return candidate;
-    }
-  }
-  return req.socket.remoteAddress ?? "unknown";
+  const direct = req.socket.remoteAddress ?? "unknown";
+  if (TRUST_PROXY_HOPS <= 0) return direct;
+
+  const raw = req.headers["x-forwarded-for"];
+  const chain = (Array.isArray(raw) ? raw.join(",") : raw ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  // Counted from the RIGHT: each hop appends, so the rightmost entries are the ones our
+  // own infrastructure wrote. Taking the leftmost is precisely what makes spoofing work.
+  const idx = chain.length - TRUST_PROXY_HOPS;
+  const candidate = idx >= 0 ? chain[idx] : chain[0];
+  return candidate || direct;
 }
 
 export function loginRateLimit(req: Request, res: Response, next: NextFunction): void {
