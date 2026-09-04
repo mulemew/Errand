@@ -24,7 +24,7 @@
  *     that wraps mid-phrase, is not a different phrase.
  *
  *  3. Then, only if that fails, whitespace removed ENTIRELY from both sides. This one is
- *     not hypothetical: minestrator's header renders
+ *     not hypothetical: one panel's header renders
  *
  *         <span class="mr-1">future</span><span>MyBox</span>
  *
@@ -38,7 +38,7 @@ import type { PageAdapter } from "./page-adapter";
 
 /** How long a success criterion gets to show up before we call it absent. */
 // 25s, not 10. The criterion describes the page login LANDS on, and a panel's landing page
-// fetches its content after it renders: control.heavencloud.in reached the dashboard, the
+// fetches its content after it renders: one panel reached the dashboard, the
 // URL proved it, and the text the operator was waiting for arrived after we had already
 // called the login a failure — then retried it twice more against a session that was
 // working perfectly. Matching returns immediately, so this is only ever spent on a run

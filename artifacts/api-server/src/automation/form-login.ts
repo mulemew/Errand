@@ -276,7 +276,7 @@ import type { PageAdapter } from "./page-adapter";
       // "The success criterion never appeared" points at the criterion, so that is where
       // people look: they re-check the text, widen it, try a selector. But the same message
       // is produced when the credentials were simply wrong, and a site that rejects a login
-      // without printing anything (livemy.app does exactly that: the form stays filled, the
+      // without printing anything (some panels do exactly that: the form stays filled, the
       // page does not move, nothing is shown) is indistinguishable from a criterion that is
       // merely mistyped. The login form still sitting there is the difference, and asking
       // costs one DOM read on a path that has already failed.
@@ -511,7 +511,7 @@ import type { PageAdapter } from "./page-adapter";
 
   // Fill an input with REAL keyboard interaction (known-good): click to focus,
   // clear, then type char-by-char. Real key events are what framework-controlled
-  // inputs (React/Vue) and picky forms (GitHub, minestrator) require to register
+  // inputs (React/Vue) and picky forms require to register
   // the value — a bare native-setter fill left those fields "empty" at submit
   // ("Please fill in all required fields") or made GitHub reject the login.
   // Self-healing net: if focus-stealing/overlays garble the typed value, set it
@@ -723,7 +723,7 @@ import type { PageAdapter } from "./page-adapter";
    * fields from a sibling register/other form. Anchor on the first VISIBLE
    * password input; the username is the best-matching visible input that comes
    * BEFORE that password (login forms are always username-then-password) and
-   * isn't a honeypot. This fixes pages like minestrator that render both a Login
+   * isn't a honeypot. This fixes pages that render both a Login
    * and a Register form — where a global `input[type='email']` match grabbed the
    * REGISTER email field and left the real Login username empty.
    *

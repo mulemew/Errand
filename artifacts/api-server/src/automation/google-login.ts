@@ -68,7 +68,7 @@ const GOOGLE_BUTTON_TEXT_PATTERNS = [
 /**
  * Reveal a Google Sign-In button the page renders and then hides, and say where it is.
  *
- * hoster24 is the case this was written for, and the shape is common. The page renders
+ * This shape is common. The page renders
  * Google's real button into a container it keeps at `display:none`, shows its OWN styled
  * button instead, and forwards the click:
  *

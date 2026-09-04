@@ -995,7 +995,7 @@ async function executeStep(
           // server that ties its CSRF token to the session sees one it does not recognise and
           // answers "CSRF token mismatch" on the very first submit. A human never hits that,
           // because a human arrives with no session at all. Reported on
-          // control.heavencloud.in, whose login is an XHR carrying the token from the page's
+          // one panel whose login is an XHR carrying the token from the page's
           // csrf-token meta.
           //
           // formLogin navigates to the login URL itself immediately after, so the page (and
@@ -1621,7 +1621,7 @@ async function clickByText(
   // selector derived from the element ITSELF — not a custom marker attribute.
   //
   // Why not tag the element? The old code set data-wa-textclick="1" and clicked
-  // "[data-wa-textclick='1']". On reactive frameworks (minestrator's wheel is
+  // "[data-wa-textclick='1']". On reactive frameworks (a spin wheel, say, is
   // Vue) the button re-renders right as it flips disabled→enabled — exactly when
   // we're about to click — and that patch drops the foreign attribute (or swaps
   // the node). The follow-up click then resolves to nothing, yet the step still
