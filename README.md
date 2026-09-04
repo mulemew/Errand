@@ -274,9 +274,8 @@ Requires Node.js 20+, pnpm and a PostgreSQL instance.
 pnpm install
 ```
 
-```bash
-DATABASE_URL=postgresql://... pnpm --filter @workspace/db run push
-```
+The schema is applied by the server itself on startup, so there is no migration step:
+point it at an empty database and it creates what it needs.
 
 ```bash
 pnpm --filter @workspace/api-server run dev

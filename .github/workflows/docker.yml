@@ -39,6 +39,12 @@ jobs:
       - name: TypeScript type check
         run: pnpm run typecheck
 
+      # The schema is described twice by hand — the Drizzle tables the code queries,
+      # and the DDL the server runs at boot. Adding a column to one and not the other
+      # typechecks and then fails at runtime on the first query that touches it.
+      - name: Schema drift check
+        run: pnpm --filter @workspace/scripts run check:schema
+
   build-and-push:
     needs: typecheck
     runs-on: ubuntu-latest

@@ -39,19 +39,6 @@
 
   await runMigrations();
 
-  // Ensure columns added in newer versions exist on older DB deployments.
-  // ALTER TABLE … ADD COLUMN IF NOT EXISTS is idempotent and safe on every startup.
-  try {
-    await pool.query(`
-      ALTER TABLE logs ADD COLUMN IF NOT EXISTS triggered_by text;
-      ALTER TABLE logs ADD COLUMN IF NOT EXISTS step_logs jsonb;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
-    `);
-    logger.info("Schema column migrations applied");
-  } catch (err) {
-    logger.warn({ err }, "Schema column migration warning (non-fatal)");
-  }
-
   // The logger boots at LOG_LEVEL (or info) because it exists long before the database
   // does; now that migrations have run, adopt whatever the Settings page saved.
   try {
