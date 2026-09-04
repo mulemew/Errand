@@ -86,6 +86,9 @@ export interface Translations {
     schedule: string;
     noSchedule: string;
     cronExpression: string;
+    cronIsUtc: string;
+    cronNextRun: string;
+    cronInvalid: string;
     randomSchedule: string;
     afterCompletion: string;
     browserConfig: string;
@@ -854,6 +857,9 @@ export interface Translations {
     schedule: "调度计划",
     noSchedule: "不自动调度",
     cronExpression: "Cron 表达式",
+    cronIsUtc: "服务器按 UTC 解释这个表达式（页面上其他时间都是你本地时区）。",
+    cronNextRun: "下次运行",
+    cronInvalid: "表达式无法解析",
     randomSchedule: "随机调度",
     afterCompletion: "完成后再次运行",
     browserConfig: "浏览器配置",
@@ -1600,6 +1606,9 @@ export interface Translations {
     schedule: "Schedule",
     noSchedule: "No schedule",
     cronExpression: "Cron expression",
+    cronIsUtc: "The server reads this expression in UTC (every other time on this page is in your own timezone).",
+    cronNextRun: "Next run",
+    cronInvalid: "This expression cannot be parsed",
     randomSchedule: "Random schedule",
     afterCompletion: "Run again after completion",
     browserConfig: "Browser Config",

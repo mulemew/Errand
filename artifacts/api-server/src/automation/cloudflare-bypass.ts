@@ -1493,6 +1493,27 @@ async function turnstileQuickState(page: PageAdapter): Promise<{ solved: boolean
  */
 const _lastClickAt = new WeakMap<object, number>();
 
+/**
+ * Is there anything on this page a person could click to pass the Turnstile?
+ *
+ * The same two lookups the clicker uses, asked as a question instead of as an action.
+ *
+ * A widget with no checkbox anywhere is the INVISIBLE variant: the page's own script gets
+ * the token, there is no interactive challenge, and a run that stops for one is stopping
+ * for something no human could have resolved either. The presence of a
+ * challenges.cloudflare.com frame does not answer this — the invisible variant loads that
+ * frame too, which is why an earlier attempt at this check was wrong.
+ */
+export async function turnstileCheckboxExists(page: PageAdapter): Promise<boolean> {
+  try {
+    if (await locateCheckboxInCfFrame(page)) return true;
+    return !!(await locateTurnstileCheckbox(page));
+  } catch {
+    // Unreadable is not "absent": say yes so the caller keeps today's behaviour.
+    return true;
+  }
+}
+
 export async function clickTurnstileCheckbox(
   page: PageAdapter,
   settleMs?: number,

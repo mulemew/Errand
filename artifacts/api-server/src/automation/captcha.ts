@@ -1,6 +1,6 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
-import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox, describeTurnstileState } from "./cloudflare-bypass";
+import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox, describeTurnstileState, turnstileCheckboxExists } from "./cloudflare-bypass";
 import { solveRecaptchaAudio } from "./recaptcha-audio";
 import type { CaptchaSolver, CaptchaTokenType } from "./captcha-solver";
 
@@ -143,64 +143,6 @@ const TOKEN_CAPTCHA_SELECTORS: Array<{ selector: string; type: CaptchaTokenType 
 interface TokenDetection {
   type: CaptchaTokenType;
   sitekey: string | null;
-}
-
-/**
- * Does this Turnstile have anything a person could interact with?
- *
- * `turnstile.render()` inserts an empty `cf-turnstile-response` input the moment it runs,
- * so "a Turnstile exists on this page" is true long before — and sometimes instead of —
- * "a Turnstile is blocking us". hoster24 renders one explicitly labelled `unsichtbar`
- * (invisible) whose token its OWN script fetches when the Google credential comes back:
- *
- *     <div id="turnstileGoogle"></div>
- *     _tsGoogleId = turnstile.render('#turnstileGoogle', { ... })
- *     body: JSON.stringify({ credential: response.credential, turnstileToken: gToken })
- *
- * There is no checkbox, there never will be, and no token appears until the site asks for
- * one. Waiting for it and then hunting for a checkbox reported "captcha needs resolution"
- * on a page with no captcha in the way.
- *
- * Measured from the host container rather than the iframe: Turnstile's iframe lives in a
- * CLOSED shadow root, so the document cannot see it, while the div it was rendered into is
- * ordinary DOM. A managed widget makes that div about 300x65; an invisible one leaves it at
- * nothing.
- */
-async function turnstileInteractiveSurface(page: PageAdapter): Promise<{ visible: boolean; detail: string }> {
-  // A real widget frame is interactive whatever the container measures.
-  try {
-    const frame = page
-      .frames()
-      .map((f) => { try { return f.url(); } catch { return ""; } })
-      .find((u) => u.includes("challenges.cloudflare.com") || u.includes("turnstile"));
-    if (frame) return { visible: true, detail: "widget frame present" };
-  } catch { /* not every adapter exposes frames() */ }
-
-  return (await page
-    .evaluate(() => {
-      const hosts = new Set<Element>();
-      for (const sel of [".cf-turnstile", "[data-sitekey]", "[id*='turnstile']", "[class*='turnstile']"]) {
-        for (const el of Array.from(document.querySelectorAll(sel))) hosts.add(el);
-      }
-      // The input's own parent is the host when the site used a bare div with no class.
-      for (const el of Array.from(document.querySelectorAll("input[name='cf-turnstile-response']"))) {
-        if (el.parentElement) hosts.add(el.parentElement);
-      }
-      let best = 0;
-      for (const el of hosts) {
-        const style = window.getComputedStyle(el);
-        if (style.display === "none" || style.visibility === "hidden") continue;
-        const r = el.getBoundingClientRect();
-        best = Math.max(best, Math.min(r.width, r.height));
-      }
-      // 10px: a rendered checkbox is tens of pixels tall, and a 1-2px container is the
-      // sizing artefact of an invisible widget rather than something to aim at.
-      return { visible: best >= 10, detail: `largest host min-dimension ${Math.round(best)}px` };
-    })
-    .catch(() => ({ visible: true, detail: "could not measure — assuming interactive" }))) as {
-    visible: boolean;
-    detail: string;
-  };
 }
 
 async function detectTokenCaptcha(page: PageAdapter): Promise<TokenDetection | null> {
@@ -1024,24 +966,6 @@ export async function detectAndHandleCaptcha(
         return { detected: true, solved: true, message: "Turnstile widget auto-solved (managed mode)" };
       }
 
-      // Nothing rendered to interact with: the widget is invisible and the page drives it
-      // itself. Not a gate, so do not treat it as one — the click phase below would find
-      // no checkbox (correctly) and report needs-attention on a page with no captcha in
-      // the way. Checked after the wait above so a widget that was merely slow to render
-      // has already had its chance.
-      {
-        const surface = await turnstileInteractiveSurface(page);
-        if (!surface.visible) {
-          logger.info({ detail: surface.detail }, "Turnstile is invisible — the page fetches its own token; continuing");
-          return {
-            detected: true,
-            solved: false,
-            needsAttention: false,
-            message: `Invisible Turnstile (${surface.detail}) — no widget to solve; the page requests its own token`,
-          };
-        }
-      }
-
       // ── Phase 2: Token not auto-populated — try clicking the checkbox ──
         // Calls clickTurnstileCheckbox which tries (in order):
         //   1. xdotool OS-level physical click (invisible to CF fingerprinting)
@@ -1128,6 +1052,34 @@ export async function detectAndHandleCaptcha(
             break;
           }
           logger.debug({ widget, leftMs: Math.max(0, Math.round(graceDeadline - Date.now())) }, "Turnstile still verifying — waiting quietly");
+        }
+
+        // Nothing to click, therefore nothing a person could have clicked either.
+        //
+        // Asked HERE and not earlier, because only the click phase can answer it: the
+        // invisible variant loads a challenges.cloudflare.com frame exactly like the
+        // interactive one, so the frame's presence proves nothing. What separates them is
+        // that this frame contains no checkbox — measured now, after the 8s auto-solve
+        // wait, the click attempts and the 15s grace, so a widget that was merely slow has
+        // had every chance to render one.
+        //
+        // A run stopping here was asking someone to solve a challenge that has no visible
+        // element and never did. The page mints its own token; if it turns out the site
+        // really did need one, the step that needs it fails with its own message, which
+        // says more than "captcha" ever did.
+        if (!(await turnstileCheckboxExists(page))) {
+          logger.warn(
+            { widget: await describeTurnstileState(page) },
+            "Turnstile has no clickable checkbox anywhere — invisible widget, not a gate; continuing",
+          );
+          return {
+            detected: true,
+            solved: false,
+            needsAttention: false,
+            message:
+              `${type} is present but has no interactive checkbox (invisible widget) — ` +
+              `the page requests its own token, so there is nothing to solve.`,
+          };
         }
 
         // Neither auto-solve nor click worked

@@ -65,6 +65,83 @@ const GOOGLE_BUTTON_TEXT_PATTERNS = [
   "sign up with google",
 ];
 
+/**
+ * Reveal a Google Sign-In button the page renders and then hides, and say where it is.
+ *
+ * hoster24 is the case this was written for, and the shape is common. The page renders
+ * Google's real button into a container it keeps at `display:none`, shows its OWN styled
+ * button instead, and forwards the click:
+ *
+ *     const el = document.querySelector('#g_id_onload_login iframe, … div[role=button]');
+ *     if (el) { el.click(); return; }        // ← the whole flow dies here
+ *     google.accounts.id.prompt(…)           // ← never reached
+ *
+ * `el.click()` on a CROSS-ORIGIN iframe does nothing: the click event goes to the iframe
+ * ELEMENT in the parent document, and Google's button lives inside the frame, which only
+ * honours real input of its own. So the site's button is clicked, its handler runs, and
+ * nothing happens — which is exactly what the log showed: the button found, clicked, and
+ * the URL never moving for 50 seconds.
+ *
+ * Making the container visible and clicking INSIDE the frame is the only way through, and
+ * it is the same thing the Turnstile path already does for a clipped widget.
+ */
+const REVEAL_GSI_BUTTON_JS = `(function () {
+  var f = document.querySelector("iframe[src*='accounts.google.com/gsi/button']");
+  if (!f) return null;
+  // Un-hide the frame and every ancestor that is hiding it. Nothing is moved or resized
+  // beyond what it takes to be clickable.
+  var el = f;
+  for (var i = 0; i < 20 && el; i++) {
+    var s = window.getComputedStyle(el);
+    if (s.display === 'none') el.style.display = 'block';
+    if (s.visibility === 'hidden') el.style.visibility = 'visible';
+    if (parseFloat(s.opacity || '1') < 0.1) el.style.opacity = '1';
+    if (s.overflow === 'hidden') el.style.overflow = 'visible';
+    el = el.parentElement;
+  }
+  var r = f.getBoundingClientRect();
+  if (r.width < 40 || r.height < 20) {
+    f.style.width = '240px'; f.style.height = '44px';
+    r = f.getBoundingClientRect();
+  }
+  f.scrollIntoView({ block: 'center', inline: 'center' });
+  r = f.getBoundingClientRect();
+  if (r.width < 10 || r.height < 10) return null;
+  return { x: r.left, y: r.top, w: r.width, h: r.height };
+})()`;
+
+async function clickHiddenGoogleButton(page: PageAdapter): Promise<boolean> {
+  type Rect = { x: number; y: number; w: number; h: number };
+  let rect: Rect | null = null;
+  try {
+    rect = (await page.evaluate(REVEAL_GSI_BUTTON_JS as unknown as string)) as Rect | null;
+  } catch (err) {
+    logger.debug({ err }, "Could not reveal the Google button frame");
+    return false;
+  }
+  if (!rect) return false;
+
+  const x = rect.x + rect.w / 2;
+  const y = rect.y + rect.h / 2;
+  logger.info({ rect }, "Google's own button was hidden — revealed it and clicking inside the frame");
+
+  // The real X pointer when the backend has one, for the same reason the Turnstile path
+  // prefers it: a cross-origin frame only counts input it receives itself.
+  const osClick = (page as unknown as { osClick?: (x: number, y: number) => Promise<boolean> }).osClick;
+  if (osClick && (await osClick(x, y))) {
+    logger.info("Clicked Google's button with the real X pointer");
+    return true;
+  }
+  try {
+    await page.mouse.click(x, y);
+    logger.info("Clicked Google's button with synthesised input");
+    return true;
+  } catch (err) {
+    logger.debug({ err }, "Both click paths failed on the Google button frame");
+    return false;
+  }
+}
+
 async function clickGoogleButton(page: PageAdapter): Promise<boolean> {
   for (const sel of GOOGLE_BUTTON_SELECTORS) {
     const el = await page.$(sel);
@@ -306,6 +383,38 @@ async function switchToAuthenticatorChallenge(page: PageAdapter): Promise<boolea
   return !!(await page.$(TOTP_INPUT_SEL));
 }
 
+/**
+ * Put Google's own screens into English before driving them.
+ *
+ * Every selector in this file that is not an id is a LABEL — "next", "continue", and the
+ * handful of translations beside them — and Google does not pick that language from
+ * anything we control. The site embeds the button without a `locale`, so for a signed-out
+ * visitor Google decides from the exit IP as much as from Accept-Language: the same task
+ * that renders "Sign in with Google" through one proxy renders "Conectează-te cu Google"
+ * through a Romanian one. A flow that only works while the exit IP happens to be
+ * English-speaking is not working, it is lucky.
+ *
+ * `hl` is Google's documented override and it survives the OAuth parameters, which are
+ * carried in the query string and left untouched here. Nothing else about the request
+ * changes, and choosing an interface language is an ordinary thing for an account to have
+ * done — this is not a fingerprint the way an inconsistent navigator.language would be.
+ */
+async function forceEnglishGoogleUi(page: PageAdapter): Promise<void> {
+  try {
+    const url = page.url();
+    if (!url.includes("accounts.google.com")) return;
+    const u = new URL(url);
+    if (u.searchParams.get("hl") === "en") return;
+    u.searchParams.set("hl", "en");
+    logger.info({ from: url, to: u.toString() }, "Forcing Google's UI to English (hl=en)");
+    await page.goto(u.toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
+  } catch (err) {
+    // Never fatal: the id-based selectors still work in any language, and a failed
+    // re-navigation must not cost a login that would otherwise have gone through.
+    logger.warn({ err }, "Could not force Google's UI language — continuing in whatever it served");
+  }
+}
+
 /** Google's "Next", resolved safely: the step's own id (scoped so we cannot stray to
  *  another button), then the localised label, then Enter. */
 async function pressNext(page: PageAdapter, idSel: string, timeout: number): Promise<void> {
@@ -470,6 +579,10 @@ export async function googleLogin(
     }
 
     const isAlreadyGoogle = page.url().includes("accounts.google.com");
+    if (isAlreadyGoogle) await forceEnglishGoogleUi(page);
+    // Set only when the flow moves into a popup; null means "we never left the site's page",
+    // which is every redirect-flow site and therefore every site that works today.
+    let sitePage: PageAdapter | null = null;
     // Where the flow started, so we can tell "OAuth completed" from "nothing happened".
     const clickStartUrl = page.url();
 
@@ -495,11 +608,28 @@ export async function googleLogin(
       timer.mark("findButton");
       if (!clicked) {
         // "No button" has two very different causes and they need different fixes. The
-        // page may genuinely lack one — or the session was RESTORED and the site is
-        // already signed in, so there is nothing to sign in with. Cookie mode probes for
-        // that before getting here, and if its success criterion is wrong the probe says
-        // "logged out", the login runs, and the user gets this message with no hint that
-        // their criterion is the problem. Ask the page which of the two it is.
+        // page may genuinely lack one — or the site is ALREADY SIGNED IN, so there is
+        // nothing left to sign in with.
+        //
+        // The step's own criterion decides that, and it decides it FIRST. Everywhere else
+        // in this codebase a configured criterion is the authority and the heuristics are
+        // guesses that only speak when nothing was configured — this branch had it the
+        // other way round, asking detectLoginState and reporting failure on its "unknown".
+        // Which is exactly what happened here: the OAuth completed, the page became the
+        // signed-in dashboard, the button was correctly gone, the heuristic could not read
+        // the new page, and a successful login was reported as "could not find a button".
+        if (successText?.trim() || successSelector?.trim()) {
+          const evidenceFound = await waitForSuccessCriterion(page, successSelector, successText);
+          if (evidenceFound) {
+            logger.info({ evidenceFound, url: page.url() }, "No OAuth button because the site is already signed in");
+            return {
+              success: true,
+              captchaBlocked: false,
+              message: timer.annotate(`Already signed in — ${evidenceFound}. Final URL: ${page.url()}`),
+            };
+          }
+        }
+
         const { verdict, evidence } = await detectLoginState(page);
         const hint =
           verdict === "logged_in"
@@ -518,13 +648,54 @@ export async function googleLogin(
       // while the browser is still on the login page and concludes "already authenticated
       // with Google" — which is why one test site reported success on every run while
       // sitting on the auth screen the whole time.
-      const navDeadline = Date.now() + 20000;
-      while (Date.now() < navDeadline) {
-        const u = page.url();
-        if (u.includes("accounts.google.com") || u !== clickStartUrl) break;
-        await new Promise((r) => setTimeout(r, 500));
+      //
+      // "Somewhere" is two places, not one. A redirect flow navigates this page; a popup
+      // flow (GSI's ux_mode:'popup', or the window.open fallback plenty of sites use)
+      // leaves this page exactly where it was and does the whole exchange in another
+      // window. Watching only the URL meant the popup case looked identical to a click
+      // that never landed.
+      const moved = async (): Promise<PageAdapter | null> => {
+        const navDeadline = Date.now() + 20000;
+        while (Date.now() < navDeadline) {
+          const u = page.url();
+          if (u.includes("accounts.google.com") || u !== clickStartUrl) return page;
+          const popup = (await page
+            .getOpenPages()
+            .find((pg) => {
+              try {
+                return !pg.isClosed() && pg.url().includes("accounts.google.com");
+              } catch {
+                return false;
+              }
+            })) as PageAdapter | undefined;
+          if (popup) return popup;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        return null;
+      };
+
+      let arrived = await moved();
+
+      // Nothing moved: the page may have handed our click to a Google button it keeps
+      // hidden, which swallows it. Reveal that button and click it for real, then wait
+      // again. Only reached when the ordinary path produced nothing, so a site where the
+      // ordinary path works never takes it.
+      if (!arrived) {
+        if (await clickHiddenGoogleButton(page)) {
+          arrived = await moved();
+        }
+      }
+
+      if (arrived && arrived !== page) {
+        logger.info({ url: arrived.url() }, "Google opened its own window — following it");
+        // The SITE's page stays where it is. The popup is only where the credentials are
+        // typed; the sign-in itself lands back on the opener, which is also the only page
+        // the success criterion can be checked against — and by then the popup is closed.
+        sitePage = page;
+        page = arrived;
       }
       timer.mark("oauthRedirect");
+      await forceEnglishGoogleUi(page);
     }
 
     if (!page.url().includes("accounts.google.com")) {
@@ -562,6 +733,15 @@ export async function googleLogin(
     const result = await completeGoogleAuth(page, credentials, solver);
     timer.mark("googleAuth");
     if (!result.success) return { ...result, message: timer.annotate(result.message) };
+
+    // Back to the opener for the verdict, when there was one. The popup closes as soon as
+    // Google hands the credential over, so every check below would be reading a dead page.
+    if (sitePage) {
+      logger.info({ url: sitePage.url() }, "Google's window is done — verifying on the site's page");
+      page = sitePage;
+      // The opener finishes its own sign-in when the credential arrives; give it that.
+      await new Promise((r) => setTimeout(r, 3000));
+    }
 
     const finalUrl = page.url();
     logger.info({ finalUrl }, "Google login succeeded");

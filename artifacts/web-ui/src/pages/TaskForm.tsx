@@ -224,6 +224,80 @@ const defaultBrowserConfig: BrowserConfigState = {
   fpSel: "none",
 };
 
+/** Expressions worth one click. UTC, like every cron the server reads. */
+const CRON_TEMPLATES = [
+  { expr: "*/20 * * * *" },
+  { expr: "0 * * * *" },
+  { expr: "*/20 6-20 * * *" },
+  { expr: "0 3 * * *" },
+];
+
+/**
+ * What a cron expression means, in the reader's own timezone.
+ *
+ * Every time on every page is rendered in the browser's timezone, because the server sends
+ * absolute instants. A cron expression is the one exception: it is wall-clock, and the wall
+ * it refers to is the SERVER's — UTC. Nothing said so, so "8" was read as eight o'clock
+ * here and fired at eight o'clock there, and the only way to find out was to wait.
+ *
+ * The next runs are computed by the server, with the same croner that schedules them. A
+ * second cron implementation in the browser would eventually disagree with the scheduler,
+ * and the cases it disagreed about would be exactly the ones worth checking.
+ */
+function CronPreview({ expression }: { expression: string }) {
+  const { t } = useLang();
+  const [state, setState] = useState<{ valid: boolean; next: string[]; now: string; error?: string } | null>(null);
+
+  useEffect(() => {
+    const expr = expression.trim();
+    if (!expr) { setState(null); return; }
+    let cancelled = false;
+    // Debounced: this fires on every keystroke otherwise, and half-typed expressions are
+    // not worth a round trip.
+    const timer = setTimeout(() => {
+      fetch(`/api/cron/preview?expr=${encodeURIComponent(expr)}&n=3`)
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setState(d); })
+        .catch(() => { if (!cancelled) setState(null); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [expression]);
+
+  if (!state) return null;
+
+  if (!state.valid) {
+    return <p className="text-xs text-destructive">{t.cronInvalid}</p>;
+  }
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const fmtLocal = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fmtUtc = (iso: string) => `${iso.slice(5, 16).replace("T", " ")}Z`;
+
+  return (
+    <div className="text-xs space-y-1">
+      <p className="text-muted-foreground">
+        {t.cronIsUtc}
+        {state.now && (
+          <span className="font-mono">
+            {" "}UTC {fmtUtc(state.now)} = {fmtLocal(state.now)} ({tz})
+          </span>
+        )}
+      </p>
+      {state.next.length > 0 && (
+        <ul className="font-mono text-muted-foreground space-y-0.5">
+          {state.next.map((iso) => (
+            <li key={iso}>
+              {t.cronNextRun} <span className="text-foreground">{fmtLocal(iso)}</span>
+              <span className="opacity-60"> · UTC {fmtUtc(iso)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Infer the proxyType from a manual proxy URL's scheme (the node-type dropdown was
  *  removed — the scheme in the URL already says what it is). Mirrors the api-server.
  *  https:// is its own type: it is an HTTP proxy reached over TLS, which the browser
@@ -838,9 +912,18 @@ export default function TaskForm() {
                             />
                           </FormControl>
                           <FormDescription className="text-xs font-mono">
-                            e.g. 0 0 * * * (Daily at midnight) · 0 * * * *
-                            (Hourly)
+                            {CRON_TEMPLATES.map((c) => (
+                              <button
+                                key={c.expr}
+                                type="button"
+                                className="mr-2 underline decoration-dotted hover:text-foreground"
+                                onClick={() => field.onChange(c.expr)}
+                              >
+                                {c.expr}
+                              </button>
+                            ))}
                           </FormDescription>
+                          <CronPreview expression={field.value ?? ""} />
                           <FormMessage />
                         </FormItem>
                       )}

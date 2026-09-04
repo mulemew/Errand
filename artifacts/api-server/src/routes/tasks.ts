@@ -1515,6 +1515,46 @@ function getNextCronRun(expression: string, _from: Date = new Date()): Date | nu
   }
 }
 
+/**
+ * What would this cron expression actually do? Read-only, and it schedules nothing.
+ *
+ * The preview is computed by the SAME croner the scheduler runs on, which is the whole
+ * point of doing it here rather than parsing cron again in the browser. A second
+ * implementation would eventually disagree with the first, and the times it disagreed
+ * about would be exactly the ones worth checking.
+ *
+ * `now` goes back with it so the UI can state the offset it is correcting for. Everything
+ * is ISO-8601 with a zone; the browser renders it in whatever timezone the reader is in.
+ */
+router.get("/cron/preview", async (req, res): Promise<void> => {
+  const expression = String(req.query.expr ?? "").trim();
+  const count = Math.min(10, Math.max(1, parseInt(String(req.query.n ?? "3"), 10) || 3));
+  const now = new Date().toISOString();
+  if (!expression) {
+    res.json({ valid: false, next: [], now, error: "empty" });
+    return;
+  }
+  // The two @-schedules are intervals, not wall-clock times — there is nothing to preview
+  // and, unlike cron, nothing about them depends on the server's timezone.
+  if (expression.startsWith("@")) {
+    res.json({ valid: true, next: [], now, interval: true });
+    return;
+  }
+  try {
+    const job = new Cron(expression);
+    const next: string[] = [];
+    let cursor: Date | null = job.nextRun();
+    for (let i = 0; i < count && cursor; i++) {
+      next.push(cursor.toISOString());
+      cursor = job.nextRun(cursor);
+    }
+    job.stop();
+    res.json({ valid: next.length > 0, next, now });
+  } catch (err) {
+    res.json({ valid: false, next: [], now, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 router.patch("/tasks/:id/enabled", async (req, res): Promise<void> => {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
