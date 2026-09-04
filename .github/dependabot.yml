@@ -1,0 +1,37 @@
+# Dependency updates, weekly, grouped so a bump is one PR to review rather than twenty.
+#
+# Grouped by what breaks together: a patch bump almost never needs thought, a major one
+# always does, and the browser stack (playwright/puppeteer/camoufox) moves as a unit
+# because a driver and its browser have to agree.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      browser-stack:
+        patterns:
+          - "playwright*"
+          - "puppeteer*"
+          - "@playwright/*"
+      patch-and-minor:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Pinned deliberately — see pnpm-workspace.yaml's overrides, which strip the
+      # per-platform binaries this version is chosen against.
+      - dependency-name: esbuild
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
