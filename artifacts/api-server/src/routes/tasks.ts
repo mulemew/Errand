@@ -1120,6 +1120,31 @@ router.post("/tasks/backup/import", async (req, res): Promise<void> => {
       continue;
     }
     try {
+      // Shape only — deliberately NOT the full CreateTaskBody.
+      //
+      // An import used to write `steps` and `browserConfig` straight in as unknown, so a
+      // hand-edited or truncated backup became a row that failed later, inside the runner,
+      // as something that read nothing like "your import was malformed". Checking that
+      // they are an array and an object catches exactly that.
+      //
+      // The full schema would go further and reject more than it should. `steps` there is
+      // a union over the step types this version knows, and a backup is by definition
+      // older than the code restoring it: a task using a step shape that has since changed
+      // would be refused entry, which turns a validation improvement into "your backup no
+      // longer restores". The runner already tolerates step shapes it does not recognise;
+      // the database should not be stricter than the thing that reads it.
+      //
+      // A rejected entry is skipped, not the file: nine good tasks and one bad one restore
+      // nine.
+      const badShape =
+        (t.steps != null && !Array.isArray(t.steps)) ||
+        (t.browserConfig != null && (typeof t.browserConfig !== "object" || Array.isArray(t.browserConfig)));
+      if (badShape) {
+        req.log.warn({ name }, "task import rejected — steps must be an array and browserConfig an object");
+        skipped.push(name);
+        continue;
+      }
+      const v = t as Record<string, unknown>;
       const [row] = await db
         .insert(tasksTable)
         .values({
@@ -1127,12 +1152,12 @@ router.post("/tasks/backup/import", async (req, res): Promise<void> => {
           // targetUrl is NOT NULL; templates export it blank, so keep a placeholder
           // the user must fill in rather than rejecting the whole import.
           targetUrl: targetUrl || "about:blank",
-          loginType: (t.loginType as string | null) ?? null,
-          steps: (t.steps as unknown) ?? null,
-          cronExpression: (t.cronExpression as string | null) ?? null,
-          retryCount: (t.retryCount as number | null) ?? null,
-          retryIntervalMinutes: (t.retryIntervalMinutes as number | null) ?? null,
-          browserConfig: (t.browserConfig as unknown) ?? null,
+          loginType: (v.loginType as string | null) ?? null,
+          steps: (v.steps as unknown) ?? null,
+          cronExpression: (v.cronExpression as string | null) ?? null,
+          retryCount: (v.retryCount as number | null) ?? null,
+          retryIntervalMinutes: (v.retryIntervalMinutes as number | null) ?? null,
+          browserConfig: (v.browserConfig as unknown) ?? null,
           status: "idle",
           enabled: false,
         })

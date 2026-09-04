@@ -102,6 +102,25 @@
     // Reap sing-box/Xvfb helpers on SIGTERM/SIGINT/fatal errors — nothing killed
     // them before, so every restart left orphans behind.
     installSignalHandlers(async () => {
+      // Stop accepting first, and let requests already in flight answer. Without this the
+      // process exited with sockets mid-response, so a deploy could cut a save in half —
+      // the client sees a network error and cannot tell whether the write landed.
+      //
+      // Bounded, because this app holds connections open on purpose: the live-view socket
+      // and the task-event stream never end by themselves, and waiting for them would turn
+      // every restart into a hang that ends in SIGKILL anyway.
+      await new Promise<void>((resolve) => {
+        const done = setTimeout(() => {
+          logger.warn("Some connections did not close in time — continuing shutdown");
+          resolve();
+        }, 10_000);
+        server.close(() => {
+          clearTimeout(done);
+          resolve();
+        });
+        // Long-lived streams would otherwise hold the close open for the full timeout.
+        server.closeIdleConnections?.();
+      });
       // Hand-driven browsers are held open deliberately; on the way out they must still be
       // released, or the sidecar keeps a Firefox per instance until its own TTL.
       await stopAllInstances().catch(() => {});
