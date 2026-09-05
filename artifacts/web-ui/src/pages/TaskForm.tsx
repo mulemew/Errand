@@ -323,6 +323,21 @@ const PROVIDER_LABELS: Record<BrowserProvider, string> = {
  * supports pasting/replacing without a sticky leading "1", and only clamps
  * to a valid number on blur.
  */
+/**
+ * A translated string with **bold** runs.
+ *
+ * The one word that carries this sentence — that the delay is measured from when a run
+ * ENDS — was emphasised in the English written into the markup. Moving the sentence into
+ * the dictionary would have lost that, and a translator cannot add markup to a string.
+ */
+function Emphasised({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("**").map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part))}
+    </>
+  );
+}
+
 function DurationField({
   label,
   value,
@@ -528,7 +543,11 @@ export default function TaskForm() {
       form.reset({
         name: task.name,
         targetUrl: task.targetUrl,
-        cronExpression: cron.startsWith("@random:") ? "" : cron,
+        // "@random:…" and "@after_completion:…" are how those two modes are stored, not
+        // things anyone typed. Only the first was cleared here, so editing a task with a
+        // post-completion delay and then switching to the cron tab showed
+        // "@after_completion:15" sitting in the expression box as if it were one.
+        cronExpression: cron.startsWith("@") ? "" : cron,
         retryCount: task.retryCount != null ? String(task.retryCount) : "",
         retryIntervalMinutes:
           task.retryIntervalMinutes != null ? String(task.retryIntervalMinutes) : "",
@@ -850,9 +869,9 @@ export default function TaskForm() {
                 <div className="space-y-3">
                   <div>
                     <p className="text-sm font-medium leading-none mb-2">
-                      Schedule{" "}
+                      {t.schedule}{" "}
                       <span className="text-muted-foreground font-normal">
-                        (Optional)
+                        {t.scheduleOptional}
                       </span>
                     </p>
                     <div className="flex gap-1 p-1 bg-muted rounded-md w-fit">
@@ -870,7 +889,7 @@ export default function TaskForm() {
                             : mode === "cron"
                               ? t.cronExpression
                               : mode === "random"
-                                ? "Random interval"
+                                ? t.randomInterval
                                 : t.afterCompletion}
                         </button>
                       ))}
@@ -881,7 +900,7 @@ export default function TaskForm() {
                     <div className="space-y-3">
                       <div className="space-y-1.5">
                         <p className="text-xs font-medium text-muted-foreground">
-                          Delay after run finishes
+                          {t.afterCompletionDelayLabel}
                         </p>
                         <div className="flex items-center gap-2">
                           <DurationField label={t.unitDays} value={acDays} onChange={setAcDays} />
@@ -889,10 +908,12 @@ export default function TaskForm() {
                           <DurationField label={t.unitMinutes} value={acMinutes} onChange={setAcMinutes} />
                         </div>
                         <p className="text-[11px] text-muted-foreground leading-snug">
-                          Next run triggers automatically this long after the
-                          previous run <strong>ends</strong> ({t.unitDays} / {t.unitHours} / {t.unitMinutes} can be
-                          combined freely). Perfect when the target site has a
-                          cooldown timer that starts after each operation.
+                          <Emphasised
+                            text={t.afterCompletionHint
+                              .replace("{d}", t.unitDays)
+                              .replace("{h}", t.unitHours)
+                              .replace("{m}", t.unitMinutes)}
+                          />
                         </p>
                       </div>
                     </div>

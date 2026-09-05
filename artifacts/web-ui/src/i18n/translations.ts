@@ -534,6 +534,10 @@ export interface Translations {
       randomWindowLabel: string;
       runsPerWindowLabel: string;
       randomScheduleHint: string;
+      scheduleOptional: string;
+      randomInterval: string;
+      afterCompletionDelayLabel: string;
+      afterCompletionHint: string;
       retryOnFailure: string;
       retryAfterFailure: string;
       retryTimesEvery: string;
@@ -1284,6 +1288,10 @@ export interface Translations {
       randomWindowLabel: "时间窗口（在此周期内随机执行）",
       runsPerWindowLabel: "每个周期内执行次数",
       randomScheduleHint: "每次运行后开始计算下一个窗口，在窗口内随机安排 {n} 次运行。例如设为 3 天 1 次：上次运行完成后，下次运行会在 3 天内的某个随机时刻执行。",
+      scheduleOptional: "（可选）",
+      randomInterval: "随机间隔",
+      afterCompletionDelayLabel: "运行结束后等待",
+      afterCompletionHint: "上一次运行**结束**之后，隔这么久自动触发下一次（{d} / {h} / {m} 可以随意组合）。目标站点的冷却时间是从每次操作完成后开始算的话，用这个最合适。",
       retryOnFailure: "失败自动重试",
       retryAfterFailure: "失败后重试",
       retryTimesEvery: "次，每次间隔",
@@ -2035,6 +2043,10 @@ export interface Translations {
       randomWindowLabel: "Window (runs at a random moment inside it)",
       runsPerWindowLabel: "Runs per window",
       randomScheduleHint: "The next window starts when a run finishes, and {n} run(s) are scheduled at random inside it. \"3 days, 1 run\" means the next run happens at some random moment within 3 days of the last one finishing.",
+      scheduleOptional: "(Optional)",
+      randomInterval: "Random interval",
+      afterCompletionDelayLabel: "Delay after run finishes",
+      afterCompletionHint: "The next run triggers automatically this long after the previous one **ends** ({d} / {h} / {m} can be combined freely). Right for a site whose cooldown starts when an operation completes.",
       retryOnFailure: "Retry automatically on failure",
       retryAfterFailure: "After a failure, retry",
       retryTimesEvery: "times, waiting",
