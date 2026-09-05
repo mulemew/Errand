@@ -189,7 +189,9 @@ export default function Browsers() {
         url: inst?.url ?? p.originUrl,
         autostart: p.autostart === true,
         startedAt: inst?.createdAt ?? null,
-        sortAt: Date.parse(p.updatedAt) || 0,
+        // The id, not updatedAt: closing a browser writes its session back, and a row that
+        // reorders itself because you used it is the whole problem.
+        sortAt: p.id,
       };
     });
 
@@ -207,14 +209,16 @@ export default function Browsers() {
         url: i.url,
         autostart: false,
         startedAt: i.createdAt,
-        sortAt: i.createdAt,
+        // No row of its own, so nothing to order it by; below every stored browser.
+        sortAt: -1,
       });
     }
 
-    // Running first — those are the ones you are about to touch.
-    return out.sort(
-      (a, b) => (a.instance ? 0 : 1) - (b.instance ? 0 : 1) || b.sortAt - a.sortAt,
-    );
+    // Creation order, and NOTHING else. Sorting by run state put the browser you just
+    // started at the top and dropped it back down when you closed it, so the button you
+    // were aiming at belonged to a different browser by the time you clicked — with delete
+    // sitting right there. Position is how you find a row; it has to stay where you left it.
+    return out.sort((a, b) => b.sortAt - a.sortAt);
   }, [instances, profiles]);
 
   const openEditor = (row: Row | null) => {

@@ -828,20 +828,26 @@ export default function Home() {
                 }`}
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4">
-                <div className="flex items-center gap-4">
-                  <div className={`h-10 w-10 rounded-sm flex items-center justify-center border ${
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className={`h-10 w-10 shrink-0 rounded-sm flex items-center justify-center border ${
                     task.status === "needs_attention"
                       ? "bg-amber-500/10 border-amber-500/30"
                       : "bg-muted border-border"
                   }`}>
                     <StatusIcon status={task.status} />
                   </div>
-                  <div>
-                    <Link href={`/tasks/${task.id}`} className="font-semibold text-foreground hover:text-primary transition-colors flex items-center gap-2">
+                  <div className="min-w-0">
+                    <Link href={`/tasks/${task.id}`} className="font-semibold text-foreground hover:text-primary transition-colors flex items-center gap-2 truncate">
                       {task.name}
                     </Link>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground font-mono">
-                      <span className="flex items-center gap-1">
+                    {/* WRAPS AS A ROW, never squeezes as columns.
+                        Six items on one non-wrapping line meant a narrow window shrank each
+                        cell instead of moving anything: "about 18 hours ago" folded into
+                        three stacked lines inside its own box and the row became a block of
+                        broken text. Wrapping moves whole items down; nowrap on the items
+                        keeps each phrase intact. */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground font-mono">
+                      <span className="flex items-center gap-1 whitespace-nowrap">
                         <TerminalIcon className="h-3 w-3" />
                         {(() => {
                             // A task only logs in if it HAS a login step. `task.loginType`
@@ -872,7 +878,7 @@ export default function Home() {
                         geo={(task as unknown as { exitGeo?: TaskGeo | null }).exitGeo}
                         label={(task as unknown as { proxyLabel?: string | null }).proxyLabel}
                       />
-                      <span className="flex items-center gap-1 border-l border-border pl-3">
+                      <span className="flex items-center gap-1 border-l border-border pl-3 whitespace-nowrap">
                         <LastRunBadge lastRun={lastRunMap.get(task.id)} />
                       </span>
                       {(() => {
@@ -883,7 +889,9 @@ export default function Home() {
                           ? (r: RecentRun) => !isLast24h(r) || r.success !== (activeFilter === "success")
                           : undefined;
                         return runs?.length ? (
-                          <span className="flex items-center border-l border-border pl-3">
+                          // The least load-bearing thing here: a glance at history, not
+                          // something you act on. First to go when there is no room.
+                          <span className="hidden md:flex items-center border-l border-border pl-3">
                             <RunSquares runs={runs} dimOutside={dimOutside} />
                           </span>
                         ) : null;
@@ -895,7 +903,7 @@ export default function Home() {
                   </div>
                 </div>
                 
-                <div className="mt-4 sm:mt-0 flex items-center gap-3">
+                <div className="mt-4 sm:mt-0 flex flex-wrap items-center gap-3 shrink-0">
                   <StatusBadge status={runningTaskIds.has(task.id) ? "running" : task.status} />
                   <div className="h-8 w-[1px] bg-border mx-2 hidden sm:block"></div>
                   <div className="flex items-center gap-1.5 mr-1">
