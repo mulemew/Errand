@@ -783,7 +783,21 @@ def launch():
         flush=True,
     )
     # viewPort lets the app proxy THIS session's screen rather than the whole container's.
-    return jsonify({"id": sid, "ws": ws, "viewPort": _view_port})
+    # The DISPLAY's size, so the caller can keep the browser window inside it.
+    #
+    # Nothing checked this, and a window may be taller than the screen it is on: Firefox
+    # sizes itself to whatever viewport it is given, and the part below the display's edge
+    # simply is not there. A real pointer cannot reach it — xdotool works in X coordinates
+    # and the X canvas ends — so a Turnstile widget at y=1128 on a 1080-tall display was
+    # clicked at a coordinate that does not exist, with no error anywhere and a log line
+    # saying the click had happened.
+    _geom = _screen_geometry().split("x")
+    return jsonify({
+        "id": sid,
+        "ws": ws,
+        "viewPort": _view_port,
+        "display": {"width": int(_geom[0]), "height": int(_geom[1])},
+    })
 
 
 def _drain(proc):
@@ -1119,6 +1133,17 @@ def session_os_click(sid):
     try:
         x = int(round(float(body.get("x"))))
         y = int(round(float(body.get("y"))))
+        # Off the canvas is not a click. X clamps or drops it, xdotool still reports
+        # success, and the caller believes it pressed something — which is how a challenge
+        # went unanswered while every log line said otherwise. Say so instead.
+        _gw, _gh = (int(v) for v in _screen_geometry().split("x")[:2])
+        if not (0 <= x < _gw and 0 <= y < _gh):
+            print(f"[os-click] {sid} REFUSED {x},{y} — outside the {_gw}x{_gh} display", flush=True)
+            return jsonify({
+                "error": "point is outside the display",
+                "display": {"width": _gw, "height": _gh},
+                "point": {"x": x, "y": y},
+            }), 422
     except (TypeError, ValueError):
         return jsonify({"error": "x and y are required"}), 400
 

@@ -864,7 +864,12 @@ class CamoufoxProvider implements BrowserProvider {
       if (resolvedProxy) await resolvedProxy.stop().catch(() => {});
       throw new Error(`camoufox-proxy /launch failed: ${res.status} ${await res.text().catch(() => "")}`);
     }
-    const { id, ws, viewPort } = (await res.json()) as { id: string; ws: string; viewPort?: number | null };
+    const { id, ws, viewPort, display } = (await res.json()) as {
+      id: string;
+      ws: string;
+      viewPort?: number | null;
+      display?: { width?: number; height?: number } | null;
+    };
     const wsUrl = reachableCamoufoxWs(ws, this.baseUrl);
 
     // Remember where THIS session can be watched. Each one has its own display now, so a
@@ -900,8 +905,29 @@ class CamoufoxProvider implements BrowserProvider {
     let context: import("playwright-core").BrowserContext;
     let page: import("playwright-core").Page;
     try {
+      // Kept inside the display it is drawn on.
+      //
+      // A window may be TALLER than its screen — Firefox sizes itself to whatever viewport
+      // it is handed, and the part past the display's edge simply does not exist. Nothing
+      // can click there: xdotool works in X coordinates and the X canvas ends. That is how
+      // a Turnstile widget measured at y=1128 on a 1080-tall display was "clicked" at a
+      // coordinate outside the world, with the log reporting success.
+      //
+      // The chrome above the viewport is real estate too, hence the margin — it is the same
+      // ~90px the fingerprint-fitting above already assumes for a maximised window.
+      const fitted = (() => {
+        const dw = Number(display?.width) || 0;
+        const dh = Number(display?.height) || 0;
+        if (!dw || !dh) return vp;
+        const capped = { width: Math.min(vp.width, dw), height: Math.min(vp.height, Math.max(400, dh - 90)) };
+        if (capped.width !== vp.width || capped.height !== vp.height) {
+          logger.info({ vp, display: { width: dw, height: dh }, capped }, "Viewport exceeded the display — capped to fit");
+        }
+        return capped;
+      })();
+
       context = await browser.newContext({
-        viewport: vp,
+        viewport: fitted,
         ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
         ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
       });
