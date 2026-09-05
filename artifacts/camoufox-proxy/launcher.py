@@ -63,6 +63,19 @@ if isinstance(scr, dict) and scr.get("width") and scr.get("height"):
 # service name, so the actual reachable address is host=camoufox-proxy:PORT.
 cfg["host"] = "0.0.0.0"
 
+# How stale the tab list is allowed to be.
+#
+# Closing a browser saves the tabs it had open, and the only source that can see a tab a
+# person opened themselves is Firefox's own session store — which it rewrites on a timer,
+# 15 seconds by default. A tab opened in the last few seconds before closing is simply not
+# in the file yet, and comes back missing.
+#
+# One second instead. The profile is a temp directory that is thrown away with the browser,
+# so this costs a small write on a tmpfs and buys a list that is actually current.
+_prefs = dict(cfg.get("firefox_user_prefs") or {})
+_prefs.setdefault("browser.sessionstore.interval", 1000)
+cfg["firefox_user_prefs"] = _prefs
+
 # Pinning the screen is an optimisation, not a requirement.
 #
 # With no fixed fingerprint, Camoufox synthesises one with browserforge, and asking for an

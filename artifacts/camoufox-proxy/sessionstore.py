@@ -61,20 +61,62 @@ def lz4_block_decompress(src: bytes, out_len: int) -> bytes:
     return bytes(out[:out_len])
 
 
-def profile_dir_for_pgid(pgid) -> str:
-    """The -profile directory of the Firefox in this session's process group."""
-    if pgid is None:
+def _ppid_of(pid: int):
+    """Parent pid, read from /proc/<pid>/stat. None when the process is already gone."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            data = fh.read()
+        # The command name sits in parentheses and may itself contain spaces or ")", so the
+        # fields after it are counted from the LAST ")" rather than by splitting the line.
+        after = data[data.rindex(b")") + 2 :].split()
+        return int(after[1])  # state, ppid
+    except Exception:
+        return None
+
+
+def _belongs_to_session(pid: int, pgid, launcher_pid) -> bool:
+    """Is this process part of the browser this session launched?
+
+    Not a process-group test. The launcher runs in its own group, but Playwright spawns the
+    browser detached — setsid — so Firefox sits in a group of its own and a pgid comparison
+    never matches it. What does still hold is descent: Firefox's parent is Playwright's node
+    driver, whose parent is the launcher. So walk up.
+
+    The pgid check is kept as the cheap first answer for anything that did stay in the group.
+    """
+    seen = 0
+    cur = pid
+    while cur and cur > 1 and seen < 12:
+        if launcher_pid and cur == launcher_pid:
+            return True
+        try:
+            if pgid and os.getpgid(cur) == pgid:
+                return True
+        except Exception:
+            pass
+        cur = _ppid_of(cur)
+        seen += 1
+    return False
+
+
+def profile_dir_for_session(pgid=None, launcher_pid=None) -> str:
+    """The -profile directory of the Firefox this session started."""
+    if not pgid and not launcher_pid:
         return ""
     sep = bytes([0])
     for path in glob.glob("/proc/[0-9]*/cmdline"):
         try:
             pid = int(path.split("/")[2])
-            if os.getpgid(pid) != pgid:
-                continue
             with open(path, "rb") as fh:
                 args = fh.read().split(sep)
-            if b"-profile" in args:
-                return args[args.index(b"-profile") + 1].decode()
+            if b"-profile" not in args:
+                continue
+            # Content processes carry -profile too and are not the parent window.
+            if b"-contentproc" in args:
+                continue
+            if not _belongs_to_session(pid, pgid, launcher_pid):
+                continue
+            return args[args.index(b"-profile") + 1].decode()
         except Exception:
             continue
     return ""
@@ -103,13 +145,13 @@ def _urls_from_store(path: str) -> list:
     return urls
 
 
-def open_tab_urls(pgid) -> list:
+def open_tab_urls(pgid=None, launcher_pid=None) -> list:
     """Every http(s) tab open in this session's Firefox, in window/tab order.
 
     Empty when the profile cannot be found or the store cannot be read — this is a nicety,
     and nothing about closing a browser should fail because of it.
     """
-    prof = profile_dir_for_pgid(pgid)
+    prof = profile_dir_for_session(pgid, launcher_pid)
     if not prof:
         return []
     # recovery is the live one; sessionstore is written on a clean shutdown.
