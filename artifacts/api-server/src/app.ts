@@ -64,7 +64,16 @@ app.use("/api", router);
 // SPA fallback — send index.html for any non-/api route so client-side
 // routing works. Only active when the public directory is present.
 if (existsSync(publicDir)) {
-  app.get("*path", (_req, res) => {
+  app.get("*path", (req, res) => {
+    // "non-/api" was the intent and not the code: this caught everything, so a GET under
+    // /api that no route matched came back as the whole admin page. Seen from the outside
+    // that is an API answering HTML — the "Unexpected token '<'" the error handler below
+    // was written for — and inside the live-view frame it is the app's own UI rendered
+    // where the browser's screen should be.
+    if (req.path === "/api" || req.path.startsWith("/api/")) {
+      res.status(404).json({ error: `No such endpoint: ${req.method} ${req.path}` });
+      return;
+    }
     res.sendFile(path.join(publicDir, "index.html"));
   });
 }

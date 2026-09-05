@@ -1256,16 +1256,18 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
         const r = c.getBoundingClientRect();
         if (usable(r) && widgetShaped(r)) return point(r, `${from}:widget-shaped`);
       }
-      // Nothing is the right shape. Take the SMALLEST usable candidate rather than the
-      // first: the innermost box is the one most likely to be the widget, and picking by
-      // document order is what put a 896px-wide wrapper in front of it in the first place.
-      let best: { r: DOMRect; from: string } | null = null;
-      for (const [c, from] of candidates) {
-        const r = c.getBoundingClientRect();
-        if (!usable(r)) continue;
-        if (!best || r.width * r.height < best.r.width * best.r.height) best = { r, from };
-      }
-      return best ? point(best.r, `${best.from}:smallest`) : null;
+      // NOTHING IS THE RIGHT SHAPE — SO DON'T CLICK.
+      //
+      // This used to take the smallest usable candidate and aim 22px into it. That offset
+      // is a fact about a 300px WIDGET; applied to a 896px wrapper it points at whatever
+      // the page happens to put 22px from that wrapper's left edge, which on a login form
+      // is a real control. The click is a mouse press at OS level on a site the task is
+      // signed into, so guessing wrong does not cost a failed captcha — it costs having
+      // pressed something.
+      //
+      // Giving up costs a click that was never aimed at anything. The caller still has the
+      // frame-based locator, which measures the widget's own rectangle, and its retry.
+      return null;
     },
     null,
   );
