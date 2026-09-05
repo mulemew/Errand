@@ -31,7 +31,7 @@ import uuid
 
 from flask import Flask, jsonify, request
 
-from sessionstore import open_tab_urls
+from sessionstore import open_tab_urls, profile_dir_for_session
 
 app = Flask(__name__)
 PORT = int(os.getenv("PORT", "7318"))
@@ -461,13 +461,44 @@ def _screen_geometry() -> str:
     return os.getenv("CAMOUFOX_SCREEN", "1920x1080x24")
 
 
+def _display_number_busy(n) -> bool:
+    """Is an X server still running on this number, whoever started it?
+
+    Not the same question as "is it ours". A session that ended can leave its X server
+    behind — a teardown that lost the race, a killed container, a crashed launcher — and the
+    number goes back in the free pool while the server is still up. Handing it out again
+    starts an Xvnc that cannot bind, and the session ends up on the shared :99 with no view
+    port of its own: the live view then shows an empty display, which is the blue screen.
+
+    X servers write their pid into /tmp/.Xn-lock. That is the mechanism X itself uses to
+    answer this, so it is the one used here.
+    """
+    try:
+        with open(f"/tmp/.X{int(n)}-lock") as fh:
+            pid = int(fh.read().strip())
+    except Exception:
+        return False
+    try:
+        os.kill(pid, 0)          # signal 0: does it exist, may we signal it
+        return True
+    except ProcessLookupError:
+        return False             # stale lock, nobody home
+    except PermissionError:
+        return True              # someone else's process — alive, just not ours
+
+
 def _alloc_display():
     """Reserve a display number, or None when they are all taken."""
     with _display_lock:
         for n in range(_DISPLAY_BASE, _DISPLAY_MAX):
-            if n not in _displays_in_use:
-                _displays_in_use.add(n)
-                return n
+            if n in _displays_in_use:
+                continue
+            if _display_number_busy(n):
+                # Occupied by a server we do not know about. Leave it out of the pool
+                # rather than fighting it; the reaper's sweep is what cleans those up.
+                continue
+            _displays_in_use.add(n)
+            return n
     return None
 
 
@@ -530,7 +561,24 @@ def _wait_port(port: int, timeout: float = 10.0) -> bool:
     return False
 
 
-def _start_session_display():
+def _start_session_display(_attempts: int = 3):
+    """A KasmVNC server for one session, retrying on a different display number.
+
+    A number that fails is usually a number with something wrong with IT — a server we lost
+    track of, a port another process holds — and the next one along is usually fine. Falling
+    straight through to the shared :99 on the first failure gave the session no view port,
+    and a live view with no port of its own shows an empty display: the blue screen.
+    """
+    for attempt in range(max(1, _attempts)):
+        n, port, procs = _start_one_session_display()
+        if n is not None:
+            return n, port, procs
+        if attempt + 1 < max(1, _attempts):
+            print(f"[display] retrying on another number ({attempt + 2}/{_attempts})", flush=True)
+    return None, None, []
+
+
+def _start_one_session_display():
     """A KasmVNC server for one session: its own X display, its own view port.
 
     Returns (display_num, view_port, [procs]) — or (None, None, []) if anything failed, in
@@ -551,11 +599,18 @@ def _start_session_display():
         # A crashed X server leaves its lock behind and the next one on that number refuses
         # to start ("Server is already active"). Without this the number would fail forever
         # after one crash.
-        for stale in (f"/tmp/.X{n}-lock", f"/tmp/.X11-unix/X{n}"):
-            try:
-                os.unlink(stale)
-            except OSError:
-                pass
+        #
+        # Only when nothing is alive on it. _alloc_display already refuses a busy number, so
+        # reaching here with one means it came up in the last instant — and deleting a LIVE
+        # server's socket breaks the session using it as well as this one.
+        if not _display_number_busy(n):
+            for stale in (f"/tmp/.X{n}-lock", f"/tmp/.X11-unix/X{n}"):
+                try:
+                    os.unlink(stale)
+                except OSError:
+                    pass
+        else:
+            raise RuntimeError(f":{n} is still in use by another X server")
 
         view_port = None
         if _VNC_DISABLED:
@@ -1114,6 +1169,57 @@ def session_view(sid):
     return jsonify({"viewPort": entry.get("view_port"), "display": entry.get("display")})
 
 
+@app.post("/session/<sid>/center-window")
+def session_center_window(sid):
+    """Put this session's browser window in the middle of its display.
+
+    The window is deliberately smaller than the display: it is sized to the screen the
+    FINGERPRINT claims, which is usually smaller than the 1920x1080 canvas these sessions
+    are drawn on. Nothing places it, because there is no window manager in this image — X
+    leaves it where it was asked for, which is the top-left corner — so the live view shows
+    the browser wedged into one corner with bare desktop down two sides.
+
+    Centring is cosmetic and it is also the only thing a window manager would have done for
+    us here. Best-effort by design: a session with no display of its own, or an xdotool that
+    cannot find the window, is not a reason to fail anything.
+    """
+    with _lock:
+        entry = _servers.get(sid)
+    if not entry:
+        return jsonify({"error": "no such session"}), 404
+    disp = entry.get("display")
+    if disp is None:
+        return jsonify({"ok": False, "reason": "session shares the container display"})
+
+    env = dict(os.environ, DISPLAY=f":{disp}")
+    try:
+        found = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "Camoufox"],
+                               env=env, timeout=5, capture_output=True, text=True)
+        wins = [w for w in found.stdout.split() if w.strip()]
+        if not wins:
+            return jsonify({"ok": False, "reason": "no window on this display yet"})
+        gw, gh = (int(v) for v in _screen_geometry().split("x")[:2])
+        moved = []
+        for w in wins:
+            g = subprocess.run(["xdotool", "getwindowgeometry", "--shell", w],
+                               env=env, timeout=5, capture_output=True, text=True)
+            vals = {}
+            for line in g.stdout.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    vals[k.strip()] = v.strip()
+            try:
+                ww, wh = int(vals["WIDTH"]), int(vals["HEIGHT"])
+            except Exception:
+                continue
+            x, y = max(0, (gw - ww) // 2), max(0, (gh - wh) // 2)
+            subprocess.run(["xdotool", "windowmove", w, str(x), str(y)], env=env, timeout=5)
+            moved.append({"window": w, "x": x, "y": y, "w": ww, "h": wh})
+        return jsonify({"ok": bool(moved), "moved": moved, "display": {"width": gw, "height": gh}})
+    except Exception as e:
+        return jsonify({"ok": False, "reason": str(e)})
+
+
 @app.post("/sessions/<sid>/os-click")
 def session_os_click(sid):
     """Click with the REAL X pointer, on this session's own display.
@@ -1327,8 +1433,20 @@ def session_tabs(sid):
         entry = _servers.get(sid)
     if not entry:
         return jsonify({"tabs": []})
+    proc = entry.get("proc")
+    launcher_pid = getattr(proc, "pid", None)
     try:
-        return jsonify({"tabs": open_tab_urls(entry.get("pgid"))})
+        tabs = open_tab_urls(entry.get("pgid"), launcher_pid)
+        if not tabs:
+            # "no tabs" and "could not find the profile" are the same empty list to the
+            # caller and only one of them is a fault, so the difference is said out loud.
+            prof = profile_dir_for_session(entry.get("pgid"), launcher_pid)
+            print(
+                f"[camoufox] no tabs for {sid}: profile={prof or '<not found>'} "
+                f"pgid={entry.get('pgid')} launcher={launcher_pid}",
+                flush=True,
+            )
+        return jsonify({"tabs": tabs})
     except Exception as e:
         print(f"[camoufox] could not read the session store for {sid}: {e}", flush=True)
         return jsonify({"tabs": []})
