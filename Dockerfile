@@ -129,15 +129,21 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV DATA_DIR=/app/data
 
-# An unprivileged user for the server. Both sidecars already run as one; this image did
+# The unprivileged user for the server. Both sidecars already run as one; this image did
 # not, so the process that drives browsers and holds decrypted credentials ran as uid 0.
+#
+# `node` is the base image's own user and it is uid 1000 — the same uid the camoufox and
+# cf-proxy sidecars deliberately pick, so a bind-mounted data directory has one owner
+# across all three. Creating another is not possible anyway: `useradd -u 1000 app` fails
+# with "UID 1000 is not unique", and a different uid would defeat the reason they match.
 #
 # The switch happens in the entrypoint rather than with USER, because DATA_DIR is a volume
 # whose existing contents belong to root on every instance that already exists — see the
 # script for what it does about that.
-RUN useradd --system --create-home --home-dir /home/app --shell /usr/sbin/nologin app
 
-RUN mkdir -p /app/data/screenshots && chown -R app:app /app/data /app
+# Only the data directory. `chown -R /app` would copy node_modules and dist into a new
+# layer for nothing: the server reads those, it never writes them.
+RUN mkdir -p /app/data/screenshots && chown -R node:node /app/data
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

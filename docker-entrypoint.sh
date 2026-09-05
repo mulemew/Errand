@@ -10,7 +10,9 @@
 # enough to do it, and the server is then handed to the unprivileged user.
 set -e
 
-APP_USER=app
+# The base image's own user, uid 1000 — matching the camoufox and cf-proxy sidecars, so a
+# bind-mounted data directory has a single owner across all three containers.
+APP_USER=node
 DATA="${DATA_DIR:-/app/data}"
 
 if [ "$(id -u)" != "0" ]; then
