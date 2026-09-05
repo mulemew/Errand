@@ -129,7 +129,18 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV DATA_DIR=/app/data
 
-RUN mkdir -p /app/data/screenshots
+# An unprivileged user for the server. Both sidecars already run as one; this image did
+# not, so the process that drives browsers and holds decrypted credentials ran as uid 0.
+#
+# The switch happens in the entrypoint rather than with USER, because DATA_DIR is a volume
+# whose existing contents belong to root on every instance that already exists — see the
+# script for what it does about that.
+RUN useradd --system --create-home --home-dir /home/app --shell /usr/sbin/nologin app
+
+RUN mkdir -p /app/data/screenshots && chown -R app:app /app/data /app
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8080
 
@@ -138,7 +149,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # tini as PID 1 (-g forwards signals to the whole process group) reaps orphaned
 # sing-box helpers that reparent to PID 1 if the Node child-registry misses them.
-ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/docker-entrypoint.sh"]
 
 # No local browser to launch anymore — just run the Node server (browsing goes to
 # the cf-proxy sidecar or a remote CDP service, each with its own display).
