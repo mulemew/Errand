@@ -167,6 +167,14 @@ export interface BrowserProviderConfig {
 export interface BrowserProvider {
   newPage(): Promise<PageAdapter>;
   close(): Promise<void>;
+  /**
+   * Every tab the browser itself has open, asked of the backend rather than of Playwright.
+   *
+   * Playwright reports only the pages IT created, so a tab opened from the browser's own
+   * UI is invisible to it — measured on a live session: three tabs open, one page
+   * reported. Only camoufox can answer this, by reading Firefox's session store.
+   */
+  listOpenTabs?(): Promise<string[]>;
 }
 
 // ── Stealth constants ─────────────────────────────────────────────────────────
@@ -759,6 +767,26 @@ class CamoufoxProvider implements BrowserProvider {
   private readonly baseUrl: string;
   constructor(private readonly config: BrowserProviderConfig) {
     this.baseUrl = config.instanceUrl?.trim().replace(/\/$/, "") || CAMOUFOX_URL;
+  }
+
+  /**
+   * Firefox's own list, via the sidecar. One provider is created per hand-driven browser,
+   * so the single tracked session is the right one to ask about.
+   */
+  async listOpenTabs(): Promise<string[]> {
+    const id = [...this._ids.values()][0];
+    if (!id) return [];
+    try {
+      const res = await fetch(`${this.baseUrl}/session/${encodeURIComponent(id)}/tabs`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) return [];
+      const body = (await res.json()) as { tabs?: unknown };
+      return Array.isArray(body.tabs) ? body.tabs.filter((u): u is string => typeof u === "string") : [];
+    } catch {
+      // Best effort: a browser must still close cleanly when this cannot be read.
+      return [];
+    }
   }
 
   private async release(id: string): Promise<void> {

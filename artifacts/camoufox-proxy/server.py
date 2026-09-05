@@ -31,6 +31,8 @@ import uuid
 
 from flask import Flask, jsonify, request
 
+from sessionstore import open_tab_urls
+
 app = Flask(__name__)
 PORT = int(os.getenv("PORT", "7318"))
 
@@ -1287,6 +1289,24 @@ def session_os_click(sid):
         return jsonify({"error": f"xdotool failed: {e}"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/session/<sid>/tabs")
+def session_tabs(sid):
+    """Every tab this session's Firefox has open, read from its own session store.
+
+    Read-only and best-effort: the app asks for this while closing a browser so a reopen
+    can restore the whole window, and nothing about closing should fail if it cannot.
+    """
+    with _lock:
+        entry = _servers.get(sid)
+    if not entry:
+        return jsonify({"tabs": []})
+    try:
+        return jsonify({"tabs": open_tab_urls(entry.get("pgid"))})
+    except Exception as e:
+        print(f"[camoufox] could not read the session store for {sid}: {e}", flush=True)
+        return jsonify({"tabs": []})
 
 
 @app.post("/release")

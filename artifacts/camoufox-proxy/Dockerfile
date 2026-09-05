@@ -51,7 +51,7 @@ ENV HOME=/home/app
 # invalidate this layer and re-download the browser on every build.
 RUN python -m camoufox fetch
 
-COPY --chown=app:app server.py launcher.py ./
+COPY --chown=app:app server.py launcher.py sessionstore.py ./
 
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99

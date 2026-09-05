@@ -215,6 +215,29 @@ export function normalizeStartUrl(raw: string | null | undefined): string | unde
 
 const MAX_RESTORED_TABS = 20;
 
+/**
+ * The tab list, from whoever can actually see it.
+ *
+ * Firefox's own session store first: it is the only source that includes tabs opened from
+ * the browser's UI, which is how a person actually opens them. Playwright's view is merged
+ * in behind it — it can hold a page the store has not been refreshed with yet, since the
+ * store is written every few seconds rather than on every change.
+ */
+async function collectTabsToRestore(inst: BrowserInstance): Promise<string[]> {
+  let fromBrowser: string[] = [];
+  try {
+    fromBrowser = (await inst.provider.listOpenTabs?.()) ?? [];
+  } catch {
+    /* the backend cannot answer; Playwright's view is still something */
+  }
+  const seen = new Set<string>();
+  for (const u of [...fromBrowser, ...collectOpenUrls(inst)]) {
+    if (/^https?:\/\//i.test(u)) seen.add(u);
+    if (seen.size >= MAX_RESTORED_TABS) break;
+  }
+  return [...seen];
+}
+
 function collectOpenUrls(inst: BrowserInstance): string[] {
   try {
     const seen = new Set<string>();
@@ -288,8 +311,8 @@ export async function stopInstance(id: string): Promise<boolean> {
             return null;
           }
         })(),
-        openUrls: (() => {
-          const urls = collectOpenUrls(inst);
+        openUrls: await (async () => {
+          const urls = await collectTabsToRestore(inst);
           logCollectedTabs(inst, urls);
           return urls;
         })(),
