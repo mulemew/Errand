@@ -29,6 +29,19 @@ if [ "$(stat -c %u "$DATA" 2>/dev/null || echo -1)" != "$APP_UID" ]; then
   chown -R "$APP_USER:$APP_USER" "$DATA" 2>/dev/null || true
 fi
 
+# HOME travels with the user, and setpriv does not carry it.
+#
+# Dropping privileges leaves HOME=/root behind, and the first thing the server does is load
+# puppeteer, which searches $HOME/.config for a config file. As an unprivileged process that
+# is a stat on /root: EACCES, thrown before anything else runs, and the container exits on
+# its first line. Measured — the server did not start at all until this was set.
+APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6)"
+if [ -n "$APP_HOME" ] && [ -d "$APP_HOME" ]; then
+  export HOME="$APP_HOME"
+  # Some libraries read this instead of deriving it from HOME.
+  export XDG_CONFIG_HOME="$APP_HOME/.config"
+fi
+
 # Prove it before relying on it. A read-only mount, a volume driver that ignores chown, or
 # a host-mapped directory owned by someone else all leave a process that cannot write, and
 # the failure would surface later as a corrupt-looking install rather than a permissions
