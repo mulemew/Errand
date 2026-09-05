@@ -134,28 +134,6 @@ export async function launchInstance(opts: {
   const provider = createBrowserProvider(config);
   const page = await provider.newPage();
   const startUrl = normalizeStartUrl(opts.startUrl);
-  if (startUrl) {
-    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((err) => {
-      logger.warn({ err, url: startUrl }, "Browser instance could not open its start URL");
-    });
-  }
-
-  // The window as you left it, not just its first tab. Sequential and best-effort: one site
-  // that refuses to load must not cost you the rest of the tabs, and a burst of parallel
-  // navigations through one proxy is a good way to make several of them fail.
-  const extraTabs = (opts.restoreTabs ?? [])
-    .map((u) => normalizeStartUrl(u))
-    .filter((u): u is string => !!u && u !== startUrl);
-  if (extraTabs.length && typeof page.openTab === "function") {
-    for (const url of extraTabs) {
-      try {
-        await page.openTab(url);
-      } catch (err) {
-        logger.warn({ err, url }, "Could not restore a tab");
-      }
-    }
-    logger.info({ id, count: extraTabs.length }, "Restored the tabs that were open at close");
-  }
 
   const inst: BrowserInstance = {
     id,
@@ -166,18 +144,72 @@ export async function launchInstance(opts: {
     sessionProfileId: opts.sessionProfileId ?? null,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
-    url: (() => {
-      try {
-        return page.url();
-      } catch {
-        return opts.startUrl ?? "about:blank";
-      }
-    })(),
+    // Where it is going, not where it is: the navigation happens below, after this
+    // returns, and "about:blank" for the next few seconds is not what anyone wants to read.
+    url: startUrl || opts.startUrl || "about:blank",
     provider,
     page,
     dumpStorageState: dumper,
   };
   instances.set(id, inst);
+
+  // WHERE IT GOES IS NOT PART OF STARTING IT.
+  //
+  // Navigation used to happen before this function returned, so the live view did not
+  // appear until every page had finished loading — measured on a browser with a start page
+  // and one restored tab: 2.3s to start the browser, then 7.5s of waiting at a blank
+  // screen. You are looking at the browser while it loads, which is what a browser looks
+  // like. So the pages arrive behind the window.
+  //
+  // Sequential and best-effort: one site that refuses to load must not cost the others, and
+  // a burst of parallel navigations through a single proxy is a good way to fail several.
+  const extraTabs = (opts.restoreTabs ?? [])
+    .map((u) => normalizeStartUrl(u))
+    .filter((u): u is string => !!u);
+  // The first page is already showing one of these. Remove ONE of them — filtering every
+  // match dropped both halves of a window that had the same site open twice.
+  if (startUrl) {
+    const first = extraTabs.indexOf(startUrl);
+    if (first >= 0) extraTabs.splice(first, 1);
+  }
+  if (startUrl || extraTabs.length) {
+    void (async () => {
+      // THE TABS FIRST, THEN THE START PAGE.
+      //
+      // The other order chained them: navigate, then open the rest. A start page that took
+      // its full 60-second timeout to fail — measured, on a real launch — held every other
+      // tab behind it, so a restored window appeared one tab at a time over a minute.
+      //
+      // Nothing is waiting on the navigation, so it does not have to go first. The tabs are
+      // opened out of the blank page the browser starts on, which takes well under a second
+      // for a whole window, and only then does the first tab go where it is going.
+      if (extraTabs.length && typeof page.openTab === "function") {
+        let opened = 0;
+        for (const url of extraTabs) {
+          // Closed while its tabs were still coming back; nothing left to open into.
+          if (!instances.has(id)) return;
+          try {
+            await page.openTab(url);
+            opened++;
+          } catch (err) {
+            logger.warn({ err, url }, "Could not restore a tab");
+          }
+        }
+        logger.info({ id, opened, of: extraTabs.length }, "Restored the tabs that were open at close");
+      }
+      if (!instances.has(id)) return;
+      if (startUrl) {
+        await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((err) => {
+          logger.warn({ err, url: startUrl }, "Browser instance could not open its start URL");
+        });
+      }
+      // Opening a tab focuses it, so the window would otherwise come up showing the last
+      // restored tab. You left it on the first one.
+      try {
+        await page.bringToFront?.();
+      } catch { /* not worth a line in the log */ }
+    })();
+  }
   logger.info({ id, name: opts.name, providerId: opts.providerId }, "Browser instance launched");
   return inst;
 }
@@ -230,17 +262,35 @@ async function collectTabsToRestore(inst: BrowserInstance): Promise<string[]> {
   } catch {
     /* the backend cannot answer; Playwright's view is still something */
   }
-  const seen = new Set<string>();
-  for (const u of [...fromBrowser, ...collectOpenUrls(inst)]) {
-    if (/^https?:\/\//i.test(u)) seen.add(u);
-    if (seen.size >= MAX_RESTORED_TABS) break;
+  // Two tabs on the same page are two tabs — the list is a sequence, not a set of
+  // addresses. Collecting into a Set collapsed them and a window with the same site open
+  // twice came back with one of it.
+  //
+  // The two sources overlap almost entirely, so they are merged by COUNT: for each address,
+  // however many of it the more informed source saw. Concatenating would double every tab;
+  // merging by membership — which is what this did first — silently dropped the second copy
+  // of an address the other source already listed, which is the same bug again in a new
+  // place. Firefox's list leads, because it is the one that includes tabs opened by hand.
+  const fromPlaywright = collectOpenUrls(inst);
+  const tally = (urls: string[]): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (const u of urls) m.set(u, (m.get(u) ?? 0) + 1);
+    return m;
+  };
+  const seen = tally(fromBrowser);
+  const live = tally(fromPlaywright);
+  const merged = [...fromBrowser];
+  for (const [url, n] of live) {
+    // Only the copies the store has not caught up with; it writes on a timer, so a tab
+    // opened moments before closing can still be missing from it.
+    for (let i = seen.get(url) ?? 0; i < n; i++) merged.push(url);
   }
-  return [...seen];
+  return merged.filter((u) => /^https?:\/\//i.test(u)).slice(0, MAX_RESTORED_TABS);
 }
 
 function collectOpenUrls(inst: BrowserInstance): string[] {
   try {
-    const seen = new Set<string>();
+    const urls: string[] = [];
     // The whole browser, falling back to this context. A tab the person opened themselves
     // is not necessarily in the context automation created — measured, a session with
     // several tabs open reported exactly one page from the context alone.
@@ -253,10 +303,10 @@ function collectOpenUrls(inst: BrowserInstance): string[] {
         continue;
       }
       if (!/^https?:\/\//i.test(u)) continue;
-      seen.add(u);
-      if (seen.size >= MAX_RESTORED_TABS) break;
+      urls.push(u);
+      if (urls.length >= MAX_RESTORED_TABS) break;
     }
-    return [...seen];
+    return urls;
   } catch {
     return [];
   }

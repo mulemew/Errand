@@ -378,6 +378,39 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
         return contexts.flatMap((c) => c.pages().filter((p) => !p.isClosed()).map((p) => wrapPlaywrightPage(p)));
       },
       openTab: async (url?: string) => {
+        // A TAB, not a window.
+        //
+        // Measured against a live Camoufox, reading Firefox's own session store afterwards:
+        //
+        //   window.open(url)          -> a tab in the SAME window
+        //   a target=_blank, clicked  -> a tab in the SAME window
+        //   context.newPage()         -> a separate WINDOW
+        //
+        // A restored session made of separate windows looks like it lost every tab but one,
+        // because the last window is stacked over the rest and that is all the live view
+        // shows. Playwright has no "new tab" call for Firefox, so the tab is opened the way
+        // a page opens one.
+        //
+        // No user gesture is arranged for it: Camoufox ships with the popup blocker off
+        // (dom.disable_open_during_load=false), so a scripted open is not blocked.
+        if (url) {
+          try {
+            const [tab] = await Promise.all([
+              page.context().waitForEvent("page", { timeout: 20_000 }),
+              page.evaluate((u) => {
+                window.open(u, "_blank");
+              }, url),
+            ]);
+            // Deliberately NOT waiting for it to load. The tab exists the moment the page
+            // event fires, and the browser loads it like a browser does — alongside the
+            // others. Waiting here made restoring a window serial: each tab's full page
+            // load added to the wait before the next one even appeared.
+            return wrapPlaywrightPage(tab);
+          } catch {
+            // Blocked after all, or the page would not run script (an error page, a
+            // navigation mid-call). A window is worse than a tab and better than a lost tab.
+          }
+        }
         const tab = await page.context().newPage();
         if (url) {
           await tab
