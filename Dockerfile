@@ -14,7 +14,7 @@
 # Installing once here and branching off it removes that duplicate work, and the
 # layer is cached across builds because only manifests land in it — editing
 # source no longer re-resolves dependencies.
-FROM --platform=$BUILDPLATFORM node:20-bookworm AS deps
+FROM --platform=$BUILDPLATFORM node:26-bookworm AS deps
 
 WORKDIR /workspace
 # Pinned to the same major the workflow's typecheck job installs. Unpinned, this took
@@ -56,7 +56,7 @@ RUN pnpm --filter @workspace/api-server run build
 FROM ghcr.io/sagernet/sing-box:v1.11.4 AS singbox
 
 # ─── Stage 3: Production runtime ─────────────────────────────
-FROM node:20-bookworm-slim AS runner
+FROM node:26-bookworm-slim AS runner
 
 # Minimal system deps. The app container no longer runs a local browser — all
 # browsing goes to the cf-proxy sidecar (SeleniumBase) or a remote CDP service —
