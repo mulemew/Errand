@@ -22,7 +22,7 @@
     "pino": "^9",
     "pino-http": "^10",
     "playwright-core": "~1.60.0",
-    "puppeteer": "^24.42.0",
+    "puppeteer": "^25.9.0",
     "zod": "catalog:"
   },
   "devDependencies": {
