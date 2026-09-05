@@ -1,0 +1,21 @@
+# Line endings, decided here rather than by whoever cloned it.
+#
+# A shell script with CRLF does not run on Linux: the interpreter reads the \r as part of
+# the first argument and the file dies on its opening line — `set: Illegal option -`, which
+# names neither the file nor the reason. This repository has already lost an afternoon to
+# exactly that, in a container entrypoint that was fine on the machine that wrote it.
+#
+# So anything a Linux container executes or parses is LF, on every platform.
+* text=auto
+
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+entrypoint.sh text eol=lf
+
+# Binary — never touched, never diffed as text.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
