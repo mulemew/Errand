@@ -627,10 +627,24 @@ async function scrollWidgetIntoView(page: PageAdapter): Promise<boolean> {
   const scrolled = await evalBounded<boolean>(
     page,
     () => {
+      // The WIDGET, not the response input's container.
+      //
+      // Those are usually different elements and only one of them is the thing a click has
+      // to reach. The hidden input often sits in a zero-height wrapper near the top of the
+      // form, which satisfies "already visible" while the widget it belongs to is a
+      // thousand pixels further down: measured on one site, the frame's own rectangle was
+      // at y=1096 in a 1080-tall viewport, so the real pointer clicked below the window and
+      // the challenge never saw it.
+      const frame = document.querySelector(
+        "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
+      );
       const resp = document.querySelector(
         'input[name="cf-turnstile-response"], input[id^="cf-chl-widget-"][id$="_response"]',
       );
-      const host = (resp?.parentElement as Element | null) ?? document.querySelector(".cf-turnstile, [data-sitekey]");
+      const host =
+        frame ??
+        document.querySelector(".cf-turnstile, [data-sitekey]") ??
+        (resp?.parentElement as Element | null);
       if (!host) return false;
       const r = host.getBoundingClientRect();
       if (r.top >= 0 && r.bottom <= window.innerHeight) return false;
@@ -1611,6 +1625,40 @@ export async function clickTurnstileCheckbox(
       if (!target) {
         logger.warn({ widget: await describeTurnstileState(page) }, "Turnstile widget is on the page but its checkbox could not be located");
         return false;
+      }
+
+      // Is the point we are about to click actually ON the screen?
+      //
+      // Asked of the FINAL target, whichever locator produced it, because the scroll above
+      // reasons about an element and this reasons about the coordinate — and those came
+      // apart on a real page: the scroll saw a visible container, the frame path returned
+      // y=1096, and the viewport was 1080 tall. xdotool works in screen coordinates, so the
+      // press landed below the browser window: no error, no token, and a log line saying we
+      // had clicked. A click outside the window is never right, so scrolling and measuring
+      // again cannot be worse.
+      const vh = await evalBounded<number>(page, () => window.innerHeight, 0, 2000);
+      const vw = await evalBounded<number>(page, () => window.innerWidth, 0, 2000);
+      if (vh > 0 && vw > 0 && (target.y < 0 || target.y > vh || target.x < 0 || target.x > vw)) {
+        logger.warn(
+          { target: { x: Math.round(target.x), y: Math.round(target.y) }, viewport: { w: vw, h: vh } },
+          "Turnstile target is outside the window — scrolling to it and measuring again",
+        );
+        await evalBounded<boolean>(
+          page,
+          () => {
+            const f = document.querySelector(
+              "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
+            );
+            if (!f) return false;
+            f.scrollIntoView({ block: "center" });
+            return true;
+          },
+          false,
+          2000,
+        );
+        await sleep(400);
+        const again = (await locateCheckboxInCfFrame(page)) ?? (await locateTurnstileCheckbox(page));
+        if (again) target = again;
       }
 
       // ±2px of jitter — a pixel-exact centre every time is itself a pattern.
