@@ -20,7 +20,7 @@
     "otplib": "^13.4.0",
     "patchright": "^1.59.1",
     "pino": "^9",
-    "pino-http": "^10",
+    "pino-http": "^11",
     "playwright-core": "~1.60.0",
     "puppeteer": "^24.42.0",
     "zod": "catalog:"
