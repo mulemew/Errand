@@ -161,7 +161,11 @@ router.post("/browsers", async (req, res): Promise<void> => {
     // if the app restarted before you closed it. The row starts with an empty session and
     // fills in on close.
     let boundProfileId = body.sessionProfileId ?? null;
+    // Whether WE created it, and therefore whether we own it if the launch fails. A row
+    // reopened from an existing profile is never ours to delete.
+    let createdHere = false;
     if (boundProfileId == null) {
+      createdHere = true;
       boundProfileId = await createSessionProfile({
         name,
         state: { cookies: [], origins: [] },
@@ -174,20 +178,33 @@ router.post("/browsers", async (req, res): Promise<void> => {
       });
     }
 
-    const inst = await launchInstance({
-      name,
-      config,
-      providerId: resolved.providerId,
-      fingerprintProfileId: resolved.fingerprintProfileId,
-      proxyProfileId: resolved.proxyProfileId,
-      sessionProfileId: boundProfileId,
-      // Land where the session was last used, so reopening shows the logged-in page rather
-      // than a blank tab you have to navigate yourself.
-      startUrl: (body.startUrl ?? "").trim() || profile?.originUrl || undefined,
-      restoreTabs: Array.isArray(profile?.openUrls)
-        ? (profile.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
-        : [],
-    });
+    let inst;
+    try {
+      inst = await launchInstance({
+        name,
+        config,
+        providerId: resolved.providerId,
+        fingerprintProfileId: resolved.fingerprintProfileId,
+        proxyProfileId: resolved.proxyProfileId,
+        sessionProfileId: boundProfileId,
+        // Land where the session was last used, so reopening shows the logged-in page rather
+        // than a blank tab you have to navigate yourself.
+        startUrl: (body.startUrl ?? "").trim() || profile?.originUrl || undefined,
+        restoreTabs: Array.isArray(profile?.openUrls)
+          ? (profile.openUrls as unknown[]).filter((u): u is string => typeof u === "string")
+          : [],
+      });
+    } catch (err) {
+      // The row is written BEFORE the launch so the instance can be bound to it, which
+      // means a launch that throws leaves a browser in the list that never existed. Every
+      // failed attempt added another one, and the only clue was that they were all
+      // identical and none of them would open.
+      if (createdHere && boundProfileId != null) {
+        await db.delete(sessionProfilesTable).where(eq(sessionProfilesTable.id, boundProfileId)).catch(() => {});
+        logger.info({ sessionProfileId: boundProfileId }, "Launch failed — removed the browser row it had just created");
+      }
+      throw err;
+    }
     res.status(201).json({ id: inst.id, sessionProfileId: boundProfileId });
   } catch (err) {
     logger.error({ err }, "Failed to launch a browser instance");

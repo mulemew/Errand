@@ -133,16 +133,19 @@ export async function launchInstance(opts: {
 
   const provider = createBrowserProvider(config);
   const page = await provider.newPage();
-  if (opts.startUrl) {
-    await page.goto(opts.startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((err) => {
-      logger.warn({ err, url: opts.startUrl }, "Browser instance could not open its start URL");
+  const startUrl = normalizeStartUrl(opts.startUrl);
+  if (startUrl) {
+    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((err) => {
+      logger.warn({ err, url: startUrl }, "Browser instance could not open its start URL");
     });
   }
 
   // The window as you left it, not just its first tab. Sequential and best-effort: one site
   // that refuses to load must not cost you the rest of the tabs, and a burst of parallel
   // navigations through one proxy is a good way to make several of them fail.
-  const extraTabs = (opts.restoreTabs ?? []).filter((u) => u && u !== opts.startUrl);
+  const extraTabs = (opts.restoreTabs ?? [])
+    .map((u) => normalizeStartUrl(u))
+    .filter((u): u is string => !!u && u !== startUrl);
   if (extraTabs.length && typeof page.openTab === "function") {
     for (const url of extraTabs) {
       try {
@@ -186,12 +189,40 @@ export async function launchInstance(opts: {
  * restoring anything — and the list is capped so a runaway page that spawns tabs cannot
  * turn one close into a hundred launches on the next open.
  */
+/**
+ * What a person means when they type an address.
+ *
+ * `page.goto("www.baidu.com")` does not navigate — it throws `Invalid url`, because
+ * Playwright hands the string to the protocol as-is and a URL without a scheme is not a
+ * URL. Every browser's address bar fills the scheme in silently, so a field that looks
+ * like an address bar and refuses what an address bar accepts is just wrong.
+ *
+ * https, not http: this opens real sites, and starting in the clear invites a redirect
+ * that a proxy in the middle could rewrite. A site that genuinely only speaks http can be
+ * given its scheme explicitly, which is the case worth making someone type.
+ */
+export function normalizeStartUrl(raw: string | null | undefined): string | undefined {
+  const v = (raw ?? "").trim();
+  if (!v) return undefined;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`;
+  try {
+    return new URL(withScheme).toString();
+  } catch {
+    // Not salvageable — let the caller open a blank page rather than throw at launch.
+    return undefined;
+  }
+}
+
 const MAX_RESTORED_TABS = 20;
 
 function collectOpenUrls(inst: BrowserInstance): string[] {
   try {
     const seen = new Set<string>();
-    for (const pg of inst.page.getOpenPages()) {
+    // The whole browser, falling back to this context. A tab the person opened themselves
+    // is not necessarily in the context automation created — measured, a session with
+    // several tabs open reported exactly one page from the context alone.
+    const pages = inst.page.getAllPages?.() ?? inst.page.getOpenPages();
+    for (const pg of pages) {
       let u = "";
       try {
         u = pg.url();
@@ -206,6 +237,28 @@ function collectOpenUrls(inst: BrowserInstance): string[] {
   } catch {
     return [];
   }
+}
+
+/** Logged on every close: "restored nothing" and "there was nothing to restore" look
+ *  identical from the outside, and only one of them is a bug. */
+function logCollectedTabs(inst: BrowserInstance, urls: string[]): void {
+  const count = (f: () => PageAdapter[] | undefined): number => {
+    try {
+      return f()?.length ?? -1;
+    } catch {
+      return -1;
+    }
+  };
+  logger.info(
+    {
+      id: inst.id,
+      pagesInContext: count(() => inst.page.getOpenPages()),
+      pagesInBrowser: count(() => inst.page.getAllPages?.()),
+      kept: urls.length,
+      urls,
+    },
+    "Tabs recorded for reopening",
+  );
 }
 
 export async function stopInstance(id: string): Promise<boolean> {
@@ -235,7 +288,11 @@ export async function stopInstance(id: string): Promise<boolean> {
             return null;
           }
         })(),
-        openUrls: collectOpenUrls(inst),
+        openUrls: (() => {
+          const urls = collectOpenUrls(inst);
+          logCollectedTabs(inst, urls);
+          return urls;
+        })(),
       });
       logger.info({ id, sessionProfileId: inst.sessionProfileId }, "Session written back to its profile");
     } else {

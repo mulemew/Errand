@@ -105,6 +105,17 @@ export interface PageAdapter {
    * wrapper can do it, and only the camoufox backend needs it.
    */
   openTab?(url?: string): Promise<PageAdapter>;
+  /**
+   * Every page in the whole BROWSER, not just this page's context.
+   *
+   * getOpenPages asks the context, and a tab the person opened themselves — Ctrl+T in the
+   * window they are looking at — does not necessarily land in the context automation
+   * created. Measured: a session with several tabs open reported exactly one page.
+   *
+   * Safe to widen here because a hand-driven browser is its own camoufox session with its
+   * own Firefox and its own ws endpoint, so "the whole browser" is still just this one.
+   */
+  getAllPages?(): PageAdapter[];
 }
 
 // ── Puppeteer wrapper ─────────────────────────────────────────────────────────
@@ -361,6 +372,11 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
           .pages()
           .filter((p) => !p.isClosed())
           .map((p) => wrapPlaywrightPage(p)),
+      getAllPages: () => {
+        const browser = page.context().browser();
+        const contexts = browser ? browser.contexts() : [page.context()];
+        return contexts.flatMap((c) => c.pages().filter((p) => !p.isClosed()).map((p) => wrapPlaywrightPage(p)));
+      },
       openTab: async (url?: string) => {
         const tab = await page.context().newPage();
         if (url) {

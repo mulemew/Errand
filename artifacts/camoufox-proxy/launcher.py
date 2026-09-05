@@ -63,4 +63,54 @@ if isinstance(scr, dict) and scr.get("width") and scr.get("height"):
 # service name, so the actual reachable address is host=camoufox-proxy:PORT.
 cfg["host"] = "0.0.0.0"
 
-launch_server(**cfg)
+# Pinning the screen is an optimisation, not a requirement.
+#
+# With no fixed fingerprint, Camoufox synthesises one with browserforge, and asking for an
+# exact screen rectangle asks browserforge for a fingerprint with those precise dimensions.
+# That is a much harder question than it looks — measured on this image, three of the six
+# viewport sizes the app picks from fail outright, and not because the sizes are unusual:
+#
+#     1920x1080 ok    1536x864 FAIL    1440x900 ok
+#     1366x768  FAIL  1280x800 FAIL    1280x720 ok
+#
+# 1536x864 is the SECOND most common screen in browserforge's own data (47 of 300 samples).
+# Pinning both bounds constrains its Bayesian network to a subset with no probability mass
+# left for the header attributes, and the failure surfaces as "No headers based on this
+# input can be generated" — which says nothing about screens. The viewport is chosen at
+# random from that pool, so creating a browser without a fingerprint profile failed about
+# half the time, at random, for a reason the message never mentioned.
+#
+# Three steps, each giving up a little precision and none of them giving up the browser:
+#
+#   1. the exact size, which is what we actually want
+#   2. a lower bound — the property that matters is that a window fits INSIDE its screen,
+#      not that they are equal. Never failed in testing, though browserforge treats it as
+#      a preference rather than a guarantee and can still come back smaller.
+#   3. no constraint at all, rather than no browser
+def _launch_with_screen_fallbacks(config):
+    screen = config.get("screen")
+    attempts = [("exact", config)]
+    if screen is not None:
+        loose = dict(config)
+        try:
+            from browserforge.fingerprints import Screen
+            loose["screen"] = Screen(min_width=screen.min_width, min_height=screen.min_height)
+            attempts.append(("lower-bound", loose))
+        except Exception:
+            pass
+        bare = dict(config)
+        bare.pop("screen", None)
+        attempts.append(("unconstrained", bare))
+
+    last = None
+    for label, attempt in attempts:
+        try:
+            launch_server(**attempt)
+            return  # launch_server blocks forever; reaching here means it stopped on its own
+        except Exception as e:
+            last = e
+            print(f"[launcher] screen constraint '{label}' failed: {e}", flush=True)
+    raise last
+
+
+_launch_with_screen_fallbacks(cfg)
