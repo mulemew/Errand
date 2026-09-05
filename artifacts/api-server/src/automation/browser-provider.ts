@@ -880,11 +880,6 @@ class CamoufoxProvider implements BrowserProvider {
     // Without the second, an instance from the Browsers page registered nothing and the
     // viewer fell back to the container-wide display — which is empty, hence a black screen.
     const _viewKey = this.config.viewKey ?? (currentTaskId() != null ? taskViewKey(currentTaskId()!) : null);
-    if (_viewKey && viewPort) {
-      try {
-        setView(_viewKey, new URL(this.baseUrl).hostname, viewPort);
-      } catch { /* a malformed base URL is not worth failing a run over */ }
-    }
 
     let browser: import("playwright-core").Browser;
     try {
@@ -926,19 +921,101 @@ class CamoufoxProvider implements BrowserProvider {
         return capped;
       })();
 
-      context = await browser.newContext({
-        viewport: fitted,
-        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
-        ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
-      });
-      if (this.config.onContextReady) this.config.onContextReady(async () => context.storageState());
-      context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-      context.setDefaultTimeout(NAV_TIMEOUT_MS);
-      if (this.config.blockAds) {
-        await context.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+      const makeContext = async (viewport: { width: number; height: number }) => {
+        const c = await browser.newContext({
+          viewport,
+          ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
+          ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
+        });
+        c.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+        c.setDefaultTimeout(NAV_TIMEOUT_MS);
+        if (this.config.blockAds) {
+          await c.route((url) => AD_BLOCK_RE.test(url.hostname), (route) => route.abort());
+        }
+        return c;
+      };
+
+      context = await makeContext(fitted);
+      page = await context.newPage();
+
+      // ASK THE BROWSER WHAT SCREEN IT IS CLAIMING.
+      //
+      // Everything above this line is inference: a viewport is picked, the sidecar is asked
+      // to pin the fingerprint's screen to it, and if browserforge cannot produce a
+      // fingerprint with that exact rectangle the launcher relaxes the constraint — first
+      // to a lower bound, then to none at all. Each of those degradations is a browser that
+      // starts, and the last one is a screen nobody chose.
+      //
+      // `window.screen` is not inference. It is the number a fingerprinting check reads,
+      // and a window larger than the screen it is on is a contradiction that costs nothing
+      // to look for. So the claim is read from the browser and the viewport is fitted inside
+      // it — recreating the context, because a viewport belongs to the context and every
+      // later tab would otherwise inherit the wrong one.
+      const claimed = await page
+        .evaluate(() => ({ w: window.screen.width, h: window.screen.height }))
+        .catch(() => null);
+      const sw = Number(claimed?.w) || 0;
+      const sh = Number(claimed?.h) || 0;
+      if (sw && sh) {
+        // Same ~90px of browser chrome assumed everywhere else a window is fitted to a
+        // screen: the viewport is what is left below it.
+        const inside = {
+          width: Math.min(fitted.width, sw),
+          height: Math.min(fitted.height, Math.max(400, sh - 90)),
+        };
+        if (inside.width !== fitted.width || inside.height !== fitted.height) {
+          logger.info(
+            { sessionId: id, viewport: fitted, screen: { width: sw, height: sh }, fitted: inside },
+            "Viewport exceeded the screen the fingerprint claims — fitting the window inside it",
+          );
+          // Resize the window, do NOT rebuild the context.
+          //
+          // Rebuilding was the first version of this, so that later tabs would inherit the
+          // corrected viewport. It cost a task that had run green every 15 minutes for
+          // hours: on the two runs after it shipped, the site stopped loading at all —
+          // closing a freshly-built context, with its proxy and its restored session
+          // attached, and standing a new one up in its place is not a free operation, and
+          // this is not worth breaking a working browser over.
+          //
+          // A resize touches nothing but the window. The context keeps the viewport it was
+          // made with, so a tab opened later can still be the larger size — a smaller wrong
+          // than the one above, and the window someone actually looks at and clicks in is
+          // the right size.
+          await page.setViewportSize(inside).catch((err) => {
+            logger.warn({ err, sessionId: id }, "Could not resize the window to fit the screen");
+          });
+        }
       }
 
-      page = await context.newPage();
+      // Put the window in the middle of the display it is drawn on.
+      //
+      // It is deliberately smaller than that display — it is sized to the screen the
+      // fingerprint claims — and there is no window manager in the sidecar to place it, so
+      // X leaves it at the top-left and the live view shows it wedged into one corner with
+      // bare desktop down two sides. Cosmetic, best-effort, and after the resize above so
+      // it is centred at its final size.
+      try {
+        await fetch(`${this.baseUrl}/session/${encodeURIComponent(id)}/center-window`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch { /* an off-centre window is not a reason to fail a launch */ }
+
+      // The view is announced only now, with a page in existence.
+      //
+      // Playwright's launchServer starts a browser with no window — Firefox draws one when
+      // a context asks for a page, not before. Announcing the display the moment the
+      // sidecar reported it meant the live view could be opened during that gap and show an
+      // X root window with nothing on it, which is the blue screen.
+      if (_viewKey && viewPort) {
+        try {
+          setView(_viewKey, new URL(this.baseUrl).hostname, viewPort);
+        } catch { /* a malformed base URL is not worth failing a run over */ }
+      }
+
+      if (this.config.onContextReady) this.config.onContextReady(async () => context.storageState());
       page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
       page.setDefaultTimeout(NAV_TIMEOUT_MS);
     } catch (err) {
