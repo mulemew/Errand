@@ -1,0 +1,1212 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: tasks
+    description: Automation task management
+  - name: logs
+    description: Execution logs
+  - name: saved-credentials
+    description: Saved credential vault
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /healthz/browser:
+    get:
+      operationId: browserHealthCheck
+      tags: [health]
+      summary: Browser service health check
+      description: Probes the configured remote browser (Browserless/CDP) WebSocket endpoint
+      responses:
+        "200":
+          description: Browser status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserStatus"
+
+  /healthz/db:
+    get:
+      operationId: dbHealthCheck
+      tags: [health]
+      summary: Database health check
+      description: Checks database connectivity
+      responses:
+        "200":
+          description: Database status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Database unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /healthz/scheduler:
+    get:
+      operationId: schedulerHealthCheck
+      tags: [health]
+      summary: Scheduler health check
+      description: Returns status of the cron scheduler
+      responses:
+        "200":
+          description: Scheduler status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      summary: List all tasks
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+    post:
+      operationId: createTask
+      tags: [tasks]
+      summary: Create a new task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      tags: [tasks]
+      summary: Get task by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskWithCredentials"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateTask
+      tags: [tasks]
+      summary: Update task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTaskBody"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteTask
+      tags: [tasks]
+      summary: Delete task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/{id}/enabled:
+    patch:
+      operationId: toggleTaskEnabled
+      tags: [tasks]
+      summary: Enable or disable a task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+              required: [enabled]
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  enabled:
+                    type: boolean
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/{id}/run:
+    post:
+      operationId: runTask
+      tags: [tasks]
+      summary: Manually trigger a task run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "202":
+          description: Task queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunTaskResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Task already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/{id}/logs:
+    get:
+      operationId: listTaskLogs
+      tags: [logs]
+      summary: List execution logs for a task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Log"
+
+  /tasks/{id}/logs/{logId}:
+    get:
+      operationId: getTaskLog
+      tags: [logs]
+      summary: Get a specific execution log
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: logId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Log entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Log"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/{id}/logs/stream:
+    get:
+      operationId: streamTaskLogs
+      tags: [logs]
+      summary: Stream live task execution events via Server-Sent Events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: SSE stream of TaskStreamEvent objects
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /tasks/{id}/logs/{logId}/screenshot:
+    get:
+      operationId: getTaskLogScreenshot
+      tags: [logs]
+      summary: Get screenshot PNG for a specific execution log
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: logId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: PNG image
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Not found or no screenshot available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /tasks/stats/history:
+    get:
+      operationId: getTasksHistory
+      tags: [tasks]
+      summary: Get 7-day daily run history (success vs failure counts)
+      responses:
+        "200":
+          description: Daily history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DailyHistory"
+
+  /tasks/stats/summary:
+    get:
+      operationId: getTasksSummary
+      tags: [tasks]
+      summary: Get overall task stats summary
+      responses:
+        "200":
+          description: Summary stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TasksSummary"
+
+  /saved-credentials:
+    get:
+      operationId: listSavedCredentials
+      summary: List saved credentials (without secrets)
+      tags: [saved-credentials]
+      responses:
+        "200":
+          description: List of saved credentials
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SavedCredential"
+    post:
+      operationId: createSavedCredential
+      summary: Create a saved credential
+      tags: [saved-credentials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSavedCredentialBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedCredential"
+
+  /saved-credentials/{id}:
+    put:
+      operationId: updateSavedCredential
+      summary: Update a saved credential
+      tags: [saved-credentials]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSavedCredentialBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SavedCredential"
+    delete:
+      operationId: deleteSavedCredential
+      summary: Delete a saved credential
+      tags: [saved-credentials]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    DailyHistory:
+      type: object
+      properties:
+        date:
+          type: string
+          description: ISO date string (YYYY-MM-DD)
+        success:
+          type: integer
+        failed:
+          type: integer
+      required: [date, success, failed]
+
+    BrowserStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [connected, unreachable, unconfigured]
+        url:
+          type: ["string", "null"]
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    NavigateStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [navigate]
+        url:
+          type: string
+      required: [type, url]
+
+    ClickStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [click]
+        selector:
+          type: string
+        selectorType:
+          type: string
+          enum: [text, css, xpath]
+          description: "text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression"
+      required: [type, selector, selectorType]
+
+    FillStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [fill]
+        selector:
+          type: string
+          description: CSS selector for the input field
+        value:
+          type: string
+      required: [type, selector, value]
+
+    WaitStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [wait]
+        ms:
+          type: integer
+          description: Milliseconds to wait
+      required: [type, ms]
+
+    WaitForStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [waitFor]
+        selector:
+          type: string
+          description: CSS selector or text string to wait for (depends on selectorType)
+        selectorType:
+          type: string
+          enum: [css, text]
+          description: "css = CSS selector (default); text = wait for text content to appear on the page"
+        timeout:
+          type: integer
+          description: Max wait time in ms (default 30000)
+      required: [type, selector]
+
+    ScreenshotStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [screenshot]
+      required: [type]
+
+    DismissPopupsStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [dismissPopups]
+      required: [type]
+
+    CfVerifyStep:
+      type: object
+      description: >
+        Explicitly clear a Cloudflare challenge / click a Turnstile "verify you
+        are human" checkbox that is gating the current page. Use before a click
+        or fill step whose target only becomes interactive after CF passes.
+      properties:
+        type:
+          type: string
+          enum: [cfVerify]
+        url:
+          type: string
+          description: Optional URL to (re)navigate to before verifying — defaults to the current page
+        maxReloads:
+          type: integer
+          description: Max page reloads to attempt while clearing the challenge (default 2)
+      required: [type]
+
+    SelectStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [select]
+        selector:
+          type: string
+          description: CSS selector for the <select> element
+        value:
+          type: string
+          description: The option value to select
+      required: [type, selector, value]
+
+    HoverStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [hover]
+        selector:
+          type: string
+        selectorType:
+          type: string
+          enum: [css, xpath]
+      required: [type, selector, selectorType]
+
+    ScrollStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [scroll]
+        selector:
+          type: string
+          description: CSS selector to scroll to (optional — scrolls page if omitted)
+        x:
+          type: integer
+        y:
+          type: integer
+      required: [type]
+
+    KeypressStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [keypress]
+        key:
+          type: string
+          description: Key name (e.g. Enter, Escape, Tab, ArrowDown)
+      required: [type, key]
+
+    SwitchToNewPageStep:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [switchToNewPage]
+        timeout:
+          type: integer
+          description: Max ms to wait for a new page/tab to open (default 30000)
+      required: [type]
+
+    LoginStep:
+      type: object
+      description: >
+        Authenticate via form login, GitHub OAuth, or Google OAuth using the
+        task's stored credentials. All subsequent steps share the same browser
+        session, so post-login steps run as the authenticated user.
+      properties:
+        type:
+          type: string
+          enum: [login]
+        loginMethod:
+          type: string
+          enum: [form, github, google, cookie]
+          description: "form=standard username/password form, github=GitHub OAuth, google=Google OAuth"
+        loginUrl:
+          type: string
+          description: URL of the login page to navigate to
+        successSelector:
+          type: string
+          description: >
+            Optional CSS selector for an element that only appears after a successful login
+            (e.g. an avatar, a logout button). When provided, its presence is treated as a
+            definitive success signal and overrides the default form-visibility heuristic.
+        cookieMode:
+          type: boolean
+          description: >
+            When true, persist th
+        sessionKey:
+          type: string
+        cookies:
+          type: string
+          description: >
+            Cookie-mode seed, in document.cookie format ("name=value; name2=value2").
+            Only the site's login-ticket cookie is needed — its name differs per site
+            (Pterodactyl/Laravel panels use remember_web_*, GitHub uses _github_session).
+            Used only when no session has been saved yet; once a run succeeds the live
+            cookie jar is persisted and takes over.
+        successText:
+          type: string
+        credentialId:
+          type: integer
+          description: ID of a saved credential to use for this login step
+        credentialSource:
+          type: string
+          enum: [saved, inline]
+          description: Whether to use a saved credential (credentialId) or inline username/password
+        inlineUsername:
+          type: string
+          description: Inline username/email when credentialSource is "inline"
+        inlinePassword:
+          type: string
+          description: Inline password when credentialSource is "inline"
+        inlineTotp:
+          type: string
+          description: Optional inline TOTP secret when credentialSource is "inline"
+      required: [type, loginMethod, loginUrl]
+
+    ConditionalAction:
+      type: object
+      description: >-
+        An if/else branch action. Either performs a sub-step
+        (click/fill/navigate/wait/keypress/screenshot/scroll), or a control-flow
+        action: continue to the next step, or end the task (exitSuccess/exitFailure).
+      properties:
+        type:
+          type: string
+          enum: [click, fill, navigate, wait, keypress, screenshot, scroll, continue, exitSuccess, exitFailure, condition]
+        selector:
+          type: string
+        selectorType:
+          type: string
+          enum: [text, css, xpath]
+        url:
+          type: string
+        value:
+          type: string
+        ms:
+          type: integer
+        key:
+          type: string
+        x:
+          type: integer
+        y:
+          type: integer
+        message:
+          type: string
+          description: For exitSuccess / exitFailure, an optional message recorded in the log
+        conditionType:
+          type: string
+          description: Only when type=condition — a nested if/else. Same values as ConditionStep.conditionType.
+        conditionValue:
+          type: string
+          description: Only when type=condition.
+        conditionSelector:
+          type: string
+          description: Only when type=condition.
+        conditionSelectorType:
+          type: string
+          enum: [auto, css, xpath, text]
+          description: Only when type=condition. Defaults to auto.
+        thenAction:
+          description: >-
+            Only when type=condition. One action or an array of them; deliberately untyped
+            here because the alternative is a recursive $ref that every client generator
+            would have to render correctly.
+        elseAction:
+          description: Only when type=condition. Same shape as thenAction.
+      required: [type]
+
+    ConditionStep:
+      type: object
+      description: Conditionally execute an action based on page state
+      properties:
+        type:
+          type: string
+          enum: [condition]
+        conditionType:
+          type: string
+          enum: [text_contains, text_not_contains, element_visible, element_not_visible, element_clickable, element_not_clickable, url_contains]
+        conditionValue:
+          type: string
+          description: Value to check against (e.g. text to look for, URL substring)
+        conditionSelector:
+          type: string
+          description: >-
+            Selector for element-based conditions. CSS, XPath, or the exact visible text —
+            worked out from the string unless conditionSelectorType says otherwise.
+        conditionSelectorType:
+          type: string
+          enum: [auto, css, xpath, text]
+          description: >-
+            How to read conditionSelector/conditionValue. Defaults to auto, which tries
+            XPath for strings starting with "/", then CSS, then exact text.
+        thenAction:
+          description: >-
+            What to run when the condition holds: one ConditionalAction, or an array of
+            them run in order. An action may itself be a condition (type=condition), which
+            is how if/else nests. Untyped on purpose — see ConditionalAction.
+        elseAction:
+          description: Same as thenAction, for when the condition does not hold.
+      required: [type, conditionType]
+
+    TaskBrowserConfig:
+      type: object
+      description: >
+        Per-task browser backend override. When set, these values are merged over the
+        global browser config (Settings page), letting each task use a different
+        execution backend.
+      properties:
+        provider:
+          type: string
+          enum: [playwright, puppeteer, seleniumbase, camoufox]
+          description: |
+            Browser backend for this task:
+            playwright=Playwright CDP (default), puppeteer=Puppeteer CDP,
+            seleniumbase=CF Proxy bypass mode, camoufox=anti-detect Firefox
+        providerId:
+          type: ["integer", "null"]
+          description: >
+            Named provider (Providers page) to run this task on. When set, its type + URL
+            drive the backend (overriding `provider`/`wsEndpoint`) and its own concurrency
+            limit applies. Null = use the Settings default backend.
+        fingerprintProfileId:
+          type: ["integer", "null"]
+          description: >
+            Saved fingerprint profile to use for this task. When set, it overrides the
+            inline `fingerprint` field below. Null = use the inline fingerprint.
+        proxyProfileId:
+          type: ["integer", "null"]
+          description: >
+            Saved proxy profile to use for this task. When set, its URL overrides the
+            inline `proxyUrl`. Null = use the inline proxy. WARP is set inline, not here.
+        wsEndpoint:
+          type: ["string", "null"]
+          description: WebSocket endpoint override for this task
+        proxyUrl:
+          type: ["string", "null"]
+          description: HTTP/SOCKS proxy URL (e.g. "http://user:pass@host:1080")
+        proxyType:
+          type: ["string", "null"]
+          enum: [http, socks5, httpsProxy, warp, vless, vmess, trojan, hy2, tuic, ss]
+          description: >-
+            httpsProxy is an HTTP proxy reached over TLS (https://host:port). It is a
+            separate type because it cannot be handed to the browser: these proxies
+            almost always present a self-signed certificate and Firefox refuses them,
+            so a local sing-box terminates that TLS and offers a plain SOCKS5 instead.
+        warpRotations:
+          type: ["integer", "null"]
+          description: >
+            WARP only. How many times to register a fresh WARP identity (new exit IP)
+            and retry when Google refuses the reCAPTCHA audio challenge for the
+            current IP. sing-box restarts on the same local SOCKS port, so the browser
+            is untouched. 0 disables rotation. Defaults to RECAPTCHA_MAX_IP_ROTATIONS.
+        headed:
+          type: ["boolean", "null"]
+        stealth:
+          type: ["boolean", "null"]
+        blockAds:
+          type: ["boolean", "null"]
+        ignoreHTTPS:
+          type: ["boolean", "null"]
+        sessionTimeoutMs:
+          type: ["integer", "null"]
+        fingerprint:
+          type: ["object", "null"]
+          description: >
+            Browser fingerprint spoofing (SeleniumBase/cf-proxy backend only).
+            Overlays a Windows/Mac OS profile (UA, UA-CH, platform, WebGL, timezone,
+            locale). Leave os empty/off for the honest Linux fingerprint.
+          properties:
+            os:
+              type: string
+              enum: ["", windows, mac]
+            timezone:
+              type: string
+              description: IANA timezone; empty = auto-detect from exit IP
+            locale:
+              type: string
+              description: BCP-47 locale; empty = auto-detect from exit IP
+            autoGeo:
+              type: boolean
+
+    WorkflowStep:
+      oneOf:
+        - $ref: "#/components/schemas/NavigateStep"
+        - $ref: "#/components/schemas/ClickStep"
+        - $ref: "#/components/schemas/FillStep"
+        - $ref: "#/components/schemas/WaitStep"
+        - $ref: "#/components/schemas/WaitForStep"
+        - $ref: "#/components/schemas/ScreenshotStep"
+        - $ref: "#/components/schemas/DismissPopupsStep"
+        - $ref: "#/components/schemas/CfVerifyStep"
+        - $ref: "#/components/schemas/SelectStep"
+        - $ref: "#/components/schemas/HoverStep"
+        - $ref: "#/components/schemas/ScrollStep"
+        - $ref: "#/components/schemas/KeypressStep"
+        - $ref: "#/components/schemas/SwitchToNewPageStep"
+        - $ref: "#/components/schemas/ConditionStep"
+        - $ref: "#/components/schemas/LoginStep"
+      discriminator:
+        propertyName: type
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        targetUrl:
+          type: string
+        loginType:
+          type: ["string", "null"]
+          description: Deprecated — use a login step in the steps array instead
+        steps:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+        cronExpression:
+          type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: >
+            Auto-retry after a failed run: extra attempts before giving up and waiting
+            for the normal schedule. null/0 = no retry.
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
+        status:
+          type: string
+          enum: [idle, queued, running, success, failed, needs_attention]
+          description: "idle=not yet run, queued=waiting for a concurrency slot, running=in progress, success=last run succeeded, failed=last run failed, needs_attention=paused waiting for manual captcha resolution"
+        lastRunAt:
+          type: ["string", "null"]
+          format: date-time
+        nextRunAt:
+          type: ["string", "null"]
+          format: date-time
+          description: "Next scheduled run for @after_completion: tasks (auto-set after each run finishes)"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        enabled:
+          type: boolean
+          default: true
+          description: Whether this task is active (disabled tasks skip cron runs)
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
+      required:
+        - id
+        - name
+        - targetUrl
+        - status
+        - createdAt
+        - updatedAt
+        - enabled
+
+    TaskWithCredentials:
+      allOf:
+        - $ref: "#/components/schemas/Task"
+        - type: object
+          properties:
+            credentials:
+              $ref: "#/components/schemas/CredentialsData"
+
+    CredentialsData:
+      type: object
+      properties:
+        username:
+          type: string
+        hasTotpSecret:
+          type: boolean
+      required:
+        - username
+        - hasTotpSecret
+
+    CreateTaskBody:
+      type: object
+      properties:
+        name:
+          type: string
+        targetUrl:
+          type: string
+        credentials:
+          $ref: "#/components/schemas/CredentialsInput"
+          description: Optional — only needed if the task has a login step
+        steps:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+        cronExpression:
+          type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: "Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry."
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
+      required:
+        - name
+        - targetUrl
+
+    CredentialsInput:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        totpSecret:
+          type: ["string", "null"]
+      required:
+        - username
+        - password
+
+    UpdateTaskBody:
+      type: object
+      properties:
+        name:
+          type: string
+        targetUrl:
+          type: string
+        credentials:
+          oneOf:
+            - $ref: "#/components/schemas/CredentialsInput"
+            - type: "null"
+        steps:
+          type: ["array", "null"]
+          items:
+            $ref: "#/components/schemas/WorkflowStep"
+        cronExpression:
+          type: ["string", "null"]
+        retryCount:
+          type: ["integer", "null"]
+          description: "Auto-retry after a failed run: extra attempts before giving up. null/0 = no retry."
+        retryIntervalMinutes:
+          type: ["integer", "null"]
+          description: Minutes between retry attempts (default 5).
+        webhookEnabled:
+          type: ["boolean", "null"]
+          description: >
+            Allow POST /api/tasks/{id}/webhook (bearer webhookToken) to trigger this
+            task, e.g. from an uptime monitor. Requires webhookToken to be set.
+        webhookToken:
+          type: ["string", "null"]
+          description: Bearer token the webhook caller must present.
+        browserConfig:
+          oneOf:
+            - $ref: "#/components/schemas/TaskBrowserConfig"
+            - type: "null"
+          description: Per-task browser backend override. Null uses global settings.
+
+    RunTaskResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        taskId:
+          type: integer
+      required:
+        - message
+        - taskId
+
+    Log:
+      type: object
+      properties:
+        id:
+          type: integer
+        taskId:
+          type: integer
+        runAt:
+          type: string
+          format: date-time
+        success:
+          type: boolean
+        message:
+          type: string
+        hasScreenshot:
+          type: boolean
+          description: Whether a screenshot is available for this log entry
+        durationMs:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - taskId
+        - runAt
+        - success
+        - message
+        - hasScreenshot
+        - createdAt
+
+    TasksSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        running:
+          type: integer
+        queued:
+          type: integer
+          description: Number of tasks currently waiting in the concurrency queue
+        successLast24h:
+          type: integer
+        failedLast24h:
+          type: integer
+        scheduled:
+          type: integer
+        needsAttention:
+          type: integer
+          description: Number of tasks currently paused waiting for manual captcha resolution
+      required:
+        - total
+        - running
+        - queued
+        - successLast24h
+        - failedLast24h
+        - scheduled
+        - needsAttention
+
+    SavedCredential:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, username, createdAt, updatedAt]
+
+    CreateSavedCredentialBody:
+      type: object
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+        totpSecret:
+          type: ["string", "null"]
+      required: [name, username, password]
+
+    UpdateSavedCredentialBody:
+      type: object
+      properties:
+        name:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          description: Leave empty to keep unchanged
+        totpSecret:
+          type: ["string", "null"]
+
+  
+    TaskStreamEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [progress, done]
+        message:
+          type: string
+        success:
+          type: ["boolean", "null"]
+          description: Only present when type is "done"
+      required: [type, message]

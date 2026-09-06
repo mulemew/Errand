@@ -1,0 +1,16 @@
+Flask==3.1.0
+# seleniumbase 4.35.0 pre-dates Chrome 130+ and its UC-mode Chrome launcher
+# fails to bring up recent Chromium builds ("session not created: cannot
+# connect to chrome"). Bumped to a version whose bundled undetected module
+# knows how to talk to current Chrome/Chromium.
+seleniumbase==4.44.17
+requests>=2.32.5,<3
+# SOCKS support so the fingerprint IP-geo lookup can go through the session proxy.
+PySocks>=1.7.1
+PyAutoGUI==0.9.54
+# reCAPTCHA audio-challenge solver: local speech-to-text (faster-whisper runs
+# offline on CPU — no API key, no per-IP limit) with a SpeechRecognition/pydub
+# fallback to the free Google endpoint. Needs ffmpeg (installed in the image).
+faster-whisper==1.0.3
+SpeechRecognition==3.10.4
+pydub==0.25.1

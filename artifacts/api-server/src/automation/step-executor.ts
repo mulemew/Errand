@@ -1,0 +1,1750 @@
+import path from "path";
+import fs from "fs";
+import type { PageAdapter } from "./page-adapter";
+import { logger } from "../lib/logger";
+import { dismissPopups } from "./popup-handler";
+import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
+import { detectLoginState } from "./login-verify";
+import { pageHasSuccessText, selectorIsVisible, CRITERION_WAIT_MS } from "./success-text";
+import { detectAndHandleCaptcha } from "./captcha";
+import { formLogin } from "./form-login";
+import { githubLogin } from "./github-login";
+import { googleLogin } from "./google-login";
+import type { CaptchaSolver } from "./captcha-solver";
+import type { DecryptedCredentials } from "./runner";
+  import { db, savedCredentialsTable, eq } from "@workspace/db";
+  import { decrypt } from "../lib/encryption";
+
+export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "element_clickable" | "element_not_clickable" | "url_contains";
+
+// An if/else branch action. Either performs a sub-step (click/fill/…), or is a
+// control-flow action: continue to the next step, or end the whole task.
+export interface ConditionalAction {
+  type: "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll"
+    | "continue" | "exitSuccess" | "exitFailure"
+    /** A branch may itself be a condition — see BranchAction. */
+    | "condition";
+  selector?: string;
+  selectorType?: "text" | "css" | "xpath";
+  url?: string;
+  value?: string;
+  ms?: number;
+  key?: string;
+  x?: number;
+  y?: number;
+  /** For exitSuccess / exitFailure: an optional message recorded in the log. */
+  message?: string;
+  // ── Only when type === "condition" (a nested if/else) ─────────────────────
+  conditionType?: ConditionType;
+  conditionValue?: string;
+  conditionSelector?: string;
+  conditionSelectorType?: SelectorKind;
+  thenAction?: BranchAction;
+  elseAction?: BranchAction;
+}
+
+/**
+ * What a branch runs: one action, or several in order. Both shapes stay valid — every task
+ * in the database stores a single object, and nothing is ever rewritten on disk.
+ */
+export type BranchAction = ConditionalAction | ConditionalAction[];
+
+/** One action, or several, as a list. Missing/empty means "continue". */
+function asActionList(a: BranchAction | undefined): ConditionalAction[] {
+  if (!a) return [];
+  return Array.isArray(a) ? a.filter(Boolean) : [a];
+}
+
+/**
+ * How deep if/else nesting may go. Not cycle protection — steps are JSON and cannot contain
+ * themselves — but a bound on stack depth and on how much work one step becomes.
+ */
+const MAX_CONDITION_DEPTH = 10;
+
+/** How a selector string should be read. "auto" works it out from the string itself. */
+export type SelectorKind = "auto" | "css" | "xpath" | "text";
+
+/**
+ * Which question a condition asks of the elements it finds.
+ *   "visible" — element_visible / element_not_visible
+ *   "usable"  — element_clickable / element_not_clickable
+ */
+type ConditionMode = "visible" | "usable";
+
+/**
+ * The in-page half of condition matching: XPath, CSS over all matches, and exact text.
+ *
+ * Only standard DOM selectors — Playwright extensions like `:has-text()` throw here, which
+ * is why probeCondition tries page.$() first.
+ */
+const IN_PAGE_PROBE = (arg: unknown) => {
+  const { sel, kind } = arg as { sel: string; kind: string };
+  const want = String(sel ?? "").trim();
+  if (!want) return { how: "empty", count: 0, anyVisible: false, anyUsable: false };
+
+  const vis = (el: Element) => {
+    const h = el as HTMLElement;
+    const st = getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  };
+  const usable = (el: Element) => {
+    if (!vis(el)) return false;
+    const h = el as HTMLElement;
+    if ((h as HTMLButtonElement).disabled) return false;
+    if (h.getAttribute("aria-disabled") === "true") return false;
+    if (getComputedStyle(h).pointerEvents === "none") return false;
+    // A control greyed out by class rather than by attribute is still unusable.
+    if (/(disabled|is-disabled|btn-disabled)/.test(h.className || "")) return false;
+    return true;
+  };
+
+  const byXPath = (): Element[] => {
+    const found: Element[] = [];
+    try {
+      const it = document.evaluate(want, document, null, 5 /* UNORDERED_NODE_ITERATOR */, null);
+      for (let n = it.iterateNext(); n; n = it.iterateNext()) if (n instanceof Element) found.push(n);
+    } catch { /* malformed XPath — treated as "matched nothing" */ }
+    return found;
+  };
+  const byCss = (): Element[] => {
+    try { return Array.from(document.querySelectorAll(want)); } catch { return []; }
+  };
+  const byText = (): Element[] =>
+    Array.from(document.querySelectorAll("body *")).filter(
+      (el) => el.children.length === 0 && (el.textContent || "").trim() === want,
+    );
+
+  let hits: Element[] = [];
+  let how = "";
+  if (kind === "xpath" || (kind === "auto" && /^\(?\s*\//.test(want))) {
+    hits = byXPath(); how = "xpath";
+  } else if (kind === "text") {
+    hits = byText(); how = "text";
+  } else if (kind === "css") {
+    hits = byCss(); how = "css";
+  } else {
+    // "Parses as CSS" is not enough: `Pause` is a valid type selector that matches nothing.
+    // CSS wins only if it actually matches.
+    hits = byCss(); how = "css";
+    if (!hits.length) { hits = byText(); how = hits.length ? "text" : "css"; }
+  }
+  return { how, count: hits.length, anyVisible: hits.some(vis), anyUsable: hits.some(usable) };
+};
+
+type TargetProbe = { how: string; count: number; anyVisible: boolean; anyUsable: boolean };
+
+/** The same visible/usable rules, applied to the one element Playwright handed back. */
+const ONE_ELEMENT_PROBE = (el: Element) => {
+  const h = el as HTMLElement;
+  const st = getComputedStyle(h);
+  const r = h.getBoundingClientRect();
+  const visible = st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  const usable =
+    visible &&
+    !(h as HTMLButtonElement).disabled &&
+    h.getAttribute("aria-disabled") !== "true" &&
+    st.pointerEvents !== "none" &&
+    !/(disabled|is-disabled|btn-disabled)/.test(h.className || "");
+  return { visible, usable };
+};
+
+/**
+ * Answer an element condition, keeping every path that already worked.
+ *
+ * Strictly additive: each condition keeps its original mechanism as the FIRST attempt, so
+ * anything working today takes the identical route to the identical answer. XPath and text
+ * handling only run where the old code already found nothing.
+ *
+ *   visible  page.$(sel) — Playwright's engine, first match. That engine is what makes
+ *            `button:has-text(…)` work; running the same string in-page would throw.
+ *   usable   querySelectorAll in-page, ANY match — first-match would answer differently
+ *            when the first hit is disabled and a later one is not.
+ *
+ * On the Playwright backend a bare XPath already worked (it auto-detects a leading "//");
+ * plain text is what silently returned "not visible". Selenium is the backend where XPath
+ * genuinely fails, and the in-page branch below covers it.
+ */
+async function probeCondition(
+  page: PageAdapter,
+  sel: string,
+  kind: SelectorKind,
+  mode: ConditionMode,
+): Promise<{ how: string; ok: boolean }> {
+  const want = (sel ?? "").trim();
+  if (!want) return { how: "empty", ok: false };
+  const looksXPath = /^\(?\s*\//.test(want);
+  const engineFirst = kind !== "xpath" && kind !== "text" && !(kind === "auto" && looksXPath);
+  const inPage = async (k: SelectorKind) =>
+    (await page
+      .evaluate(IN_PAGE_PROBE, { sel: want, kind: k } as never)
+      .catch(() => ({ how: "error", count: 0, anyVisible: false, anyUsable: false }))) as TargetProbe;
+  const one = async () => {
+    const el = await page.$(want);
+    if (!el) return null;
+    return (await el.evaluate(ONE_ELEMENT_PROBE)) as { visible: boolean; usable: boolean };
+  };
+
+  // ── The path this condition has always taken ──────────────────────────────
+  if (engineFirst && mode === "visible") {
+    try {
+      const r = await one();
+      if (r) return { how: "css", ok: r.visible };
+    } catch { /* not a selector this engine understands — fall through */ }
+  }
+  if (engineFirst && mode === "usable") {
+    const css = await inPage("css");
+    if (css.count > 0) return { how: "css", ok: css.anyUsable };
+    // Zero plain-CSS matches, but Playwright may still understand it (`:has-text`, `text=`).
+    try {
+      const r = await one();
+      if (r) return { how: "css", ok: r.usable };
+    } catch { /* fall through to the new fallbacks */ }
+  }
+
+  // ── New ground: only reached where the old code had already given up ──────
+  if (kind === "xpath" || (kind === "auto" && looksXPath)) {
+    const r = await inPage("xpath");
+    return { how: "xpath", ok: mode === "visible" ? r.anyVisible : r.anyUsable };
+  }
+  if (kind === "text") {
+    const r = await inPage("text");
+    return { how: "text", ok: mode === "visible" ? r.anyVisible : r.anyUsable };
+  }
+  if (kind === "css") return { how: "css", ok: false };
+  const t = await inPage("text");
+  return { how: t.count ? "text" : "css", ok: mode === "visible" ? t.anyVisible : t.anyUsable };
+}
+
+
+export type WorkflowStep =
+  | { type: "navigate"; url: string; timeout?: number }
+  | { type: "click"; selector: string; selectorType: "text" | "css" | "xpath" }
+  | { type: "fill"; selector: string; value: string }
+  | { type: "select"; selector: string; value: string }
+  | { type: "scroll"; selector?: string; x?: number; y?: number }
+  | { type: "hover"; selector: string; selectorType: "css" | "xpath" }
+  | { type: "wait"; ms: number }
+  | { type: "waitFor"; selector: string; selectorType?: "css" | "text"; timeout?: number }
+  | { type: "screenshot" }
+  | { type: "dismissPopups" }
+  | { type: "cfVerify"; url?: string; maxReloads?: number }
+  | { type: "switchToNewPage"; timeout?: number }
+  | { type: "keypress"; key: string }
+  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
+  | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; conditionSelectorType?: SelectorKind; thenAction: BranchAction; elseAction?: BranchAction };
+
+export interface StepResult {
+  success: boolean;
+  message: string;
+  screenshotPath?: string;
+  durationMs?: number;
+}
+
+/** Thrown by the login step when a captcha blocks authentication. */
+export class CaptchaBlockedError extends Error {
+  /**
+   * True when the captcha refused the EXIT IP rather than failing to be solved. The
+   * runner uses this to decide whether rotating the IP and replaying the workflow is
+   * worth it — for any other captcha failure, a new IP changes nothing.
+   */
+  readonly ipBlocked: boolean;
+  constructor(message: string, ipBlocked = false) {
+    super(message);
+    this.name = "CaptchaBlockedError";
+    this.ipBlocked = ipBlocked;
+  }
+}
+
+/**
+ * The login step ran out of wall-clock budget.
+ *
+ * It needs its own type because the retry loop's catch treats every Error as "this attempt
+ * failed, try the next one" — so the budget verdict, thrown from inside the same try, was
+ * swallowed and stored as the previous error, and the loop carried on. That is why a
+ * timed-out run reported "gave up after 1796s (2 of 3 attempts used). Last error: gave up
+ * after 1796s (1 of 3 attempts used)…": the message nested inside itself once per attempt
+ * while the budget stopped nothing at all.
+ */
+export class LoginBudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LoginBudgetExceededError";
+  }
+}
+
+/**
+ * Thrown by a condition step's exitSuccess / exitFailure branch to END the whole
+ * task early (like a return in an if/else). `succeeded` decides the task outcome.
+ * Caught by the workflow loop, which records a final step result and stops.
+ */
+export class TaskExitError extends Error {
+  constructor(public readonly succeeded: boolean, message: string) {
+    super(message);
+    this.name = "TaskExitError";
+  }
+}
+
+/**
+ * Upper bound on a wait step. The old 60s cap clamped silently, so a wait step could not do
+ * the one thing it exists for. The lockup it guarded against is handled by slicing the wait
+ * below instead. Seven days also keeps clear of setTimeout's ~24.8-day ceiling.
+ *
+ * The TASK TIMEOUT still applies on top (Settings, 30 min by default; 0 disables it).
+ */
+const MAX_WAIT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** How often a long wait comes up for air to check whether the run is still wanted. */
+const WAIT_SLICE_MS = 1_000;
+
+/**
+ * The runner's "should this stop?" predicate, published for the wait step. The loop polls it
+ * between steps; a wait parked for hours has to poll it itself. Stashed here rather than
+ * threaded through executeStep and every call site.
+ */
+let _shouldCancelHook: (() => boolean) | undefined;
+
+// Auto-screenshot helper — captures page state for visual tracing.
+  // Returns relative path (screenshots/filename) or undefined on any error.
+  async function saveStepScreenshot(
+    page: PageAdapter,
+    dataDir: string,
+    taskId: number,
+    stepIndex: number,
+    suffix: string,
+  ): Promise<string | undefined> {
+    try {
+      if (page.isClosed()) return undefined;
+      const shot = await page.screenshot({ type: "png", timeout: 8000 });
+      const buffer = Buffer.isBuffer(shot) ? shot : Buffer.from(shot as unknown as Uint8Array);
+      const screenshotsDir = path.join(dataDir, "screenshots");
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+      const filename = `task-${taskId}-step${stepIndex + 1}-${suffix}-${Date.now()}.png`;
+      fs.writeFileSync(path.join(screenshotsDir, filename), buffer);
+      return `screenshots/${filename}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  export async function executeWorkflowSteps(
+  page: PageAdapter,
+  steps: WorkflowStep[],
+  dataDir: string,
+  taskId: number,
+  creds: DecryptedCredentials | null,
+  solver: CaptchaSolver | null,
+  targetUrl: string,
+  onStepDone?: (result: StepResult) => void,
+  /**
+   * Polled between steps so a cancel actually STOPS the workflow. Without it the
+   * runner's Promise.race only stopped *waiting* for these steps — the loop kept
+   * driving the browser in the background after the user hit cancel.
+   */
+  shouldCancel?: () => boolean,
+  /**
+   * Called BEFORE each step runs. Results are only recorded when a step FINISHES, so a step
+   * that hangs leaves no trace at all — a timed-out run then reports nothing but "Task
+   * timed out after 30 min", with no way to tell which step was in flight.
+   */
+  onStepStart?: (info: { index: number; type: string }) => void,
+): Promise<{ results: StepResult[]; finalPage: PageAdapter }> {
+  const results: StepResult[] = [];
+  let currentPage = page;
+  // Published for the wait step; see _shouldCancelHook. Cleared in the finally below so a
+  // finished run cannot leave a stale predicate behind for the next one.
+  _shouldCancelHook = shouldCancel;
+
+  try {
+  for (let i = 0; i < steps.length; i++) {
+      if (shouldCancel?.()) throw new Error("Task cancelled by user");
+      const step = steps[i];
+      const label = `Step ${i + 1} [${step.type}]`;
+
+      // Pre-step auto-recovery: if currentPage closed between steps (e.g. OAuth popup closed
+      // after auth, window.close() from the page, etc.), switch to the sole remaining open
+      // page before attempting the next step.
+      // Only auto-switches when exactly ONE page is left — that is unambiguous.
+      // Multiple open pages require an explicit switchToNewPage step from the user.
+      if (currentPage.isClosed()) {
+        const openPages = currentPage.getOpenPages().filter((p) => !p.isClosed());
+        if (openPages.length === 1) {
+          logger.info(
+            { taskId, stepIndex: i, type: step.type, newUrl: openPages[0].url() },
+            "currentPage closed between steps — auto-recovered to the sole remaining open page",
+          );
+          currentPage = openPages[0];
+        }
+        // 0 or multiple pages: fall through, let the step fail with a natural error message.
+      }
+
+      const _stepStart = Date.now();
+      onStepStart?.({ index: i, type: step.type });
+      // A login step must NOT be retried here: it runs its own 3-attempt loop, so the two
+      // layers MULTIPLY into six full login attempts. With each attempt able to spend
+      // minutes on navigations, CF clearing and selector waits, that alone is what let a
+      // failing login run all the way into the task's 30-minute timeout.
+      const MAX_STEP_RETRIES = step.type === "login" ? 0 : 1;
+      let _stepErr: unknown = null;
+      let _stepResult: { message: string; newPage?: PageAdapter; screenshotPath?: string } | null = null;
+      let _taskExit: TaskExitError | null = null;
+      for (let _attempt = 0; _attempt <= MAX_STEP_RETRIES; _attempt++) {
+        try {
+          _stepResult = await executeStep(currentPage, step, dataDir, taskId, i, creds, solver, targetUrl);
+          _stepErr = null;
+          break;
+        } catch (err) {
+          if (err instanceof CaptchaBlockedError) throw err;
+          // Intentional if/else exit — don't retry; end the task with this outcome.
+          if (err instanceof TaskExitError) { _taskExit = err; break; }
+          _stepErr = err;
+          if (_attempt < MAX_STEP_RETRIES) {
+            logger.warn({ taskId, stepIndex: i, type: step.type, attempt: _attempt + 1 }, "Step failed, retrying once");
+            await new Promise<void>((r) => setTimeout(r, 2000));
+          }
+        }
+      }
+      if (_taskExit) {
+        const screenshotPath = await saveStepScreenshot(currentPage, dataDir, taskId, i, "cond").catch(() => undefined);
+        const exitResult: StepResult = {
+          success: _taskExit.succeeded,
+          message: `${label}: ${_taskExit.message}`,
+          screenshotPath,
+          durationMs: Date.now() - _stepStart,
+        };
+        results.push(exitResult);
+        onStepDone?.(exitResult);
+        logger.info({ taskId, stepIndex: i, succeeded: _taskExit.succeeded, msg: _taskExit.message }, "Task ended early by a condition step");
+        break;
+      }
+      if (_stepErr !== null || !_stepResult) {
+        const msg = _stepErr instanceof Error ? _stepErr.message : String(_stepErr);
+        const failScreenshotPath = await saveStepScreenshot(currentPage, dataDir, taskId, i, "fail");
+        const failResult: StepResult = { success: false, message: `${label} FAILED: ${msg}`, screenshotPath: failScreenshotPath, durationMs: Date.now() - _stepStart };
+        results.push(failResult);
+        onStepDone?.(failResult);
+        logger.error({ taskId, stepIndex: i, type: step.type, err: _stepErr }, "Workflow step failed after retry");
+        break;
+      } else {
+        const { message, newPage, screenshotPath } = _stepResult;
+        if (newPage) currentPage = newPage;
+        const result: StepResult = { success: true, message: `${label}: ${message}`, screenshotPath, durationMs: Date.now() - _stepStart };
+        results.push(result);
+        onStepDone?.(result);
+        logger.info({ taskId, stepIndex: i, type: step.type }, "Workflow step completed");
+      }
+  }
+
+  return { results, finalPage: currentPage };
+  } finally {
+    _shouldCancelHook = undefined;
+  }
+}
+
+interface StepExecResult {
+  message: string;
+  newPage?: PageAdapter;
+  screenshotPath?: string;
+}
+
+/**
+ * Wait for a captcha to be actionable before cfVerify tries to solve it — but
+ * without wasting the full timeout on pages that have no captcha at all.
+ *
+ * Each poll returns one of three signals so the loop can exit as EARLY as
+ * possible: `verified` (already solved — nothing to do), `rendered` (the clickable
+ * widget is drawn — go click it), and `marker` (some captcha element exists but the
+ * clickable part isn't drawn yet — keep waiting). If, after a short grace period,
+ * there's NO marker at all, we bail immediately rather than sit for `timeoutMs`.
+ * So fast sites return in ~1s, no-captcha pages bail in ~2s, and only genuinely
+ * slow-loading widgets use the long timeout as a fallback.
+ *
+ * Returns true when a captcha appeared (or is already solved), false otherwise.
+ */
+async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  const started = Date.now();
+  const GRACE_MS = 5000; // give a late-loading captcha this long to at least start
+  while (Date.now() < deadline) {
+    if ("fetchFrames" in page && typeof (page as { fetchFrames?: unknown }).fetchFrames === "function") {
+      await (page as unknown as { fetchFrames: () => Promise<unknown> }).fetchFrames().catch(() => {});
+    }
+    const state = await page.evaluate(() => {
+      const sized = (el: Element | null): boolean => {
+        if (!el) return false;
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      // Already solved? Then there's nothing to wait for.
+      const cfInput = document.querySelector("input[name='cf-turnstile-response']") as HTMLInputElement | null;
+      const rcResp = document.querySelector("textarea[name='g-recaptcha-response'], textarea#g-recaptcha-response") as HTMLTextAreaElement | null;
+      if ((cfInput?.value?.length ?? 0) > 20 || (rcResp?.value?.length ?? 0) > 20) return "verified";
+
+      // A RENDERED, clickable widget (iframe with a size, or the Turnstile widget's
+      // container — the parent of the 0x0 cf-turnstile-response input — once it has
+      // a size). The bare container (.g-recaptcha / [data-sitekey]) is NOT enough:
+      // it exists before the widget draws.
+      const iframeSels = "iframe[src*='recaptcha'], iframe[src*='api2/anchor'], iframe[src*='api2/bframe'], iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com'], iframe[src*='hcaptcha']";
+      if (Array.from(document.querySelectorAll(iframeSels)).some(sized)) return "rendered";
+      if (cfInput && sized(cfInput.parentElement)) return "rendered";
+      if (sized(document.querySelector("[class*='altcha' i] input, [class*='altcha' i] button"))) return "rendered";
+
+      // Some captcha element exists but isn't drawn yet → keep waiting.
+      if (
+        cfInput ||
+        document.querySelector(".cf-turnstile, [data-sitekey], .g-recaptcha, .h-captcha, [class*='altcha' i], iframe[src*='recaptcha'], iframe[src*='hcaptcha'], iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com']")
+      ) return "marker";
+
+      return "none";
+    }).catch(() => "none") as "verified" | "rendered" | "marker" | "none";
+
+    if (state === "verified" || state === "rendered") return true;
+    // No captcha element at all after the grace period — don't sit out the timeout.
+    if (state === "none" && Date.now() - started > GRACE_MS) return false;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
+async function executeStep(
+  page: PageAdapter,
+  step: WorkflowStep,
+  dataDir: string,
+  taskId: number,
+  stepIndex: number,
+  creds: DecryptedCredentials | null,
+  solver: CaptchaSolver | null,
+  targetUrl: string,
+  /**
+   * How many condition branches deep we already are. Only a condition passes a non-zero
+   * value, and only to the sub-steps it runs; every other caller leaves it at 0.
+   */
+  depth = 0,
+): Promise<StepExecResult> {
+  switch (step.type) {
+    case "navigate": {
+      // #fix-navigate — use domcontentloaded instead of networkidle2 to avoid
+      // timeouts on pages with continuous background requests (SPAs, polling, etc.)
+      await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: step.timeout ?? 30000 });
+      // ── Clear a full-page Cloudflare interstitial before continuing ───────
+      // If the destination sits behind a CF challenge ("Just a moment…"),
+      // subsequent steps (fill/click/waitFor) would operate on the challenge
+      // page instead of the real content. Clear it up-front, at parity with the
+      // SeleniumBase/cf-proxy backend's per-navigation uc_open_with_reconnect.
+      try {
+        // Hard cap, because page.goto's timeout covers the NAVIGATION and nothing after it.
+        // A task was observed stuck on this step for 1789 seconds, ending only when the
+        // 30-minute task timeout fired — an unbounded call in here can spend a whole task,
+        // and clearing an interstitial is a courtesy to the steps that follow, not the point
+        // of the run. Its own budget is 60s; this is the backstop for when something inside
+        // never returns at all.
+        await Promise.race([
+          clearCloudflareInterstitial(page, { url: step.url }),
+          new Promise<void>((r) => setTimeout(r, 120_000)),
+        ]);
+      } catch (cfErr) {
+        logger.warn({ url: step.url, cfErr }, "Cloudflare interstitial clear on navigate threw — continuing");
+      }
+      // Wait for URL to stabilize — JS SPAs often redirect after domcontentloaded.
+      // Without this, subsequent steps may operate on an already-closed page.
+      {
+        let _lastUrl = page.url();
+        let _stableMs = 0;
+        const _POLL = 400;
+        const _STABLE = 600; // URL stable for 0.6 s → settled
+        const _deadline = Date.now() + 3000;
+        while (Date.now() < _deadline) {
+          await new Promise((r) => setTimeout(r, _POLL));
+          const _cur = page.url();
+          if (_cur !== _lastUrl) { _lastUrl = _cur; _stableMs = 0; }
+          else { _stableMs += _POLL; if (_stableMs >= _STABLE) break; }
+        }
+      }
+      await dismissPopups(page);
+      // Auto-screenshot shows the landed page for visual tracing
+        return { message: `Navigated to ${step.url} (landed on: ${page.url()})` };
+    }
+
+    case "click": {
+      const urlBefore = page.url();
+
+      if (step.selectorType === "text") {
+        let res = await clickByText(page, step.selector);
+        if (!res.found) {
+          // The target may be gated behind a Cloudflare challenge/Turnstile that
+          // only clears once passed. Clear it and retry the click once.
+          if (await clearCloudflareIfPresent(page)) {
+            res = await clickByText(page, step.selector);
+          }
+        }
+        if (!res.found) {
+          // Not a button — maybe it is the LABEL of a checkbox ("I agree to the terms").
+          // clickByText only ever looked at buttons and links, so consent boxes could only
+          // be reached by writing a CSS selector for the input itself.
+          const cb = await tickCheckboxByText(page, step.selector);
+          if (cb.found) {
+            await settleAfterClick(page, urlBefore);
+            return { message: `Checkbox matching text "${step.selector}" is now ${cb.checked ? "checked" : "UNCHECKED (the click did not take)"} [${cb.method}]` };
+          }
+        }
+        if (!res.found) throw new Error(`No visible element with text "${step.selector}" found`);
+        await settleAfterClick(page, urlBefore);
+        const reaction = res.reacted
+          ? `page reacted (${res.changes} DOM changes)`
+          : `NO page reaction (${res.changes} DOM changes — the click may not have landed on the button, or the button ignored it)`;
+        return { message: `Clicked element matching text "${step.selector}" [${res.method} click] — ${reaction}` };
+      }
+
+      if (step.selectorType === "xpath") {
+        const xpathSel = `xpath=${step.selector}`;
+        await waitForSelectorWithCf(page, xpathSel, 5000);
+        await page.click(xpathSel);
+        await settleAfterClick(page, urlBefore);
+        return { message: `Clicked XPath "${step.selector}"` };
+      }
+
+      await waitForSelectorWithCf(page, step.selector, 5000);
+      await page.click(step.selector);
+      await settleAfterClick(page, urlBefore);
+      return { message: `Clicked CSS "${step.selector}"` };
+    }
+
+    case "fill": {
+      await page.waitForSelector(step.selector, { timeout: 5000 });
+      // #fix-fill — click to focus the element before clearing and typing.
+      await page.click(step.selector);
+      await page.evaluate((sel: string) => {
+        const el = document.querySelector<HTMLInputElement>(sel);
+        if (el) el.value = "";
+      }, step.selector as unknown as never);
+      await page.keyboard.type(step.value, { delay: 30 });
+      return { message: `Filled "${step.selector}"` };
+    }
+
+    case "select": {
+      await page.waitForSelector(step.selector, { timeout: 5000 });
+      await page.evaluate(
+        ({ sel, val }: { sel: string; val: string }) => {
+          const el = document.querySelector<HTMLSelectElement>(sel);
+          if (!el) throw new Error(`Element not found: ${sel}`);
+          el.value = val;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        },
+        { sel: step.selector, val: step.value } as unknown as never,
+      );
+      return { message: `Selected value "${step.value}" in "${step.selector}"` };
+    }
+
+    case "hover": {
+      const sel = step.selectorType === "xpath" ? `xpath=${step.selector}` : step.selector;
+      await page.waitForSelector(sel, { timeout: 5000 });
+      await page.hover(sel);
+      return { message: `Hovered over ${step.selectorType} "${step.selector}"` };
+    }
+
+    case "scroll": {
+      if (step.selector) {
+        await page.waitForSelector(step.selector, { timeout: 5000 });
+        await page.evaluate((sel: string) => {
+          const el = document.querySelector(sel);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, step.selector as unknown as never);
+        return { message: `Scrolled element "${step.selector}" into view` };
+      }
+      const x = step.x ?? 0;
+      const y = step.y ?? 0;
+      await page.evaluate(
+        ({ sx, sy }: { sx: number; sy: number }) => window.scrollBy(sx, sy),
+        { sx: x, sy: y } as unknown as never,
+      );
+      return { message: `Scrolled page by (${x}, ${y})` };
+    }
+
+    case "wait": {
+      const requested = Math.max(0, Number(step.ms) || 0);
+      const target = Math.min(requested, MAX_WAIT_MS);
+      if (target < requested) {
+        logger.warn({ taskId, stepIndex, requested, target }, "wait step ms clamped to MAX_WAIT_MS");
+      }
+      // Served in slices so that cancelling a task parked for six hours takes effect now
+      // rather than in six hours. One unbroken setTimeout is what made the 60s cap look
+      // necessary in the first place.
+      const startedAt = Date.now();
+      const deadline = startedAt + target;
+      let nextReport = startedAt + 60_000;
+      let stopped = false;
+      while (Date.now() < deadline) {
+        if (_shouldCancelHook?.()) { stopped = true; break; }
+        await new Promise((r) => setTimeout(r, Math.min(WAIT_SLICE_MS, deadline - Date.now())));
+        // A wait measured in hours must not look like a hung task. Once a minute is often
+        // enough to prove it is alive and rare enough to keep out of the way.
+        if (target > 60_000 && Date.now() >= nextReport) {
+          nextReport = Date.now() + 60_000;
+          logger.info(
+            { taskId, stepIndex, elapsedMs: Date.now() - startedAt, remainingMs: Math.max(0, deadline - Date.now()) },
+            "wait step still waiting",
+          );
+        }
+      }
+      const waited = Date.now() - startedAt;
+      if (stopped) {
+        return { message: `Waited ${waited}ms of ${target}ms — the run was cancelled or timed out` };
+      }
+      return {
+        message: `Waited ${waited}ms` + (target < requested ? ` (requested ${requested}ms, capped at ${MAX_WAIT_MS}ms)` : ""),
+      };
+    }
+
+    case "waitFor": {
+          const timeout = step.timeout ?? 120_000;
+          const isTextWait = step.selectorType === "text" || step.selector.startsWith("text:");
+          if (isTextWait) {
+            const needle = step.selectorType === "text" ? step.selector : step.selector.slice("text:".length).trim();
+            const deadline = Date.now() + timeout;
+            while (true) {
+              if (page.isClosed()) throw new Error(`waitFor aborted — page was closed before text "${needle}" appeared`);
+              if (await pageHasExactText(page, needle)) break;
+              if (Date.now() >= deadline) throw new Error(`Text "${needle}" did not appear within ${timeout}ms`);
+              await new Promise((r) => setTimeout(r, 500));
+            }
+            return { message: `Text "${needle}" appeared within ${timeout}ms` };
+          }
+          await page.waitForSelector(step.selector, { timeout });
+          return { message: `Element "${step.selector}" appeared within ${timeout}ms` };
+        }
+
+    case "screenshot": {
+        // Note: if the page was closed BETWEEN steps (e.g. after OAuth popup closed),
+        // the loop's pre-step auto-recovery already switched currentPage to the surviving
+        // page before we got here.  We only need to guard against the page closing
+        // DURING this screenshot call itself.
+        if (page.isClosed()) {
+          throw new Error(
+            "Screenshot failed — the page is closed. " +
+            "If a click opened a new tab, add a 'switchToNewPage' step; once that tab closes, " +
+            "the executor auto-recovers to the remaining page for all subsequent steps.",
+          );
+        }
+        let _shotBuffer: Buffer | null = null;
+        try {
+          const shot = await page.screenshot({ type: "png", timeout: 15000 });
+          _shotBuffer = Buffer.isBuffer(shot) ? shot : Buffer.from(shot as unknown as Uint8Array);
+        } catch (screenshotErr) {
+          if (page.isClosed()) {
+            throw new Error(
+              "Screenshot failed — the page closed during capture. " +
+              "The executor will auto-recover to the remaining open page on the next step.",
+            );
+          }
+          const errMsg = screenshotErr instanceof Error ? screenshotErr.message : String(screenshotErr);
+          if (errMsg.toLowerCase().includes("timeout")) {
+            // 超时：强制立即截图，不等页面稳定/字体加载
+            logger.warn({ taskId, stepIndex }, "Screenshot timed out — forcing immediate capture");
+            try {
+              const fallback = await page.screenshot({ type: "png", timeout: 5000 });
+              _shotBuffer = Buffer.isBuffer(fallback) ? fallback : Buffer.from(fallback as unknown as Uint8Array);
+            } catch {
+              return { message: `Screenshot timed out and force-capture also failed — continuing (step ${stepIndex + 1})` };
+            }
+          } else {
+            throw new Error(`Screenshot failed — ${errMsg}`);
+          }
+        }
+        if (_shotBuffer && _shotBuffer.length > 0) {
+          const screenshotsDir = path.join(dataDir, "screenshots");
+          fs.mkdirSync(screenshotsDir, { recursive: true });
+          const filename = `task-${taskId}-step${stepIndex + 1}-${Date.now()}.png`;
+          fs.writeFileSync(path.join(screenshotsDir, filename), _shotBuffer);
+          return { message: `Screenshot captured (step ${stepIndex + 1})`, screenshotPath: `screenshots/${filename}` };
+        }
+        return { message: `Screenshot timed out — page not stable, skipped (step ${stepIndex + 1})` };
+      }
+
+    case "switchToNewPage": {
+      const timeout = step.timeout ?? 30000;
+      const newPage = await page.waitForNewPage({ timeout });
+      return { message: `Switched to new page: ${newPage.url()}`, newPage };
+    }
+
+    case "dismissPopups": {
+      const result = await dismissPopups(page);
+      return {
+        message: result.dismissed > 0
+          ? `Dismissed ${result.dismissed} popup/overlay item(s): ${result.details.join(", ")}`
+          : "No popups or overlays found to dismiss",
+      };
+    }
+
+    case "cfVerify": {
+      // Explicitly clear a bot-gate that is blocking the current page (or a
+      // freshly-navigated URL) before a later click/fill step whose target only
+      // becomes interactive once the challenge has passed.
+      //
+      // Handles BOTH:
+      //   • Cloudflare "Verifying you are human" / Turnstile interstitials, and
+      //   • Embedded widget captchas (ALTCHA, reCAPTCHA/hCaptcha/Turnstile,
+      //     GeeTest, etc.) — e.g. the "Protected by ALTCHA" checkbox on the
+      //     an in-app confirm dialog, which is NOT a Cloudflare challenge.
+
+      // `url` used to be ONLY the reload target handed to clearCloudflareInterstitial
+      // — the step never navigated, so configuring it and expecting the step to go
+      // there (as the field name and doc imply) silently did nothing: the step just
+      // inspected whatever page happened to be open. Navigate first when it's set and
+      // we're not already there.
+      if (step.url && page.url() !== step.url) {
+        logger.info({ url: step.url }, "cfVerify — navigating to the configured URL first");
+        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+      }
+
+      // Give a slow-loading widget time to render before we look for it. Modals
+      // (a "Verify that you're not a robot" dialog opened by an action button)
+      // inject the reCAPTCHA a moment after opening — checking once,
+      // too early, found nothing and the step silently did nothing.
+      const appeared = await waitForCaptchaWidget(page, 15000);
+      if (appeared) {
+        logger.info("cfVerify — captcha widget rendered");
+        // Give the freshly-rendered widget a moment to become interactive before
+        // we click/solve it (avoids acting on a half-mounted iframe).
+        await new Promise((r) => setTimeout(r, 1200));
+      } else {
+        logger.info("cfVerify — no captcha widget rendered within wait; proceeding (may be a full-page CF interstitial or already clear)");
+      }
+
+      // ── cf-proxy (SeleniumBase) fast-path ────────────────────────────────
+      // Under the SeleniumBase backend the login step solves embedded Turnstile
+      // widgets through cf-proxy's NATIVE uc_gui_click_captcha clicker
+      // (POST /click-turnstile, exposed here as page.clickTurnstile). The
+      // generic clearCloudflareInterstitial → detectAndHandleCaptcha path below
+      // relies on frames()/CDP coordinate clicks that are NOT wired to that
+      // native clicker, so on cf-proxy those clicks land off-target and the
+      // widget verification fails even though the identical widget passes in the
+      // login step. Give cfVerify the SAME verification path as login: when the
+      // adapter exposes the native clicker AND a Turnstile widget is present,
+      // click it natively first and short-circuit on success.
+      if (
+        "clickTurnstile" in page &&
+        typeof (page as unknown as { clickTurnstile?: unknown }).clickTurnstile === "function"
+      ) {
+        try {
+          if ("fetchFrames" in page && typeof (page as any).fetchFrames === "function") {
+            await (page as any).fetchFrames();
+          }
+          const hasTurnstile = await page.evaluate(() => {
+            if (document.querySelector("input[name='cf-turnstile-response']")) return true;
+            if (document.querySelector(".cf-turnstile")) return true;
+            if (
+              document.querySelector(
+                "iframe[src*='turnstile'], iframe[src*='challenges.cloudflare.com']",
+              )
+            )
+              return true;
+            const host = document.querySelector<HTMLElement>("[data-sitekey]");
+            const key = host?.dataset.sitekey ?? host?.getAttribute("data-sitekey");
+            return !!key && /^0x/i.test(key);
+          }).catch(() => false) as boolean;
+
+          if (hasTurnstile) {
+            logger.info("cfVerify — Turnstile widget present; using cf-proxy native clickTurnstile (login-step parity)");
+            let solved = false;
+            try {
+              solved = await (page as unknown as { clickTurnstile: (n?: number) => Promise<boolean> }).clickTurnstile(2);
+            } catch (clickErr) {
+              // Do NOT swallow this to `false`. A dead/crashed session here is a REAL
+              // failure — NOT a captcha. It must surface as an ordinary (retryable) error,
+              // never as needs_attention: nobody can "resolve a captcha" that isn't the
+              // problem. Throw a PLAIN Error so it flows to the normal failure path.
+              const m = clickErr instanceof Error ? clickErr.message : String(clickErr);
+              if (/invalid session|session (?:deleted|id)|target (?:closed|crashed)|page ?crashed|no such window|disconnected|not reachable|tab crashed/i.test(m)) {
+                throw new Error(
+                  `Browser session died while solving the Turnstile — ${m}. ` +
+                    "This is a browser crash (often the Windows fingerprint on this Chromium build), not a Cloudflare wall.",
+                );
+              }
+              logger.warn({ clickErr }, "cfVerify — native clickTurnstile threw (non-fatal); treating as not solved");
+              solved = false;
+            }
+            if (solved) {
+              return { message: "Cloudflare verification cleared via cf-proxy native Turnstile click." };
+            }
+            // The native clicker already clicked but the token never populated. Do
+            // NOT fall through to clearCloudflareInterstitial + detectAndHandleCaptcha
+            // (those would re-click the SAME Turnstile and mash it into "Verification
+            // failed"). Crucially, FAIL the step instead of returning success: an
+            // unsolved Turnstile means the gate is still up, so a later submit
+            // step would run against a blocked page. Surface it as a captcha block
+            // (task → needs_attention), the same way login treats an unsolved gate.
+            logger.warn("cfVerify — native clickTurnstile did not solve the Turnstile; failing the step (gate still up). Likely an IP/fingerprint wall.");
+            throw new CaptchaBlockedError(
+              "Turnstile widget present but not solved by the native clicker (gate still up). " +
+                "Not re-clicking to avoid a 'Verification failed' from mashing. " +
+                "If it used to pass, try a residential/cleaner proxy IP or a different fingerprint.",
+            );
+          }
+        } catch (err) {
+          // The intentional captcha block MUST propagate (needs_attention). A session
+          // crash MUST propagate too — as its plain Error — so it surfaces as a normal
+          // failure instead of being swallowed and re-thrown messier by the interstitial
+          // clearer on an already-dead browser. Everything else falls through as before.
+          if (err instanceof CaptchaBlockedError) throw err;
+          const em = err instanceof Error ? err.message : String(err);
+          if (/invalid session|session (?:deleted|id)|target (?:closed|crashed)|page ?crashed|no such window|disconnected|not reachable|tab crashed/i.test(em)) throw err;
+          logger.debug({ err }, "cfVerify native clickTurnstile fast-path threw — falling back");
+        }
+      }
+
+      const cleared = await clearCloudflareInterstitial(page, {
+        url: step.url || page.url(),
+        maxReloads: step.maxReloads ?? 2,
+      });
+
+      // After any CF interstitial is out of the way, drive an embedded captcha
+      // widget (ALTCHA / token / click-to-verify) to a solved state if present.
+      let widgetMsg = "";
+      try {
+        const captchaResult = await detectAndHandleCaptcha(page, solver);
+        if (captchaResult.detected) {
+          widgetMsg = captchaResult.solved
+            ? ` Widget captcha handled: ${(captchaResult as { message: string }).message}`
+            : captchaResult.needsAttention
+              ? ` Widget captcha needs attention: ${(captchaResult as { message: string }).message}`
+              : ` Widget captcha detected but not solved: ${(captchaResult as { message: string }).message}`;
+          if (!captchaResult.solved && captchaResult.needsAttention) {
+            throw new CaptchaBlockedError(
+              (captchaResult as { message: string }).message,
+              (captchaResult as { ipBlocked?: boolean }).ipBlocked === true,
+            );
+          }
+        }
+      } catch (err) {
+        if (err instanceof CaptchaBlockedError) throw err;
+        logger.debug({ err }, "cfVerify widget captcha handling threw");
+      }
+
+      return {
+        message:
+          (cleared
+            ? "Cloudflare verification cleared (or none present)."
+            : "Cloudflare verification could not be confirmed cleared — continuing.") + widgetMsg,
+      };
+    }
+
+    case "keypress": {
+      await page.keyboard.press(step.key);
+      return { message: `Pressed key "${step.key}"` };
+    }
+
+    case "login": {
+      const loginUrl = step.loginUrl || targetUrl;
+      logger.info({ taskId, stepIndex, loginMethod: step.loginMethod, loginUrl }, "Executing login step");
+
+      // ── Cookie mode: skip login if a restored session is still valid ──────
+      // When cookieMode is on, the runner seeds the browser context with the
+      // task's previously-saved storage state (cookies + localStorage). Before
+      // spending a full login attempt, navigate to the login/target URL and
+      // check whether we're already authenticated. If so, skip login entirely.
+      // ── Cookie-only login ────────────────────────────────────────────────
+      // For sites we cannot log into automatically (hard captcha, MFA, SSO the
+      // automation can't drive), the operator pastes the site's login-ticket cookie
+      // and we simply verify it. There is no automated login to fall back on, so an
+      // invalid session is a hard failure telling them to re-paste — silently
+      // continuing would let every later step run logged-out.
+      if (step.loginMethod === "cookie") {
+        // Without a success criterion isSessionAuthenticated() can only ever answer "no",
+        // so the run would fail as "invalid cookie" even with a perfectly good session.
+        // Say that outright instead of blaming the cookie. (The task form also refuses to
+        // save a cookie-login step without one — this covers older tasks and the API.)
+        if (!step.successSelector?.trim() && !step.successText?.trim()) {
+          throw new Error(
+            "Cookie 登录缺少「登录成功判据」：请在该登录步骤填写「登录成功文字」或「登录成功选择器」。" +
+              "没有判据就无法判断 cookie 是否有效，只能一律当作无效。",
+          );
+        }
+        await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await dismissPopups(page);
+        const ok = await isSessionAuthenticated(page, step.successSelector, step.successText);
+        if (ok) {
+          logger.info({ taskId, stepIndex }, "Cookie login — session is valid");
+          return { message: "Cookie session valid — logged in without a login flow" };
+        }
+        throw new Error(
+          "Cookie login failed: the session is not valid (expired cookie, wrong domain, or no cookie configured). " +
+            "Paste a fresh login cookie on this step — there is no automated login to fall back on.",
+        );
+      }
+
+      const cookieMode = (step as Record<string, unknown>).cookieMode === true;
+      if (cookieMode) {
+        try {
+          await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+          await dismissPopups(page);
+          logger.debug(
+            { loginUrl, url: page.url(), hasText: !!step.successText, hasSelector: !!step.successSelector },
+            "Cookie mode — probing the restored session",
+          );
+          const alreadyIn = await isSessionAuthenticated(page, step.successSelector, step.successText);
+          if (alreadyIn) {
+            logger.info({ taskId, stepIndex }, "Cookie mode — existing session detected, skipping login");
+            return { message: "Session restored from saved cookies — login skipped" };
+          }
+          logger.info({ taskId, stepIndex }, "Cookie mode — no valid session, performing full login");
+          // Drop the dead session before logging in on top of it.
+          //
+          // The probe above just decided these cookies do not authenticate us. They have no
+          // value from here on — a full login follows — and they can actively break it: a
+          // server that ties its CSRF token to the session sees one it does not recognise and
+          // answers "CSRF token mismatch" on the very first submit. A human never hits that,
+          // because a human arrives with no session at all. Reported on
+          // one panel whose login is an XHR carrying the token from the page's
+          // csrf-token meta.
+          //
+          // formLogin navigates to the login URL itself immediately after, so the page (and
+          // its token) is refetched against the fresh session rather than the discarded one.
+          if (page.clearCookies) {
+            try {
+              await page.clearCookies();
+              logger.info({ taskId, stepIndex }, "Cookie mode — discarded the invalid session's cookies");
+            } catch (clrErr) {
+              logger.warn({ taskId, stepIndex, clrErr }, "Could not clear the invalid session's cookies — logging in with them still present");
+            }
+          }
+        } catch (probeErr) {
+          logger.warn({ taskId, stepIndex, probeErr }, "Cookie-mode session probe failed — performing full login");
+        }
+      }
+
+      // Resolve per-step saved credential if credentialId is present,
+      // otherwise fall back to inline values or task-level credentials.
+      let stepCreds = creds;
+      const credentialId = (step as Record<string, unknown>).credentialId as number | undefined;
+      if (credentialId) {
+        try {
+          const [savedCred] = await db
+            .select()
+            .from(savedCredentialsTable)
+            .where(eq(savedCredentialsTable.id, credentialId));
+          if (savedCred) {
+            const dec = JSON.parse(decrypt(savedCred.encryptedData)) as {
+              password: string;
+              totpSecret?: string | null;
+            };
+            stepCreds = {
+              username: savedCred.username,
+              password: dec.password,
+              totpSecret: dec.totpSecret ?? undefined,
+            };
+          }
+        } catch (credErr) {
+          logger.warn({ taskId, stepIndex, credentialId, credErr }, "Failed to load saved credential, falling back to task-level creds");
+        }
+      }
+      const username = step.inlineUsername || stepCreds?.username;
+      const password = step.inlinePassword || stepCreds?.password;
+      const totpSecret = step.inlineTotp || stepCreds?.totpSecret;
+
+      if (!username || !password) {
+        throw new Error(
+          "Login step requires credentials. Please select a saved credential or enter inline username/password.",
+        );
+      }
+
+      const MAX_LOGIN_RETRIES = 2;
+        let lastLoginErr: Error | null = null;
+        let loginResult!: { success: boolean; captchaBlocked: boolean; message: string };
+
+        // WALL-CLOCK BUDGET for the whole step. Every individual wait had its own timeout,
+        // but nothing bounded their SUM — so a login that failed slowly (60 s navigation +
+        // ~90 s of Cloudflare clearing + a string of 15-30 s selector waits, times three
+        // attempts) could consume the entire task timeout and report it as "task timed out"
+        // rather than "login failed". Checked between attempts, so the worst case is the
+        // budget plus one attempt. Tunable via LOGIN_STEP_BUDGET_MS.
+        // 10 minutes, deliberately generous: the check only ever runs BEFORE a retry, so a
+        // login that succeeds on its first or second attempt can never be cut off by it —
+        // it exists purely to stop the third attempt from riding into the task timeout. A
+        // legitimate slow login (captcha solving plus a Cloudflare clear) fits well inside.
+        const loginBudgetMs = Math.max(60_000, Number(process.env.LOGIN_STEP_BUDGET_MS ?? 600_000));
+        const loginDeadline = Date.now() + loginBudgetMs;
+        const loginStart = Date.now();
+
+        for (let attempt = 0; attempt <= MAX_LOGIN_RETRIES; attempt++) {
+          try {
+            if (attempt > 0) {
+              const spent = Date.now() - loginStart;
+              if (Date.now() >= loginDeadline) {
+                // Trim the previous error so the message cannot nest budget verdicts.
+                const why = (lastLoginErr?.message ?? "unknown").split(" Last error: ")[0].slice(0, 300);
+                throw new LoginBudgetExceededError(
+                  `Login gave up after ${Math.round(spent / 1000)}s (budget ${Math.round(loginBudgetMs / 1000)}s, ` +
+                    `${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used). Last error: ${why}`,
+                );
+              }
+              logger.info({ taskId, stepIndex, attempt, spentMs: spent }, "Retrying login step");
+              await new Promise((r) => setTimeout(r, 2000 * attempt));
+            }
+            // HARD cap on a single attempt.
+            //
+            // The budget below is only consulted BETWEEN attempts, which does nothing for
+            // the case that actually hurts: one attempt that never returns. Every wait in
+            // the login flows has its own timeout, but a wedged page makes each Playwright
+            // call sit at the context default (60 s) and there are many of them — so a
+            // single attempt could quietly consume the entire task timeout and be reported
+            // as "task timed out" rather than as a login failure.
+            //
+            // On expiry the flow is abandoned rather than cancelled: it may still be
+            // driving the page for a moment afterwards, which is acceptable because the
+            // step has failed and the page is about to be closed or reused for a fresh
+            // attempt. Hanging for half an hour is not.
+            const remainingBudget = loginDeadline - Date.now();
+            if (remainingBudget <= 0) {
+              throw new LoginBudgetExceededError(
+                `Login gave up after ${Math.round((Date.now() - loginStart) / 1000)}s ` +
+                  `(budget ${Math.round(loginBudgetMs / 1000)}s, ${attempt} of ${MAX_LOGIN_RETRIES + 1} attempts used)`,
+              );
+            }
+            // Cap ONE attempt well below the whole budget: a hung attempt should die and
+            // leave room for another, not consume every second the step has. A legitimate
+            // slow attempt (captcha solving plus a Cloudflare clear) fits inside 5 minutes.
+            const attemptCap = Math.max(
+              60_000,
+              Math.min(remainingBudget, Number(process.env.LOGIN_ATTEMPT_CAP_MS ?? 300_000)),
+            );
+            const runLogin = async () => {
+              if (step.loginMethod === "github") {
+                return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+              }
+              if (step.loginMethod === "google") {
+                return googleLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+              }
+              return formLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successSelector, totpSecret, step.successText);
+            };
+            loginResult = await Promise.race([
+              runLogin(),
+              new Promise<never>((_, reject) =>
+                setTimeout(
+                  () => reject(new Error(`Login attempt ${attempt + 1} exceeded ${Math.round(attemptCap / 1000)}s and was abandoned`)),
+                  attemptCap,
+                ),
+              ),
+            ]);
+            if (loginResult.captchaBlocked) throw new CaptchaBlockedError(loginResult.message);
+            if (!loginResult.success) {
+              // GitHub OAuth: a CONCLUDED failure (redirected back to login /
+              // rate-limited) won't fix itself on an immediate retry, and hammering
+              // a rate-limited GitHub only deepens the block. Fail fast rather than
+              // burning MAX_LOGIN_RETRIES. (Thrown/transient errors still retry via
+              // the catch below.)
+              const failFast = step.loginMethod === "github";
+              if (!failFast && attempt < MAX_LOGIN_RETRIES) {
+                lastLoginErr = new Error(`Login attempt ${attempt + 1} failed: ${loginResult.message}`);
+                logger.warn({ taskId, stepIndex, attempt, msg: loginResult.message }, "Login attempt failed, retrying");
+                continue;
+              }
+              throw new Error(
+                failFast
+                  ? `Login failed: ${loginResult.message}`
+                  : `Login failed after ${MAX_LOGIN_RETRIES + 1} attempts: ${loginResult.message}`,
+              );
+            }
+            return { message: attempt > 0 ? `${loginResult.message} (attempt ${attempt + 1})` : loginResult.message };
+          } catch (retryErr) {
+            if (retryErr instanceof CaptchaBlockedError) throw retryErr;
+            // The budget is a verdict on the whole step, not on one attempt — it must
+            // leave the loop rather than becoming the next attempt's "last error".
+            if (retryErr instanceof LoginBudgetExceededError) throw retryErr;
+            if (attempt >= MAX_LOGIN_RETRIES) throw retryErr;
+            lastLoginErr = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
+            logger.warn(
+              { taskId, stepIndex, attempt, attemptMs: Date.now() - loginStart, err: lastLoginErr.message },
+              "Login threw, retrying",
+            );
+          }
+        }
+        throw lastLoginErr ?? new Error("Login failed");
+    }
+
+    case "condition": {
+        const { conditionType, conditionValue, conditionSelector } = step;
+        // Evaluate the condition — wrap in try/catch so page errors (stale frame,
+        // navigation, etc.) are treated as "not met" rather than hard-failing the task.
+        let conditionMet = false;
+        let evalWarning: string | undefined;
+        let how = "";
+
+        try {
+          switch (conditionType) {
+            case "text_contains": {
+              conditionMet = await pageHasExactText(page, conditionValue);
+              break;
+            }
+            case "text_not_contains": {
+              conditionMet = !(await pageHasExactText(page, conditionValue));
+              break;
+            }
+            // All four element conditions go through ONE resolver now. They used to
+            // disagree about what a selector even is — see RESOLVE_TARGETS.
+            case "element_visible":
+            case "element_not_visible":
+            case "element_clickable":
+            case "element_not_clickable": {
+              const wantsVisible =
+                conditionType === "element_visible" || conditionType === "element_not_visible";
+              const probe = await probeCondition(
+                page,
+                conditionSelector || conditionValue,
+                step.conditionSelectorType ?? "auto",
+                wantsVisible ? "visible" : "usable",
+              );
+              how = probe.how;
+              conditionMet =
+                conditionType === "element_visible" || conditionType === "element_clickable"
+                  ? probe.ok
+                  : !probe.ok;
+              break;
+            }
+            case "url_contains": {
+              conditionMet = page.url().includes(conditionValue);
+              break;
+            }
+          }
+        } catch (evalErr) {
+          // Condition evaluation threw (e.g. page detached, navigation in progress).
+          // Treat as "not met" so the task can continue rather than hard-failing.
+          evalWarning = evalErr instanceof Error ? evalErr.message : String(evalErr);
+          conditionMet = false;
+        }
+
+        // ── if / else ──────────────────────────────────────────────────────
+        // Condition NOT met is never a failure by itself — it just selects the
+        // else branch (which defaults to "continue", preserving old behavior).
+        const branch = conditionMet ? "then" : "else";
+        const actions = asActionList(conditionMet ? step.thenAction : (step.elseAction ?? { type: "continue" }));
+        const condDesc = `${conditionType}: "${conditionValue}"${how && how !== "css" ? ` via ${how}` : ""}`;
+        const metWord = conditionMet ? "met" : "not met";
+        const evalNote = !conditionMet && evalWarning ? ` (eval warning: ${evalWarning})` : "";
+
+        const noop = actions.length === 0 || actions.every((a) => !a || a.type === "continue");
+        if (noop) {
+          const shot = await saveStepScreenshot(page, dataDir, taskId, stepIndex, "cond");
+          return { message: `Condition ${metWord} (${condDesc}) → ${branch}: continue${evalNote}`, screenshotPath: shot };
+        }
+
+        // A branch may hold SEVERAL actions, and any of them may be another condition.
+        // Both are new; both are additive. A branch that is a single object still arrives
+        // here as a one-element list, and a task that has never heard of either keeps
+        // behaving exactly as it did.
+        if (depth >= MAX_CONDITION_DEPTH) {
+          throw new Error(
+            `Condition nesting exceeded ${MAX_CONDITION_DEPTH} levels — refusing to go deeper. ` +
+              `This is a configuration problem, not a page problem.`,
+          );
+        }
+
+        let branchPage = page;
+        let newPage: PageAdapter | undefined;
+        const done: string[] = [];
+        for (const action of actions) {
+          if (action.type === "continue") continue;
+          if (action.type === "exitSuccess" || action.type === "exitFailure") {
+            throw new TaskExitError(
+              action.type === "exitSuccess",
+              `Condition ${metWord} (${condDesc}) → ${branch}: exit task (${action.type === "exitSuccess" ? "success" : "failure"})` +
+                (action.message ? ` — ${action.message}` : ""),
+            );
+          }
+          // A FAILURE here aborts the task like a normal step (the user asked for this):
+          // only the condition itself not matching is non-fatal.
+          const subStep = action as unknown as WorkflowStep;
+          const subResult = await executeStep(
+            branchPage, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl, depth + 1,
+          );
+          if (subResult.newPage) { branchPage = subResult.newPage; newPage = subResult.newPage; }
+          done.push(subResult.message);
+        }
+
+        const condShot = await saveStepScreenshot(branchPage, dataDir, taskId, stepIndex, "cond");
+        return {
+          message: `Condition ${metWord} (${condDesc}) → ${branch}: ${done.join(" ; ")}`,
+          newPage,
+          screenshotPath: condShot,
+        };
+      }
+  
+    default: {
+      const exhaustive: never = step;
+      throw new Error(`Unknown step type: ${(exhaustive as WorkflowStep).type}`);
+    }
+  }
+}
+
+/**
+ * After a click, briefly check whether it triggered a page navigation.
+ * If the URL changed or the page entered a loading state, wait for the
+ * navigation to settle so subsequent steps don't operate on a stale page.
+ *
+ * This is intentionally lightweight (no hard timeout) — it only kicks in
+ * when the click actually causes a detectable navigation.
+ */
+async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<void> {
+  // If the page was closed by the click (e.g. window.close()), bail out
+  // immediately — there's nothing to wait for.
+  if (page.isClosed()) return;
+
+  // Small delay to let any synchronous JS navigation (location.href = ...)
+  // or history.pushState take effect before we sample the URL.
+  await new Promise((r) => setTimeout(r, 150));
+  if (page.isClosed()) return;
+
+  try {
+    const urlAfter = page.url();
+    if (urlAfter !== urlBefore) {
+      try {
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 5000 });
+      } catch (navErr) {
+        const navMsg = navErr instanceof Error ? navErr.message : String(navErr);
+        if (/closed|detached|destroyed|Target closed/i.test(navMsg)) throw navErr;
+      }
+    }
+  } catch {
+    // page.url() / waitForNavigation can throw if the page was destroyed
+  }
+}
+
+/**
+ * Is the current page an authenticated view?
+ *
+ * Only an EXPLICIT signal counts. The old fallback tested the body against
+ * /logout|sign out|dashboard|account|profile|welcome/ when nothing was configured —
+ * but those words are all over ordinary LOGIN pages too (one panel's login page
+ * literally says "WELCOME TO <app>"), so it answered "authenticated" while on the login
+ * form and the step happily reported "session restored — login skipped", leaving
+ * every later step running logged-out. Guessing wrong here is worse than not
+ * guessing: without a success signal we log in, which costs a login but is correct.
+ *
+ * POLLS, rather than asking once. The caller navigates with waitUntil:"domcontentloaded"
+ * and probes immediately, and a dashboard that renders client-side has painted nothing at
+ * that point: body.innerText is near-empty and the success selector does not exist yet. A
+ * single shot therefore answered "not authenticated" for a perfectly good session — and on
+ * an OAuth step that is not a wasted login but a FAILED run, because the site, being
+ * logged in, shows no "Sign in with Google" button to click.
+ *
+ * With a criterion configured the rule is exactly: poll for the criterion; matched → skip
+ * the login, still not matched when the budget runs out → run the login flow. Nothing else
+ * gets a vote. A genuinely logged-out run therefore waits out the budget before logging in —
+ * a few seconds, which is the right price for not failing a run whose session was fine.
+ */
+async function isSessionAuthenticated(
+  page: PageAdapter,
+  successSelector?: string,
+  successText?: string,
+  opts?: { settleMs?: number },
+): Promise<boolean> {
+  // Same budget as the form path, for the same criterion.
+  //
+  // The MATCHER was unified and the BUDGET was not, which left the same disagreement in a
+  // new place: 8s here against 25s there. A dashboard that fetches its content after it
+  // renders — the case the 25s was raised for — passed the form check and failed this one,
+  // so cookie mode declared a perfectly good session dead and logged in on top of it.
+  //
+  // Without a criterion nothing is being waited FOR (the heuristics below read whatever is
+  // on the page now), so the short budget stays: waiting longer would only delay a login
+  // that is going to happen anyway.
+  const hasConfiguredCriterion = !!(successText?.trim() || successSelector?.trim());
+  const budgetMs =
+    opts?.settleMs ??
+    (hasConfiguredCriterion ? CRITERION_WAIT_MS : Number(process.env.SESSION_PROBE_MS ?? 8000));
+  const deadline = Date.now() + budgetMs;
+  for (let attempt = 1; ; attempt++) {
+    const done = await probeSessionOnce(page, successSelector, successText, attempt);
+    if (done !== null) return done;
+    if (Date.now() >= deadline) {
+      logger.debug({ attempt, hadCriterion: !!(successText || successSelector) }, "Session check: nothing conclusive before the deadline");
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
+/**
+ * One pass. `true`/`false` are verdicts; `null` means "too early to tell, ask again".
+ *
+ * When the step HAS a success criterion, that criterion is the only authority — nothing
+ * else may produce an early "no". Every other signal is a guess, and each of them fails on
+ * a client-rendered app: before hydration such a page often renders its LOGIN shell (so a
+ * provider button is visible), and a signed-in dashboard can legitimately contain a visible
+ * password field (a "change password" form). Acting on either one would skip the very wait
+ * this function exists to provide.
+ *
+ * The heuristics still run when there is NO criterion, because then they are all there is.
+ */
+async function probeSessionOnce(
+  page: PageAdapter,
+  successSelector: string | undefined,
+  successText: string | undefined,
+  attempt: number,
+): Promise<boolean | null> {
+  const hasCriterion = !!(successText?.trim() || successSelector?.trim());
+
+  if (successText) {
+    try {
+      // The SHARED matcher, not a raw `includes` on innerText. This probe used to be the
+      // strictest of the three success-text checks in the codebase while pretending to ask
+      // the same question: the very page that satisfied the form path failed here, the task
+      // concluded it was logged out, and it logged in again on top of a working session.
+      if (await pageHasSuccessText(page, successText)) {
+        logger.debug({ attempt, successText }, "Session check: success TEXT found on the page");
+        return true;
+      }
+      logger.debug({ attempt, successText }, "Session check: success text not on the page yet");
+    } catch {}
+  }
+  if (successSelector) {
+    // The shared check, not a second copy of it. This one was identical to selectorIsVisible
+    // by luck rather than by construction, and the text check next to it had already drifted
+    // once with exactly that excuse.
+    try {
+      if (await selectorIsVisible(page, successSelector)) {
+        logger.debug({ attempt, successSelector }, "Session check: success SELECTOR matched and is visible");
+        return true;
+      }
+      logger.debug({ attempt, successSelector }, "Session check: success selector not visible yet");
+    } catch {}
+  }
+  if (hasCriterion) {
+    // Configured criterion, not matched yet. Keep waiting — this is the whole point.
+    return null;
+  }
+
+  // No criterion configured: fall back to reading the page. Only a POSITIVE signal counts
+  // as authenticated; "unknown" keeps the old, safe behaviour of logging in.
+  const { verdict, evidence } = await detectLoginState(page);
+  if (verdict === "logged_in") {
+    logger.info({ evidence }, "Session looks authenticated (no explicit success criterion configured)");
+    return true;
+  }
+  if (verdict === "logged_out") {
+    logger.debug({ attempt, evidence }, "Session check: login affordance visible and no criterion configured — not authenticated");
+    return false;
+  }
+  logger.debug({ attempt, verdict, evidence }, "Session check: page unreadable and no criterion configured");
+  return null;
+}
+
+/**
+ * Clear a Cloudflare challenge / Turnstile widget if one is currently blocking
+ * the page. Returns true when a challenge was detected AND cleared (so the
+ * caller should retry its action), false when there was nothing to clear or it
+ * could not be cleared. Safe to call unconditionally.
+ */
+async function clearCloudflareIfPresent(page: PageAdapter): Promise<boolean> {
+  try {
+    const result = await bypassCloudflareChallenge(page);
+    if (result === "passed") {
+      logger.info("Cloudflare challenge cleared before continuing step");
+      return true;
+    }
+    return false;
+  } catch (err) {
+    logger.debug({ err }, "clearCloudflareIfPresent threw — ignoring");
+    return false;
+  }
+}
+
+/**
+ * waitForSelector that transparently clears a Cloudflare challenge/Turnstile if
+ * the selector does not appear in time. Some flows (a confirm-and-continue
+ * button) only become clickable after a CF interstitial or Turnstile widget is
+ * passed. If the first wait times out, we attempt to clear the challenge and
+ * wait once more before surfacing the original error.
+ */
+async function waitForSelectorWithCf(
+  page: PageAdapter,
+  selector: string,
+  timeout: number,
+): Promise<void> {
+  try {
+    await page.waitForSelector(selector, { timeout });
+    return;
+  } catch (firstErr) {
+    if (page.isClosed()) throw firstErr;
+    const cleared = await clearCloudflareIfPresent(page);
+    if (!cleared) throw firstErr;
+    await page.waitForSelector(selector, { timeout });
+  }
+}
+
+/**
+ * TRUE exact, case-sensitive text presence for the "Page contains text" condition and
+ * the "Text on page" waitFor: is there a VISIBLE element whose trimmed text equals
+ * `needle` exactly? "Stop" matches <button>Stop</button> but NOT "Stopped" nor
+ * "Server Stopped"; "停止" matches <span>停止</span> but NOT "已停止". Works identically
+ * for ASCII and CJK — no word-boundary tricks — and mirrors clickByText's strictness.
+ */
+async function pageHasExactText(page: PageAdapter, needle: string): Promise<boolean> {
+  const target = needle.trim();
+  if (!target) return false;
+  return (await page.evaluate((want: unknown) => {
+    const t = String(want);
+    for (const el of Array.from(document.querySelectorAll("body, body *"))) {
+      if (((el.textContent || "").trim()) !== t) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return true; // visible element with EXACTLY this text
+    }
+    return false;
+  }, target).catch(() => false)) as boolean;
+}
+
+/**
+ * Tick the checkbox that belongs to a piece of text.
+ *
+ * Consent boxes are the case the text-click path could not express: the thing you can name
+ * is the sentence ("I have read and agree to the Terms"), and the thing you must click is a
+ * 13px input somewhere to its left. Writing a CSS selector for that input works until the
+ * page changes, and clicking coordinates is worse.
+ *
+ * Resolution, in order of how reliable the association is:
+ *   1. <label for="x"> — an explicit, authored association. Clicking the LABEL is what a
+ *      person does, and the browser toggles the input natively, so no coordinates and no
+ *      synthetic events.
+ *   2. a checkbox wrapped inside a matching <label>.
+ *   3. aria-label / aria-labelledby on the input itself.
+ *   4. the checkbox nearest BEFORE the matching text within the same block — the plain
+ *      `<input><span>I agree…</span>` layout that has no label element at all.
+ *
+ * Matching is "contains", normalised for whitespace, unlike the button path's exact match:
+ * consent sentences are long, usually wrap links mid-sentence ("agree to the <a>Terms</a>
+ * and <a>Privacy Policy</a>"), and nobody can be expected to reproduce that string exactly.
+ *
+ * Returns whether the box ENDED UP checked, not merely whether something was clicked —
+ * a consent box that silently failed to tick would fail the form submit later, with an
+ * error that points nowhere near here.
+ */
+async function tickCheckboxByText(
+  page: PageAdapter,
+  text: string,
+): Promise<{ found: boolean; checked: boolean; method: string }> {
+  const result = (await page
+    .evaluate((needleRaw: unknown) => {
+      const needle = String(needleRaw).trim().replace(/\s+/g, " ").toLowerCase();
+      const norm = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+      const visible = (el: Element): boolean => {
+        const r = el.getBoundingClientRect();
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        // A styled checkbox is often the 0x0 input behind a drawn one; that is still a
+        // legitimate target, so size alone does not disqualify it — but its label must be
+        // on screen, which the label branches below check.
+        return !(r.width === 0 && r.height === 0 && st.opacity === "0" && st.position === "fixed");
+      };
+      const boxes = Array.from(
+        document.querySelectorAll<HTMLInputElement>("input[type='checkbox'], [role='checkbox']"),
+      ).filter((b) => !b.disabled && visible(b));
+      if (boxes.length === 0) return { found: false, checked: false, method: "no checkbox on the page" };
+
+      const isChecked = (el: Element) =>
+        el instanceof HTMLInputElement ? el.checked : el.getAttribute("aria-checked") === "true";
+
+      // 1 + 2 — an authored label. Click the LABEL, which toggles natively.
+      for (const label of Array.from(document.querySelectorAll<HTMLLabelElement>("label"))) {
+        if (!norm(label.textContent).includes(needle)) continue;
+        const forId = label.getAttribute("for");
+        const box =
+          (forId ? document.getElementById(forId) : null) ??
+          label.querySelector<HTMLInputElement>("input[type='checkbox'], [role='checkbox']");
+        if (!box || !boxes.includes(box as HTMLInputElement)) continue;
+        if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+        (label as HTMLElement).click();
+        return { found: true, checked: isChecked(box), method: forId ? "label[for]" : "wrapping label" };
+      }
+
+      // 3 — the input describes itself.
+      for (const box of boxes) {
+        const described = box.getAttribute("aria-labelledby");
+        const viaIds = described
+          ? described
+              .split(/\s+/)
+              .map((id) => norm(document.getElementById(id)?.textContent))
+              .join(" ")
+          : "";
+        if (norm(box.getAttribute("aria-label")).includes(needle) || viaIds.includes(needle)) {
+          if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+          box.click();
+          return { found: true, checked: isChecked(box), method: "aria label" };
+        }
+      }
+
+      // 4 — no label element: the nearest checkbox before the text, in the same block.
+      const holder = Array.from(document.querySelectorAll<HTMLElement>("*")).find((el) => {
+        if (el.children.length > 3) return false; // a leaf-ish node, not a whole section
+        return norm(el.textContent).includes(needle) && visible(el);
+      });
+      if (holder) {
+        // Walk outwards a few levels looking for a checkbox that sits before this text.
+        let scope: HTMLElement | null = holder;
+        for (let up = 0; up < 4 && scope; up++, scope = scope.parentElement) {
+          const near = Array.from(
+            scope.querySelectorAll<HTMLInputElement>("input[type='checkbox'], [role='checkbox']"),
+          ).filter((b) => boxes.includes(b));
+          if (near.length === 1) {
+            const box = near[0]!;
+            if (isChecked(box)) return { found: true, checked: true, method: "already checked" };
+            box.click();
+            return { found: true, checked: isChecked(box), method: "nearest checkbox in the same block" };
+          }
+        }
+      }
+      return { found: false, checked: false, method: "no checkbox matched that text" };
+    }, text as never)
+    .catch(() => ({ found: false, checked: false, method: "page not readable" }))) as {
+    found: boolean;
+    checked: boolean;
+    method: string;
+  };
+
+  if (result.found) {
+    logger.info({ text, ...result }, "Checkbox resolved from its text");
+  } else {
+    logger.debug({ text, reason: result.method }, "No checkbox matched that text");
+  }
+  return result;
+}
+
+async function clickByText(
+  page: PageAdapter,
+  text: string,
+): Promise<{ found: boolean; reacted: boolean; changes: number; method: string }> {
+  // #fix-clickByText — STRICT matching: exact text, case-sensitive.
+  // No lowercasing and no partial/`includes` fallback, so "Login" never matches
+  // "login" and "Log" never matches "Login". The click target must equal the
+  // element's trimmed text (or value / aria-label) exactly.
+  const target = text.trim();
+  // Find a VISIBLE **and ENABLED** match, then click it via a STABLE unique
+  // selector derived from the element ITSELF — not a custom marker attribute.
+  //
+  // Why not tag the element? The old code set data-wa-textclick="1" and clicked
+  // "[data-wa-textclick='1']". On reactive frameworks (a spin wheel, say, is
+  // Vue) the button re-renders right as it flips disabled→enabled — exactly when
+  // we're about to click — and that patch drops the foreign attribute (or swaps
+  // the node). The follow-up click then resolves to nothing, yet the step still
+  // reports success because the earlier "found" was true. A plain CSS click on
+  // the button's own stable class (e.g. button.wheel-cta) never had this problem.
+  // So we mirror the CSS path: locate the element, derive a selector from its own
+  // stable identity, and click THAT.
+  //
+  // Retry for a few seconds: buttons often render DISABLED until their state
+  // loads (the wheel stays disabled until its availability API resolves), and
+  // clicking a disabled button silently does nothing.
+  const deadline = Date.now() + 8000;
+  let sel: string | null = null;
+  while (Date.now() < deadline) {
+    sel = (await page.evaluate((btnText: unknown) => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "button, a, input[type='button'], input[type='submit'], [role='button']",
+        ),
+      );
+      const isClickable = (el: HTMLElement): boolean => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0) return false;
+        if ((el as HTMLButtonElement | HTMLInputElement).disabled) return false;
+        if (el.getAttribute("aria-disabled") === "true") return false;
+        return true;
+      };
+      const getElText = (el: HTMLElement): string =>
+        (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
+      // Build a selector that pins down THIS element via its own stable identity:
+      // id → a single distinctive class → structural nth-of-type path.
+      const uniqueSelector = (el: Element): string | null => {
+        const esc = (s: string): string =>
+          window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+        const tag = el.tagName.toLowerCase();
+        if (el.id && document.querySelectorAll(`#${esc(el.id)}`).length === 1) return `#${esc(el.id)}`;
+        // a single class that uniquely identifies it — skip Tailwind state
+        // variants ("disabled:opacity-75") whose escaped colons are brittle.
+        for (const c of Array.from(el.classList)) {
+          if (c.includes(":")) continue;
+          const s = `${tag}.${esc(c)}`;
+          if (document.querySelectorAll(s).length === 1) return s;
+        }
+        // structural fallback: shortest nth-of-type path that is unique
+        const parts: string[] = [];
+        let node: Element | null = el;
+        while (node && node.nodeType === 1 && node !== document.body) {
+          const cur: Element = node;
+          let part = cur.tagName.toLowerCase();
+          const parent: Element | null = cur.parentElement;
+          if (parent) {
+            const sibs = Array.from(parent.children).filter((c) => c.tagName === cur.tagName);
+            if (sibs.length > 1) part += `:nth-of-type(${sibs.indexOf(cur) + 1})`;
+          }
+          parts.unshift(part);
+          if (document.querySelectorAll(parts.join(" > ")).length === 1) return parts.join(" > ");
+          node = parent;
+        }
+        return parts.length ? parts.join(" > ") : null;
+      };
+      for (const el of candidates) {
+        if (getElText(el) === (btnText as string) && isClickable(el)) {
+          try { el.scrollIntoView({ block: "center", inline: "center" }); } catch { /* ignore */ }
+          return uniqueSelector(el);
+        }
+      }
+      return null;
+    }, target as never)) as string | null;
+    if (sel) break;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  if (!sel) return { found: false, reacted: false, changes: 0, method: "none" };
+  const stableSel = sel;
+  await new Promise((r) => setTimeout(r, 200)); // let the scroll settle
+
+  // Snapshot URL + install a mutation counter so we can tell whether the click
+  // actually DID anything — surfaced in the step message so "clicked but nothing
+  // happened" is visible without digging container logs. (Reward wheels animate an
+  // SVG/IMG transform, which counts as mutations, so this catches them.)
+  const urlBefore = (await page.evaluate(() => {
+    const w = window as unknown as { __waMut?: number; __waMo?: MutationObserver };
+    w.__waMut = 0;
+    try { w.__waMo?.disconnect(); } catch { /* ignore */ }
+    const mo = new MutationObserver((ms) => { w.__waMut = (w.__waMut || 0) + ms.length; });
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    w.__waMo = mo;
+    return location.href;
+  }).catch(() => "")) as string;
+
+  // Click the element through its OWN stable selector — the exact same robust
+  // path a CSS click step takes. Synthetic fallback only if the real click throws.
+  const doClick = async (): Promise<string> => {
+    try {
+      await page.click(stableSel); // real, trusted click via the backend
+      return "real";
+    } catch (err) {
+      logger.warn({ text: target, sel: stableSel, err: err instanceof Error ? err.message : String(err) },
+        "clickByText: real click threw — falling back to a synthetic click");
+      await page.evaluate((s: string) => {
+        const el = document.querySelector<HTMLElement>(s);
+        if (el) el.click();
+      }, stableSel as never).catch(() => {});
+      return "synthetic";
+    }
+  };
+  const observe = async (): Promise<{ mut: number; url: string }> => {
+    await new Promise((r) => setTimeout(r, 1200));
+    return (await page.evaluate(() => {
+      const w = window as unknown as { __waMut?: number };
+      return { mut: w.__waMut || 0, url: location.href };
+    }).catch(() => ({ mut: 0, url: "" }))) as { mut: number; url: string };
+  };
+
+  const method = await doClick();
+  const r = await observe();
+  const reacted = r.mut > 5 || (!!r.url && r.url !== urlBefore);
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __waMo?: MutationObserver };
+    try { w.__waMo?.disconnect(); } catch { /* ignore */ }
+  }).catch(() => {});
+  logger.info({ text: target, sel: stableSel, method, reacted, changes: r.mut }, "clickByText done");
+  return { found: true, reacted, changes: r.mut, method };
+}
