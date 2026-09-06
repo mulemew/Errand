@@ -84,7 +84,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build & push app image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -109,7 +109,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build & push provider-seleniumbase image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: artifacts/cf-proxy
           file: artifacts/cf-proxy/Dockerfile
@@ -134,7 +134,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build & push provider-camoufox image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: artifacts/camoufox-proxy
           file: artifacts/camoufox-proxy/Dockerfile
