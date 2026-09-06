@@ -185,6 +185,56 @@ export interface BrowserProvider {
   readAllCookies?(): Promise<Array<Record<string, unknown>>>;
 }
 
+/**
+ * A saved session that one bad cookie cannot make unopenable.
+ *
+ * newContext() validates the whole storageState and refuses ALL of it if any single cookie
+ * fails — so one malformed entry does not degrade a session, it deletes a browser. Seen in
+ * production: eleven cookies whose expires came out of a profile in milliseconds, and the
+ * browser they belonged to could not be launched again at all.
+ *
+ * Repairing on the way IN matters as much as writing it correctly, because a state that was
+ * already saved wrong is still in the database. Cookies are normalised, and only the ones
+ * that cannot be salvaged are dropped — losing one cookie is a login that might need
+ * redoing; losing the state is a browser that will not start.
+ */
+const MAX_COOKIE_EXPIRES = 253402300799; // 9999-12-31, the ceiling Playwright enforces
+
+function sanitizeStorageState(state: unknown): unknown {
+  if (!state || typeof state !== "object") return state;
+  const s = state as { cookies?: unknown };
+  if (!Array.isArray(s.cookies)) return state;
+
+  let repaired = 0;
+  let dropped = 0;
+  const cookies: Array<Record<string, unknown>> = [];
+  for (const raw of s.cookies as Array<Record<string, unknown>>) {
+    if (!raw || typeof raw !== "object" || !raw.name || !raw.domain) {
+      dropped++;
+      continue;
+    }
+    const c = { ...raw };
+    const e = Number(c.expires);
+    if (!Number.isFinite(e) || e <= 0) {
+      // 0, NaN, undefined and every negative other than -1 all mean the same thing to us.
+      if (c.expires !== -1) repaired++;
+      c.expires = -1;
+    } else if (e > MAX_COOKIE_EXPIRES) {
+      // Milliseconds, most likely — that is what the profile's own column turned out to be.
+      const asSeconds = Math.floor(e / 1000);
+      c.expires = asSeconds > 0 && asSeconds <= MAX_COOKIE_EXPIRES ? asSeconds : -1;
+      repaired++;
+    }
+    if (!["Strict", "Lax", "None"].includes(String(c.sameSite))) c.sameSite = "Lax";
+    if (typeof c.path !== "string" || !c.path) c.path = "/";
+    cookies.push(c);
+  }
+  if (repaired || dropped) {
+    logger.warn({ repaired, dropped, kept: cookies.length }, "Repaired a saved session before restoring it");
+  }
+  return { ...(state as object), cookies };
+}
+
 // ── Stealth constants ─────────────────────────────────────────────────────────
 
 /** Pool of recent real-world Chrome UA strings — one is picked at random per session. */
@@ -671,7 +721,7 @@ class PlaywrightCDPProvider implements BrowserProvider {
         userAgent: ua,
         screen: vp,
         ...(proxyServer ? { proxy: { server: proxyServer.serverUrl } } : {}),
-        ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
+        ...(this.config.storageState ? { storageState: sanitizeStorageState(this.config.storageState) as never } : {}),
         ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
       });
 
@@ -951,7 +1001,7 @@ class CamoufoxProvider implements BrowserProvider {
       const makeContext = async (viewport: { width: number; height: number }) => {
         const c = await browser.newContext({
           viewport,
-          ...(this.config.storageState ? { storageState: this.config.storageState as never } : {}),
+          ...(this.config.storageState ? { storageState: sanitizeStorageState(this.config.storageState) as never } : {}),
           ignoreHTTPSErrors: this.config.ignoreHTTPS ?? false,
         });
         c.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);

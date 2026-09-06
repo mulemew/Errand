@@ -1217,17 +1217,39 @@ def session_cookies(sid):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    # Firefox stores sameSite as 0/1/2; Playwright wants the names.
+    # Playwright refuses a whole storageState over one bad cookie, and the units in this
+    # column are not what the name suggests. Read off a live profile: expiry 1804225933481,
+    # which is milliseconds — as seconds that is the year 59136, past the year-9999 ceiling
+    # Playwright enforces, and every launch that tried to restore it failed with "Cookie
+    # should have a valid expires". So the value is normalised by magnitude rather than
+    # trusted: seconds if it looks like seconds, milliseconds folded down, anything still
+    # implausible treated as a session cookie, which is the harmless answer.
+    MAX_EXPIRES = 253402300799  # 9999-12-31, the same ceiling Playwright checks against
+
+    def as_seconds(v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return -1
+        if n <= 0:
+            return -1              # 0 means "session cookie" here, and so does -1 there
+        if n > MAX_EXPIRES:
+            n //= 1000             # milliseconds
+        return n if 0 < n <= MAX_EXPIRES else -1
+
+    # Firefox stores sameSite as 0/1/2, and 256 turns up too — anything unrecognised is
+    # Lax, which is the browser default for a cookie that does not say.
     same = {0: "None", 1: "Lax", 2: "Strict"}
     out = []
     for name, value, host, path, expiry, secure, http_only, sslot, oa in rows:
+        if not name or not host:
+            continue
         out.append({
             "name": name,
             "value": value,
             "domain": host,
             "path": path or "/",
-            # Playwright reads -1 as a session cookie, which is what expiry 0 means here.
-            "expires": int(expiry) if expiry else -1,
+            "expires": as_seconds(expiry),
             "httpOnly": bool(http_only),
             "secure": bool(secure),
             "sameSite": same.get(sslot, "Lax"),
