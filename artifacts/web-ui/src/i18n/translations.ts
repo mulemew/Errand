@@ -338,6 +338,8 @@ export interface Translations {
       noSavedCredentials: string;
       successSelector: string;
       successText: string;
+      successCriterion: string;
+      successCriterionHint: string;
       ifCondition: string;
       addAction: string;
       removeAction: string;
@@ -1122,6 +1124,8 @@ export interface Translations {
       noSavedCredentials: "暂无已保存凭证，请手动输入或前往",
       successSelector: "成功选择器",
       successText: "成功文本",
+      successCriterion: "登录成功判据",
+      successCriterionHint: "登录成功后页面上一定会出现的东西：一段文字、一个 CSS 选择器或 XPath 都行。选「auto」就不用管是哪种——先当选择器试，匹配不到再当文字找。",
       ifCondition: "条件类型",
       addAction: "+ 添加动作",
       removeAction: "移除",
@@ -1897,6 +1901,8 @@ export interface Translations {
       noSavedCredentials: "No saved credentials yet. Enter inline or add one in",
       successSelector: "Success Selector",
       successText: "Success Text",
+      successCriterion: "Success criterion",
+      successCriterionHint: "Something the page is sure to show once login worked: a piece of text, a CSS selector or an XPath. Leave it on \"auto\" and you do not have to say which — it is tried as a selector first, then read as text.",
       ifCondition: "If condition",
       addAction: "+ Add action",
       removeAction: "Remove",

@@ -54,12 +54,14 @@ export const ClickStepType = {
 } as const;
 
 /**
- * text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression
+ * auto=work it out from the value (a leading "/" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression
+
  */
 export type ClickStepSelectorType =
   (typeof ClickStepSelectorType)[keyof typeof ClickStepSelectorType];
 
 export const ClickStepSelectorType = {
+  auto: "auto",
   text: "text",
   css: "css",
   xpath: "xpath",
@@ -68,7 +70,8 @@ export const ClickStepSelectorType = {
 export interface ClickStep {
   type: ClickStepType;
   selector: string;
-  /** text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression */
+  /** auto=work it out from the value (a leading "/" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression
+   */
   selectorType: ClickStepSelectorType;
 }
 
@@ -262,6 +265,20 @@ export const LoginStepLoginMethod = {
 } as const;
 
 /**
+ * How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.
+
+ */
+export type LoginStepSuccessCriterionType =
+  (typeof LoginStepSuccessCriterionType)[keyof typeof LoginStepSuccessCriterionType];
+
+export const LoginStepSuccessCriterionType = {
+  auto: "auto",
+  text: "text",
+  css: "css",
+  xpath: "xpath",
+} as const;
+
+/**
  * Whether to use a saved credential (credentialId) or inline username/password
  */
 export type LoginStepCredentialSource =
@@ -293,6 +310,12 @@ export interface LoginStep {
    */
   cookies?: string;
   successText?: string;
+  /** What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.
+   */
+  successCriterion?: string;
+  /** How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.
+   */
+  successCriterionType?: LoginStepSuccessCriterionType;
   /** ID of a saved credential to use for this login step */
   credentialId?: number;
   /** Whether to use a saved credential (credentialId) or inline username/password */

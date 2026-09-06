@@ -2,6 +2,7 @@ import path from "path";
 import fs from "fs";
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
+import { clickWithFallback, focusForTyping } from "./click-helpers";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
 import { detectLoginState } from "./login-verify";
@@ -217,9 +218,44 @@ async function probeCondition(
 }
 
 
+/**
+ * One criterion field, however it was written.
+ *
+ * The login step grew two: successText and successSelector, and nothing told the operator
+ * which was which. A username typed into the SELECTOR box became the CSS selector
+ * `mulebot` — valid syntax, matches a <mulebot> element, matches nothing that has ever
+ * existed — so cookie mode spent 25s per run proving a live session was dead, threw its
+ * cookies away and logged in again, every time. The GitHub path read neither field, so the
+ * same value there was ignored outright and the login reported success without checking.
+ *
+ * They are one field now, with a kind that defaults to "auto": the value is handed to BOTH
+ * matchers and either one satisfying it is enough. A selector matches as a selector, prose
+ * matches as text, and a selector that matches nothing falls through to being read as text
+ * rather than silently failing forever. An invalid selector is already "not visible"
+ * rather than an error, so nothing here can throw.
+ *
+ * Tasks written before this keep their two fields and keep working; the editor migrates a
+ * task the first time it is saved.
+ */
+function loginCriterion(step: {
+  successCriterion?: string;
+  successCriterionType?: SelectorKind;
+  successSelector?: string;
+  successText?: string;
+}): { wantSelector?: string; wantText?: string } {
+  const unified = step.successCriterion?.trim();
+  if (unified) {
+    const kind = step.successCriterionType ?? "auto";
+    if (kind === "text") return { wantText: unified };
+    if (kind === "css" || kind === "xpath") return { wantSelector: unified };
+    return { wantSelector: unified, wantText: unified };
+  }
+  return { wantSelector: step.successSelector, wantText: step.successText };
+}
+
 export type WorkflowStep =
   | { type: "navigate"; url: string; timeout?: number }
-  | { type: "click"; selector: string; selectorType: "text" | "css" | "xpath" }
+  | { type: "click"; selector: string; selectorType: SelectorKind }
   | { type: "fill"; selector: string; value: string }
   | { type: "select"; selector: string; value: string }
   | { type: "scroll"; selector?: string; x?: number; y?: number }
@@ -231,7 +267,7 @@ export type WorkflowStep =
   | { type: "cfVerify"; url?: string; maxReloads?: number }
   | { type: "switchToNewPage"; timeout?: number }
   | { type: "keypress"; key: string }
-  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
+  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successCriterion?: string; successCriterionType?: SelectorKind; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
   | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; conditionSelectorType?: SelectorKind; thenAction: BranchAction; elseAction?: BranchAction };
 
 export interface StepResult {
@@ -506,51 +542,6 @@ async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promi
   return false;
 }
 
-/**
- * A click that cannot spend the whole step budget being ignored.
- *
- * `page.click` waits for the element to be visible, stable and hit-testable and THEN
- * performs the click — and on a button wired to a proof-of-work widget that last part can
- * simply never return. Seen on a renew button carrying data-altcha-wired: the log reads
- *
- *     element is visible, enabled and stable / done scrolling / performing click action
- *
- * and then sixty seconds of nothing, twice, and the task fails. clickByText has had a
- * synthetic fallback for exactly this since the first site that did it; the CSS and XPath
- * branches were a bare page.click and inherited none of it, so which of two identical
- * clicks in the same run survived came down to luck.
- *
- * The real click goes first because it is the trusted one — a synthetic .click() skips the
- * pointer events some widgets check. It just no longer gets a full minute to prove it is
- * stuck, and what actually happened ends up in the step's own message rather than only in
- * the logs.
- */
-// 25s, not the 60s default and not less: long enough that a slow page still gets its real,
-// trusted click, short enough that two stuck attempts no longer eat a two-minute budget.
-const REAL_CLICK_TIMEOUT_MS = 25000;
-
-async function clickWithFallback(page: PageAdapter, selector: string): Promise<"real" | "synthetic"> {
-  try {
-    await page.click(selector, { timeout: REAL_CLICK_TIMEOUT_MS });
-    return "real";
-  } catch (err) {
-    logger.warn(
-      { selector, err: err instanceof Error ? err.message : String(err) },
-      "Real click did not land — falling back to a synthetic click",
-    );
-    await page
-      .evaluate((sel: string) => {
-        const el = sel.startsWith("xpath=")
-          ? (document.evaluate(sel.slice(6), document, null, 9 /* FIRST_ORDERED_NODE_TYPE */, null)
-              .singleNodeValue as HTMLElement | null)
-          : document.querySelector<HTMLElement>(sel);
-        if (el) el.click();
-      }, selector as never)
-      .catch(() => {});
-    return "synthetic";
-  }
-}
-
 async function executeStep(
   page: PageAdapter,
   step: WorkflowStep,
@@ -613,7 +604,22 @@ async function executeStep(
     case "click": {
       const urlBefore = page.url();
 
-      if (step.selectorType === "text") {
+      // "auto" decides here rather than making the operator classify their own string.
+      // Same rule the condition step has always used: a leading "/" is XPath, anything the
+      // page actually contains as an element is CSS, and whatever is left is text — so a
+      // button's visible label works typed in as-is, and so does "#renew-modal button".
+      let kind: SelectorKind = step.selectorType ?? "auto";
+      if (kind === "auto") {
+        if (/^\(?\s*\//.test(step.selector.trim())) {
+          kind = "xpath";
+        } else {
+          const isCss = await page.$(step.selector).then((el) => !!el).catch(() => false);
+          kind = isCss ? "css" : "text";
+        }
+        logger.debug({ selector: step.selector, resolved: kind }, "Click selector kind resolved automatically");
+      }
+
+      if (kind === "text") {
         let res = await clickByText(page, step.selector);
         if (!res.found) {
           // The target may be gated behind a Cloudflare challenge/Turnstile that
@@ -640,7 +646,7 @@ async function executeStep(
         return { message: `Clicked element matching text "${step.selector}" [${res.method} click] — ${reaction}` };
       }
 
-      if (step.selectorType === "xpath") {
+      if (kind === "xpath") {
         const xpathSel = `xpath=${step.selector}`;
         await waitForSelectorWithCf(page, xpathSel, 5000);
         const how = await clickWithFallback(page, xpathSel);
@@ -656,8 +662,9 @@ async function executeStep(
 
     case "fill": {
       await page.waitForSelector(step.selector, { timeout: 5000 });
-      // #fix-fill — click to focus the element before clearing and typing.
-      await page.click(step.selector);
+      // #fix-fill — put the caret in the field before clearing and typing. A click that
+      // will not land must not cost the step its budget; the typing below is what matters.
+      await focusForTyping(page, step.selector);
       await page.evaluate((sel: string) => {
         const el = document.querySelector<HTMLInputElement>(sel);
         if (el) el.value = "";
@@ -981,6 +988,9 @@ async function executeStep(
 
     case "login": {
       const loginUrl = step.loginUrl || targetUrl;
+      // One criterion for every path below — the probe, the affordance check and all three
+      // login flows — so they cannot disagree about what the operator asked for.
+      const _crit = loginCriterion(step);
       logger.info({ taskId, stepIndex, loginMethod: step.loginMethod, loginUrl }, "Executing login step");
 
       // ── Cookie mode: skip login if a restored session is still valid ──────
@@ -999,7 +1009,7 @@ async function executeStep(
         // so the run would fail as "invalid cookie" even with a perfectly good session.
         // Say that outright instead of blaming the cookie. (The task form also refuses to
         // save a cookie-login step without one — this covers older tasks and the API.)
-        if (!step.successSelector?.trim() && !step.successText?.trim()) {
+        if (!_crit.wantSelector?.trim() && !_crit.wantText?.trim()) {
           throw new Error(
             "Cookie 登录缺少「登录成功判据」：请在该登录步骤填写「登录成功文字」或「登录成功选择器」。" +
               "没有判据就无法判断 cookie 是否有效，只能一律当作无效。",
@@ -1007,7 +1017,7 @@ async function executeStep(
         }
         await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await dismissPopups(page);
-        const ok = await isSessionAuthenticated(page, step.successSelector, step.successText);
+        const ok = await isSessionAuthenticated(page, _crit.wantSelector, _crit.wantText);
         if (ok) {
           logger.info({ taskId, stepIndex }, "Cookie login — session is valid");
           return { message: "Cookie session valid — logged in without a login flow" };
@@ -1024,10 +1034,10 @@ async function executeStep(
           await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
           await dismissPopups(page);
           logger.debug(
-            { loginUrl, url: page.url(), hasText: !!step.successText, hasSelector: !!step.successSelector },
+            { loginUrl, url: page.url(), hasText: !!_crit.wantText, hasSelector: !!_crit.wantSelector },
             "Cookie mode — probing the restored session",
           );
-          const alreadyIn = await isSessionAuthenticated(page, step.successSelector, step.successText);
+          const alreadyIn = await isSessionAuthenticated(page, _crit.wantSelector, _crit.wantText);
           if (alreadyIn) {
             logger.info({ taskId, stepIndex }, "Cookie mode — existing session detected, skipping login");
             return { message: "Session restored from saved cookies — login skipped" };
@@ -1155,12 +1165,12 @@ async function executeStep(
             );
             const runLogin = async () => {
               if (step.loginMethod === "github") {
-                return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+                return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
               }
               if (step.loginMethod === "google") {
-                return googleLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successText, step.successSelector);
+                return googleLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
               }
-              return formLogin(page, loginUrl, { username, password, totpSecret }, solver, step.successSelector, totpSecret, step.successText);
+              return formLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantSelector, totpSecret, _crit.wantText);
             };
             loginResult = await Promise.race([
               runLogin(),
@@ -1762,7 +1772,7 @@ async function clickByText(
   // takes, fallback included.
   const doClick = async (): Promise<string> => {
     try {
-      await page.click(stableSel); // real, trusted click via the backend
+      await page.click(stableSel, { timeout: 25000 }); // real, trusted click — capped so the fallback is not a minute away
       return "real";
     } catch (err) {
       logger.warn({ text: target, sel: stableSel, err: err instanceof Error ? err.message : String(err) },

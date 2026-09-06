@@ -19,7 +19,7 @@ const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 type WorkflowStep =
   | { type: "navigate"; url: string }
-  | { type: "click"; selector: string; selectorType: "text" | "css" | "xpath" }
+  | { type: "click"; selector: string; selectorType: "auto" | "text" | "css" | "xpath" }
   | { type: "fill"; selector: string; value: string }
   | { type: "select"; selector: string; value: string }
   | { type: "scroll"; selector?: string; x?: number; y?: number }

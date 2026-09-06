@@ -1,3 +1,5 @@
+import { focusForTyping } from "./click-helpers";
+import { waitForSuccessCriterion } from "./success-text";
 import type { PageAdapter } from "./page-adapter";
   import crypto from "crypto";
   import { logger } from "../lib/logger";
@@ -61,6 +63,39 @@ import type { PageAdapter } from "./page-adapter";
 
   async function nav(page: PageAdapter, timeout = 20000): Promise<void> {
     await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout }).catch(() => {});
+  }
+
+  /**
+   * Did the form take itself away while we were reaching for its button?
+   *
+   * GitHub submits the TOTP form the moment the sixth digit lands, and the sign-in form
+   * does the same on Enter. Pressing a button on a page that is already navigating means
+   * waiting for an element that will never be actionable again — 60 seconds, per attempt,
+   * which is what made every GitHub login need a second one. So look before pressing.
+   */
+  async function formWentAway(page: PageAdapter, sel: string, url0: string, ms = 5000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (page.url() !== url0) return true;                 // already navigating away
+      if (!(await page.$(sel).catch(() => null))) return true; // the field is gone
+      await sleep(250);
+    }
+    return false;
+  }
+
+  /** A handle click that cannot outlast the navigation it is supposed to cause. */
+  async function submitVia(page: PageAdapter, btn: { click: (o?: { timeout?: number }) => Promise<void> } | null): Promise<void> {
+    const navP = nav(page, 30000);
+    if (btn) {
+      await btn.click({ timeout: 15000 }).catch(async (err: unknown) => {
+        logger.warn({ err: err instanceof Error ? err.message : String(err) },
+          "Submit button click did not land — pressing Enter instead");
+        await page.keyboard.press("Enter").catch(() => {});
+      });
+    } else {
+      await page.keyboard.press("Enter");
+    }
+    await navP;
   }
 
   // ── Click GitHub OAuth button ─────────────────────────────────────────────────
@@ -158,7 +193,7 @@ import type { PageAdapter } from "./page-adapter";
     // login"); typing with real key events is what GitHub expects. A native-setter
     // pass runs only as a self-healing fallback if the typed value didn't land.
     const jsFill = async (sel: string, val: string) => {
-      await page.click(sel);
+      await focusForTyping(page, sel);
       await page.evaluate((s: unknown) => {
         const el = document.querySelector<HTMLInputElement>(s as string);
         if (el) el.value = "";
@@ -186,12 +221,7 @@ import type { PageAdapter } from "./page-adapter";
 
     const submitSel = "input[type='submit'], button[type='submit'], .js-sign-in-button";
     const submitBtn = await page.$(submitSel);
-    if (submitBtn) {
-      await Promise.all([nav(page, 30000), submitBtn.click()]);
-    } else {
-      await page.keyboard.press("Enter");
-      await nav(page, 30000);
-    }
+    await submitVia(page, submitBtn);
   }
 
   // ── Handle 2FA ────────────────────────────────────────────────────────────────
@@ -201,9 +231,9 @@ import type { PageAdapter } from "./page-adapter";
     const code = generateTOTP(totpSecret);
     const otpSel = "#app_totp, input[name='otp'], input[autocomplete='one-time-code'], input[inputmode='numeric']";
     await page.waitForSelector(otpSel, { timeout: 10000 });
-    await page.click(otpSel);
+    const urlBeforeOtp = page.url();
+    await focusForTyping(page, otpSel);
     await page.keyboard.type(code, { delay: 80 });
-    await sleep(500);
 
     // Narrow first, but keep the original broad fallback last so this cannot match FEWER
     // pages than before.
@@ -211,12 +241,13 @@ import type { PageAdapter } from "./page-adapter";
       (await page.$("button[data-target*='verify'], button:has-text('Verify')")) ??
       (await page.$("form button[type='submit']")) ??
       (await page.$("button[type='submit']"));
-    if (verifyBtn) {
-      await Promise.all([nav(page, 30000), verifyBtn.click()]);
-    } else {
-      await page.keyboard.press("Enter");
+    if (await formWentAway(page, otpSel, urlBeforeOtp)) {
+      // It submitted itself; there is nothing left to press.
+      logger.info("GitHub 2FA submitted itself — not pressing Verify");
       await nav(page, 30000);
+      return;
     }
+    await submitVia(page, verifyBtn);
   }
 
   // ── Handle OAuth authorize screen ─────────────────────────────────────────────
@@ -395,17 +426,35 @@ import type { PageAdapter } from "./page-adapter";
                 logger.warn({ url: currentUrl }, "OAuth 'success' rejected — page still looks logged out");
                 return { success: false, captchaBlocked: false, message: landingErr };
               }
-              // 如果配置了 successText，验证页面含该文本才算登录成功
-              if (successText) {
-                await sleep(1500);
-                const hasText = await page.evaluate(
-                  (t: unknown) => (document.body?.innerText ?? "").includes(t as string),
-                  successText as never,
-                ).catch(() => false) as boolean;
-                if (!hasText) {
-                  logger.warn({ url: currentUrl, successText }, "OAuth completed but success text not found on page");
-                  return { success: false, captchaBlocked: false, message: `OAuth completed but success text "${successText}" not found. URL: ${currentUrl}` };
+              // The success text has to be WAITED for, not glanced at.
+              //
+              // This slept 1.5s and looked once. The redirect back from GitHub lands on an
+              // app that still has to fetch and render — through the task's proxy — and
+              // "My servers" was simply not there yet one and a half seconds in. The login
+              // had worked; it was reported as failed, the whole step retried, and the
+              // retry passed because by then the page had rendered. That is the second
+              // half of why every GitHub login needed two attempts.
+              //
+              // Same waiter the form login uses, same budget (LOGIN_CRITERION_WAIT_MS,
+              // 25s), so the two paths can no longer disagree about what counts as done.
+              // successSelector was accepted as a parameter and then never read — a
+              // criterion filled in on the task did nothing here, and the login reported
+              // success without ever checking it. The cookie-mode probe DOES honour it, so
+              // the same task could be told "no valid session" by one half of the system
+              // and "logged in" by the other. Both criteria are checked here now, and
+              // either one being satisfied is enough, exactly as the form login treats them.
+              if (successText?.trim() || successSelector?.trim()) {
+                const found = await waitForSuccessCriterion(page, successSelector, successText);
+                if (!found) {
+                  const want = [
+                    successText?.trim() ? `text "${successText}"` : "",
+                    successSelector?.trim() ? `selector "${successSelector}"` : "",
+                  ].filter(Boolean).join(" or ");
+                  logger.warn({ url: currentUrl, successText, successSelector },
+                    "OAuth completed but the success criterion never appeared");
+                  return { success: false, captchaBlocked: false, message: `OAuth completed but ${want} never appeared. URL: ${currentUrl}` };
                 }
+                logger.info({ url: currentUrl, found }, "OAuth landing confirmed");
               }
               logger.info({ finalUrl: currentUrl }, "GitHub OAuth completed successfully");
               return { success: true, captchaBlocked: false, message: `Logged in via GitHub OAuth. Final URL: ${currentUrl}` };

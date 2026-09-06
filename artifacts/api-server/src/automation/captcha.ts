@@ -1,3 +1,4 @@
+import { focusForTyping } from "./click-helpers";
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { bypassCloudflareChallenge, simulateHumanMouseMovement, clickTurnstileCheckbox, describeTurnstileState, turnstileCheckboxExists } from "./cloudflare-bypass";
@@ -1315,7 +1316,7 @@ export async function detectAndHandleCaptcha(
         };
       }
 
-      await page.click(imageDetection.inputSelector);
+      await focusForTyping(page, imageDetection.inputSelector);
       await page.keyboard.type(answer, { delay: 60 });
       logger.info({ solver: solver.name }, "Image captcha answer typed");
       return { detected: true, solved: true, message: `Image captcha solved via ${solver.name}` };

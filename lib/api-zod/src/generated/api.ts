@@ -64,9 +64,9 @@ export const ListTasksResponseItem = zod.object({
           type: zod.enum(["click"]),
           selector: zod.string(),
           selectorType: zod
-            .enum(["text", "css", "xpath"])
+            .enum(["auto", "text", "css", "xpath"])
             .describe(
-              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+              'auto=work it out from the value (a leading \"\/\" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression\n',
             ),
         }),
         zod.object({
@@ -232,6 +232,18 @@ export const ListTasksResponseItem = zod.object({
                 'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
               ),
             successText: zod.string().optional(),
+            successCriterion: zod
+              .string()
+              .optional()
+              .describe(
+                "What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText\/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.\n",
+              ),
+            successCriterionType: zod
+              .enum(["auto", "text", "css", "xpath"])
+              .optional()
+              .describe(
+                "How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.\n",
+              ),
             credentialId: zod
               .number()
               .optional()
@@ -423,9 +435,9 @@ export const CreateTaskBody = zod.object({
           type: zod.enum(["click"]),
           selector: zod.string(),
           selectorType: zod
-            .enum(["text", "css", "xpath"])
+            .enum(["auto", "text", "css", "xpath"])
             .describe(
-              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+              'auto=work it out from the value (a leading \"\/\" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression\n',
             ),
         }),
         zod.object({
@@ -591,6 +603,18 @@ export const CreateTaskBody = zod.object({
                 'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
               ),
             successText: zod.string().optional(),
+            successCriterion: zod
+              .string()
+              .optional()
+              .describe(
+                "What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText\/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.\n",
+              ),
+            successCriterionType: zod
+              .enum(["auto", "text", "css", "xpath"])
+              .optional()
+              .describe(
+                "How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.\n",
+              ),
             credentialId: zod
               .number()
               .optional()
@@ -767,9 +791,9 @@ export const GetTaskResponse = zod
             type: zod.enum(["click"]),
             selector: zod.string(),
             selectorType: zod
-              .enum(["text", "css", "xpath"])
+              .enum(["auto", "text", "css", "xpath"])
               .describe(
-                "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+                'auto=work it out from the value (a leading \"\/\" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression\n',
               ),
           }),
           zod.object({
@@ -935,6 +959,18 @@ export const GetTaskResponse = zod
                   'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
                 ),
               successText: zod.string().optional(),
+              successCriterion: zod
+                .string()
+                .optional()
+                .describe(
+                  "What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText\/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.\n",
+                ),
+              successCriterionType: zod
+                .enum(["auto", "text", "css", "xpath"])
+                .optional()
+                .describe(
+                  "How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.\n",
+                ),
               credentialId: zod
                 .number()
                 .optional()
@@ -1154,9 +1190,9 @@ export const UpdateTaskBody = zod.object({
           type: zod.enum(["click"]),
           selector: zod.string(),
           selectorType: zod
-            .enum(["text", "css", "xpath"])
+            .enum(["auto", "text", "css", "xpath"])
             .describe(
-              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+              'auto=work it out from the value (a leading \"\/\" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression\n',
             ),
         }),
         zod.object({
@@ -1322,6 +1358,18 @@ export const UpdateTaskBody = zod.object({
                 'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
               ),
             successText: zod.string().optional(),
+            successCriterion: zod
+              .string()
+              .optional()
+              .describe(
+                "What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText\/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.\n",
+              ),
+            successCriterionType: zod
+              .enum(["auto", "text", "css", "xpath"])
+              .optional()
+              .describe(
+                "How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.\n",
+              ),
             credentialId: zod
               .number()
               .optional()
@@ -1490,9 +1538,9 @@ export const UpdateTaskResponse = zod.object({
           type: zod.enum(["click"]),
           selector: zod.string(),
           selectorType: zod
-            .enum(["text", "css", "xpath"])
+            .enum(["auto", "text", "css", "xpath"])
             .describe(
-              "text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression",
+              'auto=work it out from the value (a leading \"\/\" is XPath, anything the page matches as an element is CSS, otherwise visible text), text=match by visible text\/aria-label, css=CSS selector, xpath=XPath expression\n',
             ),
         }),
         zod.object({
@@ -1658,6 +1706,18 @@ export const UpdateTaskResponse = zod.object({
                 'Cookie-mode seed, in document.cookie format (\"name=value; name2=value2\"). Only the site\'s login-ticket cookie is needed — its name differs per site (Pterodactyl\/Laravel panels use remember_web_\*, GitHub uses _github_session). Used only when no session has been saved yet; once a run succeeds the live cookie jar is persisted and takes over.\n',
               ),
             successText: zod.string().optional(),
+            successCriterion: zod
+              .string()
+              .optional()
+              .describe(
+                "What proves the login worked, as one field: a piece of text, a CSS selector or an XPath. Replaces the successText\/successSelector pair, which asked the operator to classify their own string and silently did nothing when they got it wrong. Steps written before this keep the old pair and keep working.\n",
+              ),
+            successCriterionType: zod
+              .enum(["auto", "text", "css", "xpath"])
+              .optional()
+              .describe(
+                "How to read successCriterion. auto (the default) hands it to both matchers and takes either one — so a selector matches as a selector, prose matches as text, and a selector that matches nothing is read as text rather than failing forever.\n",
+              ),
             credentialId: zod
               .number()
               .optional()

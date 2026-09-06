@@ -1,3 +1,4 @@
+import { focusForTyping } from "./click-helpers";
 import type { PageAdapter } from "./page-adapter";
   import { logger } from "../lib/logger";
   import { solveRecaptchaAudio } from "./recaptcha-audio";
@@ -1328,7 +1329,7 @@ export async function formLogin(
           if (otpVisible) {
               logger.info({ targetUrl }, "2FA / OTP field detected — auto-filling TOTP code");
               const code = generateTOTP(effectiveTotpSecret);
-              await page.click(otpSelectors);
+              await focusForTyping(page, otpSelectors);
               await page.evaluate((sel: unknown) => {
                 const el = document.querySelector<HTMLInputElement>(sel as string);
                 // Mark the field we are actually typing into, so the submit below can find

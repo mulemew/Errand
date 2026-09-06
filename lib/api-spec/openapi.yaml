@@ -521,8 +521,11 @@ components:
           type: string
         selectorType:
           type: string
-          enum: [text, css, xpath]
-          description: "text=match by visible text/aria-label, css=CSS selector, xpath=XPath expression"
+          enum: [auto, text, css, xpath]
+          description: >
+            auto=work it out from the value (a leading "/" is XPath, anything the page
+            matches as an element is CSS, otherwise visible text), text=match by visible
+            text/aria-label, css=CSS selector, xpath=XPath expression
       required: [type, selector, selectorType]
 
     FillStep:
@@ -704,6 +707,20 @@ components:
             cookie jar is persisted and takes over.
         successText:
           type: string
+        successCriterion:
+          type: string
+          description: >
+            What proves the login worked, as one field: a piece of text, a CSS selector or
+            an XPath. Replaces the successText/successSelector pair, which asked the
+            operator to classify their own string and silently did nothing when they got it
+            wrong. Steps written before this keep the old pair and keep working.
+        successCriterionType:
+          type: string
+          enum: [auto, text, css, xpath]
+          description: >
+            How to read successCriterion. auto (the default) hands it to both matchers and
+            takes either one — so a selector matches as a selector, prose matches as text,
+            and a selector that matches nothing is read as text rather than failing forever.
         credentialId:
           type: integer
           description: ID of a saved credential to use for this login step

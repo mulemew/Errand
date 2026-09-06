@@ -19,7 +19,7 @@ export type SelectorKind = "auto" | "css" | "xpath" | "text";
 export interface ConditionalAction {
   type: ThenActionType;
   selector?: string;
-  selectorType?: "text" | "css" | "xpath";
+  selectorType?: "auto" | "text" | "css" | "xpath";
   url?: string;
   value?: string;
   ms?: number;
@@ -67,7 +67,7 @@ export interface WorkflowStep {
   type: StepType;
   url?: string;
   selector?: string;
-  selectorType?: "text" | "css" | "xpath";
+  selectorType?: "auto" | "text" | "css" | "xpath";
   value?: string;
   ms?: number;
   timeout?: number;
@@ -80,6 +80,8 @@ export interface WorkflowStep {
   credentialId?: number;
   credentialSource?: "saved" | "inline";
   successSelector?: string;
+  successCriterion?: string;
+  successCriterionType?: "auto" | "text" | "css" | "xpath";
   successText?: string;
   cookieMode?: boolean;
   sessionKey?: string;
@@ -166,7 +168,7 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
   switch (type) {
     case "login":           return { type, loginMethod: "form", loginUrl: taskTargetUrl };
     case "navigate":        return { type, url: "", timeout: 30000 };
-    case "click":           return { type, selector: "", selectorType: "text" };
+    case "click":           return { type, selector: "", selectorType: "auto" };
     case "fill":            return { type, selector: "", value: "" };
     case "select":          return { type, selector: "", value: "" };
     case "scroll":          return { type, selector: "", x: 0, y: 300 };
@@ -176,7 +178,7 @@ function defaultStep(type: StepType, taskTargetUrl = ""): WorkflowStep {
     case "screenshot":      return { type };
     case "switchToNewPage": return { type, timeout: 30000 };
     case "keypress":        return { type, key: "Enter" };
-    case "condition":       return { type, conditionType: "text_contains", conditionValue: "", thenAction: { type: "click", selector: "", selectorType: "text" } };
+    case "condition":       return { type, conditionType: "text_contains", conditionValue: "", thenAction: { type: "click", selector: "", selectorType: "auto" } };
     case "dismissPopups":   return { type };
     case "cfVerify":        return { type, maxReloads: 2 };
   }
@@ -198,7 +200,7 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 
   const patch = (p: Partial<ConditionalAction>) => onChange({ ...a, ...p });
   const setType = (v: ThenActionType) => {
     const na: ConditionalAction = { type: v };
-    if (v === "click") { na.selector = ""; na.selectorType = "text"; }
+    if (v === "click") { na.selector = ""; na.selectorType = "auto"; }
     if (v === "fill") { na.selector = ""; na.value = ""; }
     if (v === "navigate") { na.url = ""; }
     if (v === "wait") { na.ms = 1000; }
@@ -239,11 +241,11 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 
       {a.type === "click" && (
         <div className="space-y-2">
           <RadioGroup
-            value={a.selectorType ?? "text"}
-            onValueChange={(v) => patch({ selectorType: v as "text" | "css" | "xpath" })}
+            value={a.selectorType ?? "auto"}
+            onValueChange={(v) => patch({ selectorType: v as "auto" | "text" | "css" | "xpath" })}
             className="flex gap-4"
           >
-            {(["text", "css", "xpath"] as const).map((st) => (
+            {(["auto", "text", "css", "xpath"] as const).map((st) => (
               <div key={st} className="flex items-center gap-1.5">
                 <RadioGroupItem value={st} id={`${idPrefix}-sel-${st}`} />
                 <Label htmlFor={`${idPrefix}-sel-${st}`} className="text-xs font-mono cursor-pointer">{st}</Label>
@@ -436,7 +438,7 @@ function BranchEditor({ value, onChange, label, idPrefix, depth = 0 }: {
       ))}
       <Button
         type="button" variant="outline" size="sm" className="h-7 text-xs"
-        onClick={() => write([...list, { type: "click", selector: "", selectorType: "text" }])}
+        onClick={() => write([...list, { type: "click", selector: "", selectorType: "auto" }])}
       >
         {t.addAction}
       </Button>
@@ -610,46 +612,57 @@ function StepCard({
                 only answer "not logged in" — so one of them is required, not optional. */}
             {(() => {
               const cookieOnly = step.loginMethod === "cookie";
-              const missingCriteria =
-                cookieOnly && !step.successSelector?.trim() && !step.successText?.trim();
+              // One field now. A task written before this has its old pair read as-is —
+              // what was typed in the TEXT box stays text, what was typed in the SELECTOR
+              // box stays css — so nothing changes meaning on the way in. Saving writes the
+              // single field and drops the pair.
+              const critValue = step.successCriterion ?? step.successText ?? step.successSelector ?? "";
+              const critKind =
+                step.successCriterionType ??
+                (step.successCriterion ? "auto" : step.successText?.trim() ? "text" : step.successSelector?.trim() ? "css" : "auto");
+              const setCrit = (patch: { value?: string; kind?: "auto" | "text" | "css" | "xpath" }) =>
+                set({
+                  successCriterion: (patch.value ?? critValue) || undefined,
+                  successCriterionType: patch.kind ?? critKind,
+                  successText: undefined,
+                  successSelector: undefined,
+                });
+              const missingCriteria = cookieOnly && !critValue.trim();
               return (
                 <>
                   {/* Success selector */}
                   <div className="space-y-1 pt-1 border-t border-border">
                     <Label className="text-xs font-medium">
-                      {t.successSelector}{" "}
+                      {t.successCriterion}{" "}
                       <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
                         ({cookieOnly ? t.requiredOneOfTwo : t.optionalSuffix})
                       </span>
                     </Label>
+                    <RadioGroup
+                      value={critKind}
+                      onValueChange={(v) => setCrit({ kind: v as "auto" | "text" | "css" | "xpath" })}
+                      className="flex gap-4"
+                    >
+                      {(["auto", "text", "css", "xpath"] as const).map((k) => (
+                        <div key={k} className="flex items-center gap-1.5">
+                          <RadioGroupItem value={k} id={`crit-${index}-${k}`} />
+                          <Label htmlFor={`crit-${index}-${k}`} className="text-xs font-mono cursor-pointer">{k}</Label>
+                        </div>
+                      ))}
+                    </RadioGroup>
                     <Input
                       className={"font-mono text-xs h-8" + (missingCriteria ? " border-amber-500" : "")}
-                      placeholder=".user-avatar, #logout-btn, [data-user]"
-                      value={step.successSelector ?? ""}
-                      onChange={(e) => set({ successSelector: e.target.value || undefined })}
+                      placeholder={
+                        critKind === "text" ? t.successTextPlaceholder :
+                        critKind === "css" ? ".user-avatar, #logout-btn, [data-user]" :
+                        critKind === "xpath" ? "//a[contains(@href,'logout')]" :
+                        "My servers    #logout-btn    //a[@href='/logout']"
+                      }
+                      value={critValue}
+                      onChange={(e) => setCrit({ value: e.target.value })}
                     />
                     <p className="text-[10px] text-muted-foreground leading-snug">
-                      CSS selector for an element visible only after login (e.g. avatar, logout button).
-                      Once set, it decides the outcome: visible after submit means success, absent means
-                      failure — whatever the URL did.
-                    </p>
-                  </div>
-                  {/* Success text */}
-                  <div className="space-y-1 pt-1 border-t border-border">
-                    <Label className="text-xs font-medium">
-                      {t.successText}{" "}
-                      <span className={"font-normal " + (cookieOnly ? "text-amber-500" : "text-muted-foreground")}>
-                        ({cookieOnly ? t.requiredOneOfTwo : t.optionalSuffix})
-                      </span>
-                    </Label>
-                    <Input
-                      className={"font-mono text-xs h-8" + (missingCriteria ? " border-amber-500" : "")}
-                      placeholder={t.successTextPlaceholder}
-                      value={step.successText ?? ""}
-                      onChange={(e) => set({ successText: e.target.value || undefined })}
-                    />
-                    <p className="text-[10px] text-muted-foreground leading-snug">
-                      {t.successTextHint}
+                      {t.successCriterionHint}
                     </p>
                   </div>
                   {missingCriteria && (
@@ -824,11 +837,11 @@ function StepCard({
               <div className="space-y-2">
                 <Label className="text-xs">{t.selectorTypeLabel}</Label>
                 <RadioGroup
-                  value={step.selectorType ?? "text"}
-                  onValueChange={(v) => set({ selectorType: v as "text" | "css" | "xpath" })}
+                  value={step.selectorType ?? "auto"}
+                  onValueChange={(v) => set({ selectorType: v as "auto" | "text" | "css" | "xpath" })}
                   className="flex gap-4"
                 >
-                  {(["text", "css", "xpath"] as const).map((t) => (
+                  {(["auto", "text", "css", "xpath"] as const).map((t) => (
                     <div key={t} className="flex items-center gap-1.5">
                       <RadioGroupItem value={t} id={`sel-${index}-${t}`} />
                       <Label htmlFor={`sel-${index}-${t}`} className="text-xs font-mono cursor-pointer">{t}</Label>
@@ -839,14 +852,16 @@ function StepCard({
               <div className="space-y-1">
                 <Label className="text-xs">
                   {step.selectorType === "text" ? t.buttonLinkText :
-                   step.selectorType === "css"  ? t.cssSelectorPlain : t.xpathExpression}
+                   step.selectorType === "css"  ? t.cssSelectorPlain :
+                   step.selectorType === "xpath" ? t.xpathExpression : t.selectorOrText}
                 </Label>
                 <Input
                   className="font-mono text-xs h-8"
                   placeholder={
                     step.selectorType === "text"  ? "Sign in" :
                     step.selectorType === "css"   ? "#submit-btn  or  .btn-checkin" :
-                    "//button[@data-action='checkin']"
+                    step.selectorType === "xpath" ? "//button[@data-action='checkin']" :
+                    "Sign in    #submit-btn    //button[@id='go']"
                   }
                   value={step.selector ?? ""}
                   onChange={(e) => set({ selector: e.target.value })}
