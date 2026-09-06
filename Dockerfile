@@ -53,7 +53,7 @@ RUN pnpm --filter @workspace/api-server run build
 # from it is far more reliable in CI than downloading the release tarball from
 # github.com, whose asset CDN intermittently times out and broke the build.
 # buildx resolves this FROM per target platform, so each arch gets its own binary.
-FROM ghcr.io/sagernet/sing-box:v1.11.4 AS singbox
+FROM ghcr.io/sagernet/sing-box:v1.14.0 AS singbox
 
 # ─── Stage 3: Production runtime ─────────────────────────────
 FROM node:20-bookworm-slim AS runner
