@@ -47,6 +47,13 @@ jobs:
 
   build-and-push:
     needs: typecheck
+    # Images are built for what lands on main, not for every proposal to change it.
+    #
+    # Without this a pull request built and pushed the same multi-arch images as a merge —
+    # and the day seven dependency PRs opened at once, seven full ARM+x86 builds started
+    # together and queued behind each other for nothing. A PR still gets the typecheck job,
+    # which is what a PR is for.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
