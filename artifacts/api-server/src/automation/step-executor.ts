@@ -506,6 +506,51 @@ async function waitForCaptchaWidget(page: PageAdapter, timeoutMs: number): Promi
   return false;
 }
 
+/**
+ * A click that cannot spend the whole step budget being ignored.
+ *
+ * `page.click` waits for the element to be visible, stable and hit-testable and THEN
+ * performs the click — and on a button wired to a proof-of-work widget that last part can
+ * simply never return. Seen on a renew button carrying data-altcha-wired: the log reads
+ *
+ *     element is visible, enabled and stable / done scrolling / performing click action
+ *
+ * and then sixty seconds of nothing, twice, and the task fails. clickByText has had a
+ * synthetic fallback for exactly this since the first site that did it; the CSS and XPath
+ * branches were a bare page.click and inherited none of it, so which of two identical
+ * clicks in the same run survived came down to luck.
+ *
+ * The real click goes first because it is the trusted one — a synthetic .click() skips the
+ * pointer events some widgets check. It just no longer gets a full minute to prove it is
+ * stuck, and what actually happened ends up in the step's own message rather than only in
+ * the logs.
+ */
+// 25s, not the 60s default and not less: long enough that a slow page still gets its real,
+// trusted click, short enough that two stuck attempts no longer eat a two-minute budget.
+const REAL_CLICK_TIMEOUT_MS = 25000;
+
+async function clickWithFallback(page: PageAdapter, selector: string): Promise<"real" | "synthetic"> {
+  try {
+    await page.click(selector, { timeout: REAL_CLICK_TIMEOUT_MS });
+    return "real";
+  } catch (err) {
+    logger.warn(
+      { selector, err: err instanceof Error ? err.message : String(err) },
+      "Real click did not land — falling back to a synthetic click",
+    );
+    await page
+      .evaluate((sel: string) => {
+        const el = sel.startsWith("xpath=")
+          ? (document.evaluate(sel.slice(6), document, null, 9 /* FIRST_ORDERED_NODE_TYPE */, null)
+              .singleNodeValue as HTMLElement | null)
+          : document.querySelector<HTMLElement>(sel);
+        if (el) el.click();
+      }, selector as never)
+      .catch(() => {});
+    return "synthetic";
+  }
+}
+
 async function executeStep(
   page: PageAdapter,
   step: WorkflowStep,
@@ -598,15 +643,15 @@ async function executeStep(
       if (step.selectorType === "xpath") {
         const xpathSel = `xpath=${step.selector}`;
         await waitForSelectorWithCf(page, xpathSel, 5000);
-        await page.click(xpathSel);
+        const how = await clickWithFallback(page, xpathSel);
         await settleAfterClick(page, urlBefore);
-        return { message: `Clicked XPath "${step.selector}"` };
+        return { message: `Clicked XPath "${step.selector}" [${how} click]` };
       }
 
       await waitForSelectorWithCf(page, step.selector, 5000);
-      await page.click(step.selector);
+      const how = await clickWithFallback(page, step.selector);
       await settleAfterClick(page, urlBefore);
-      return { message: `Clicked CSS "${step.selector}"` };
+      return { message: `Clicked CSS "${step.selector}" [${how} click]` };
     }
 
     case "fill": {
@@ -1713,8 +1758,8 @@ async function clickByText(
     return location.href;
   }).catch(() => "")) as string;
 
-  // Click the element through its OWN stable selector — the exact same robust
-  // path a CSS click step takes. Synthetic fallback only if the real click throws.
+  // Click the element through its OWN stable selector — the same path a CSS click step
+  // takes, fallback included.
   const doClick = async (): Promise<string> => {
     try {
       await page.click(stableSel); // real, trusted click via the backend
