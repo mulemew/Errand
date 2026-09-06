@@ -825,6 +825,10 @@ def launch():
             # there was always None and every hand-driven browser was still reaped at 90
             # minutes — verified in production before this line was changed.
             "keep_alive": bool(body.get("keepAlive")),
+            # Which api-server instance launched this. A second instance sharing this
+            # sidecar must be able to clean up after ITS OWN predecessor without touching
+            # sessions that belong to somebody else — see /release-owner below.
+            "owner": (body.get("owner") or "").strip() or None,
         }
     # Drain the child's remaining stdout in the background so it never blocks on a full pipe.
     threading.Thread(target=_drain, args=(proc,), daemon=True).start()
@@ -1556,19 +1560,59 @@ def release():
     return jsonify({"ok": True})
 
 
-@app.post("/release-all")
-def release_all():
-    """Kill every live session. The api-server calls this on boot: a restart abandons the
-    tasks that owned the running sessions (they're reset to idle), so whatever is still
-    launched here is an orphan that would otherwise burn RAM until the TTL reaper wakes up.
-    """
-    with _lock:
-        entries = list(_servers.items())
-        _servers.clear()
+def _release_entries(entries, why):
     for sid, e in entries:
         _kill(e["proc"])
         _stop_session_display(e)
-        print(f"[camoufox] released {sid} (release-all)", flush=True)
+        print(f"[camoufox] released {sid} ({why})", flush=True)
+
+
+@app.post("/release-owner")
+def release_owner():
+    """Kill the sessions one particular api-server instance left behind.
+
+    This is what a booting api-server calls, and the owner it names is its OWN predecessor
+    — an id it read from its database before overwriting it. So a restart cleans up exactly
+    the sessions it abandoned, and a second api-server pointed at this sidecar cleans up
+    nothing that is not its own. Sessions with no owner (launched by an api-server from
+    before this existed) are never matched; the TTL reaper is their net.
+    """
+    owner = ((request.get_json(silent=True) or {}).get("owner") or "").strip()
+    if not owner:
+        return jsonify({"error": "owner is required"}), 400
+    with _lock:
+        entries = [(sid, e) for sid, e in _servers.items() if e.get("owner") == owner]
+        for sid, _ in entries:
+            _servers.pop(sid, None)
+    _release_entries(entries, f"release-owner {owner[:8]}")
+    return jsonify({"ok": True, "released": len(entries)})
+
+
+@app.post("/release-all")
+def release_all():
+    """Kill EVERY live session here, whoever owns them. Manual recovery only.
+
+    This used to be the api-server's boot-time cleanup, and that was a loaded gun: any
+    second api-server reaching this sidecar — a throwaway test container, a blue/green
+    rollout, an old image someone started by mistake — wiped out the running one's browsers
+    the moment it booted. It happened: a test instance pointed here killed a task's browser
+    mid-login and two browsers a person was using, and the task failed with "Browser
+    closed" for no reason visible in its own logs.
+
+    So it now refuses unless the caller says {"confirm": true}. An api-server that predates
+    /release-owner still calls this with no body, and that call is exactly the accident this
+    guards against — it gets a 400 and the sessions live. Boot-time cleanup is
+    /release-owner, which can only ever match the caller's own predecessor.
+    """
+    if not (request.get_json(silent=True) or {}).get("confirm"):
+        print("[camoufox] refused /release-all without confirm — use /release-owner", flush=True)
+        return jsonify({
+            "error": "release-all needs {\"confirm\": true}; boot-time cleanup is /release-owner",
+        }), 400
+    with _lock:
+        entries = list(_servers.items())
+        _servers.clear()
+    _release_entries(entries, "release-all")
     return jsonify({"ok": True, "released": len(entries)})
 
 
