@@ -91,61 +91,24 @@ export async function checkProviderHealth(p: { type: string; url: string }): Pro
 }
 
 /**
- * This process's id, and the one the process before it used.
+ * Boot-time cleanup: clear the sidecar before the autostart browsers are relaunched.
  *
- * A sidecar is shared: more than one api-server can reach it, and the sessions living
- * there do not all belong to the caller. So cleanup is scoped by owner — this instance
- * stamps every session it launches, and on boot it releases only what its OWN predecessor
- * left. The id lives in the database because that is the only thing that survives the
- * process that has to be cleaned up after.
- */
-const OWNER_KEY = "camoufox_owner_id";
-let ownerId: string | null = null;
-
-/** The id stamped on sessions this process launches. Empty until boot cleanup has run. */
-export function currentOwnerId(): string | null {
-  return ownerId;
-}
-
-/** Take over ownership: return the previous instance's id and store a fresh one. */
-async function rotateOwnerId(): Promise<string | null> {
-  const fresh = randomUUID();
-  try {
-    const [row] = await db.select().from(settingsTable).where(eq(settingsTable.key, OWNER_KEY));
-    const previous = row?.value?.trim() || null;
-    await db.insert(settingsTable).values({ key: OWNER_KEY, value: fresh })
-      .onConflictDoUpdate({ target: settingsTable.key, set: { value: fresh } });
-    ownerId = fresh;
-    return previous;
-  } catch (err) {
-    // Without a durable id we cannot prove which sessions are ours, and guessing is what
-    // caused the incident this whole mechanism exists to prevent. Stamp sessions anyway so
-    // the NEXT boot can clean them up, and skip the cleanup this time round.
-    logger.warn({ err }, "Could not read the previous instance id — skipping orphan cleanup this boot");
-    ownerId = fresh;
-    return null;
-  }
-}
-
-/**
- * Boot-time cleanup: drop the sessions THIS api-server's previous run left behind.
+ * The app relaunches every autostart browser on boot, but the ones its previous run left
+ * are still running in the sidecar — the app no longer knows about them, the UI cannot
+ * close them, and keep_alive exempts them from the age reaper, so they never go away. Miss
+ * one and that browser is running twice, and once more after the next restart.
  *
- * A restart abandons the tasks that owned those sessions (they're reset to idle in
- * app.ts), but the sidecar keeps each launcher + Firefox alive until its TTL — that's how
- * "used but never closed" instances accumulate across restarts.
+ * Everything goes, not just what this run can prove it owns. An owner-tagged sweep was
+ * tried and it cannot make the guarantee: a session launched before the tagging existed
+ * carries no owner, matches nothing, and survives into the duplicate this is here to
+ * prevent. One api-server per sidecar is the deployment, so "everything" and "ours" are
+ * the same set anyway.
  *
- * Scoped by owner, not "everything here". This used to call /release-all, which kills every
- * session in the sidecar no matter who started it — and that turned any second api-server
- * into a wrecking ball: a throwaway test container pointed at the production sidecar killed
- * a task's browser mid-login and two browsers a person was using, and the task failed with
- * "Browser closed" with nothing in its own logs to explain it. Best-effort and non-fatal:
- * an unreachable or older sidecar (no /release-owner) is just skipped, and the TTL reaper
- * still covers whatever is left.
+ * The confirm flag is what keeps this from being the loaded gun it used to be: a stray
+ * api-server — a throwaway container someone pointed here, an old image — calls
+ * /release-all with no body and is refused. This call says so explicitly.
  */
 export async function releaseOrphanCamoufoxSessions(): Promise<void> {
-  const previousOwner = await rotateOwnerId();
-  if (!previousOwner) return; // first boot ever, or the id could not be read
-
   const urls = new Set<string>();
   const envUrl = (process.env.CAMOUFOX_URL ?? "").trim();
   if (envUrl) urls.add(envUrl.replace(/\/$/, ""));
@@ -159,19 +122,19 @@ export async function releaseOrphanCamoufoxSessions(): Promise<void> {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 5000);
-      const res = await fetch(`${url}/release-owner`, {
+      const res = await fetch(`${url}/release-all`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: previousOwner }),
+        body: JSON.stringify({ confirm: true }),
         signal: ctrl.signal,
       });
       clearTimeout(timer);
       if (!res.ok) return;
       const body = (await res.json().catch(() => ({}))) as { released?: number };
       if (body.released) {
-        logger.warn({ url, released: body.released }, "Released the sessions this instance's previous run left behind");
+        logger.warn({ url, released: body.released }, "Cleared the browsers left running by the previous run");
       }
-    } catch { /* sidecar down or too old — the TTL reaper still covers it */ }
+    } catch { /* sidecar down or too old — nothing to clear from here */ }
   }));
 }
 

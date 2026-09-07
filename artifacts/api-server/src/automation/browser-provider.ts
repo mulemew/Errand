@@ -1,4 +1,3 @@
-import { currentOwnerId } from "./providers";
 import { logger } from "../lib/logger";
 import { currentTaskId } from "../lib/taskContext";
 import { setView, clearView, taskViewKey } from "../lib/taskViews";
@@ -928,9 +927,6 @@ class CamoufoxProvider implements BrowserProvider {
           ...(this.config.blockWebrtc != null ? { blockWebrtc: this.config.blockWebrtc } : {}),
           // Exempt from the sidecar's age reaper. Set only for browsers opened by hand.
           ...(this.config.keepAlive ? { keepAlive: true } : {}),
-          // Stamps this session as ours, so the sidecar's boot-time cleanup can tell our
-          // abandoned sessions from another api-server's live ones.
-          ...(currentOwnerId() ? { owner: currentOwnerId() } : {}),
           proxy: parseProxyForCamoufox(proxyServerUrl),
           // The saved profile's fixed fingerprint (browserforge pickle or preset); the
           // sidecar reproduces it exactly via launch_server(fingerprint=/fingerprint_preset=).
