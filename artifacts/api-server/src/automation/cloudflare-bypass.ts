@@ -1216,7 +1216,7 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
       // and a proportional offset lands in the padding and reads as "verification failed".
       //
       // 22px, measured rather than assumed: rendering the computed point as a marker over
-      // two live widgets (a forum's login form, one host panel's full-page challenge) put
+      // two live widgets (nodeseek's login form, hub.weirdhost's full-page challenge) put
       // the old 30px hard on the checkbox's RIGHT EDGE with roughly half the marker hanging
       // off the control, while 22px sat centred. 30 was inside the box on a good day — and
       // the caller adds ±2px of jitter on top.
@@ -1256,23 +1256,20 @@ async function locateTurnstileCheckbox(page: PageAdapter): Promise<CheckboxTarge
         const r = c.getBoundingClientRect();
         if (usable(r) && widgetShaped(r)) return point(r, `${from}:widget-shaped`);
       }
-      // NOTHING IS THE RIGHT SHAPE — SO DON'T CLICK.
-      //
-      // This used to take the smallest usable candidate and aim 22px into it. That offset
-      // is a fact about a 300px WIDGET; applied to a 896px wrapper it points at whatever
-      // the page happens to put 22px from that wrapper's left edge, which on a login form
-      // is a real control. The click is a mouse press at OS level on a site the task is
-      // signed into, so guessing wrong does not cost a failed captcha — it costs having
-      // pressed something.
-      //
-      // Giving up costs a click that was never aimed at anything. The caller still has the
-      // frame-based locator, which measures the widget's own rectangle, and its retry.
-      return null;
+      // Nothing is the right shape. Take the SMALLEST usable candidate rather than the
+      // first: the innermost box is the one most likely to be the widget, and picking by
+      // document order is what put a 896px-wide wrapper in front of it in the first place.
+      let best: { r: DOMRect; from: string } | null = null;
+      for (const [c, from] of candidates) {
+        const r = c.getBoundingClientRect();
+        if (!usable(r)) continue;
+        if (!best || r.width * r.height < best.r.width * best.r.height) best = { r, from };
+      }
+      return best ? point(best.r, `${best.from}:smallest`) : null;
     },
     null,
   );
 }
-
 /**
  * Wait for the click to be judged.
  *
@@ -1536,6 +1533,17 @@ export async function clickTurnstileCheckbox(
   /** A full-page challenge navigates when it passes; an embedded widget only fills a hidden
    *  input. That decides whether the verdict can be watched for free or has to be read. */
   mode: "fullpage" | "embedded" = "embedded",
+  /**
+   * Set to true the moment the pointer is actually pressed.
+   *
+   * `false` from this function meant two different things and the caller could not tell
+   * them apart: "pressed, and it has not settled yet" and "never found the checkbox, so
+   * nothing was pressed". The full-page loop treated both as pressed — it set clickedOnce
+   * BEFORE calling, so a locate failure burned the one attempt it allows and the next 43
+   * rounds just watched a challenge nobody had touched. Five minutes of the mouse drifting
+   * over a checkbox that was never clicked, then "did not clear before the deadline".
+   */
+  pressed?: { happened: boolean },
 ): Promise<boolean> {
   try {
     // ── SeleniumBase shortcut: use cf-proxy's native Turnstile clicker ──
@@ -1687,6 +1695,7 @@ export async function clickTurnstileCheckbox(
         },
         "Clicking Turnstile checkbox",
       );
+      if (pressed) pressed.happened = true;
       // NOTHING RUNS IN THE PAGE AROUND THE PRESS. Not even under debug logging.
       //
       // There used to be three page.evaluate calls here: describeAimPoint just above (what
@@ -1936,6 +1945,8 @@ export async function bypassCloudflareChallenge(
     // immediately, so it never reached a second one. Only runs that are already failing can
     // notice this.
     let clickedOnce = false;
+    // The human-presence pass is a warm-up, not part of the click — run it once.
+    let humanised = false;
     while (Date.now() < jsDeadline) {
       attempt++;
       // NOTE: no re-expansion and no keyboard/scroll here. A non-interactive challenge is
@@ -1955,16 +1966,25 @@ export async function bypassCloudflareChallenge(
       }
       if (still === "turnstile_click" && !clickedOnce) {
         logger.info({ attempt }, "JS challenge upgraded to Turnstile click — attempting click");
-        await simulateHumanPresence(page, { widgetPresent: true });
+        // Only once: it takes seconds, and its job is to look human BEFORE the press.
+        if (!humanised) { humanised = true; await simulateHumanPresence(page, { widgetPresent: true }); }
         await sleep(500 + Math.random() * 500);
-        clickedOnce = true;
-        if (await clickTurnstileCheckbox(page, undefined, "fullpage")) {
+        const pressed = { happened: false };
+        if (await clickTurnstileCheckbox(page, undefined, "fullpage", pressed)) {
           logger.info({ attempt }, "Cloudflare challenge bypassed after click");
           return "passed";
         }
-        // Not settled within the click's own wait. It may STILL be verifying, so from here
-        // the loop only watches — clicking again would restart what we are waiting for.
-        logger.info({ attempt }, "Clicked; waiting for the verdict without touching it again");
+        if (!pressed.happened) {
+          // The checkbox was never found, so nothing was clicked. Burning the single
+          // allowed attempt here is what turned "the frame was a moment late" into a
+          // five-minute wait on an untouched challenge.
+          logger.warn({ attempt }, "Could not locate the checkbox — nothing was pressed; will look again next round");
+        } else {
+          clickedOnce = true;
+          // Not settled within the click's own wait. It may STILL be verifying, so from here
+          // the loop only watches — clicking again would restart what we are waiting for.
+          logger.info({ attempt }, "Clicked; waiting for the verdict without touching it again");
+        }
       }
       logger.debug({ attempt, clickedOnce }, "CF JS challenge still verifying, waiting");
     }
