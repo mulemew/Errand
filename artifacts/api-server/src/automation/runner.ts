@@ -257,14 +257,41 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
 
   const runningTasks = new Set<number>();
   const cancelRequested = new Set<number>();
+  /**
+   * How to STOP a run, as opposed to how to ask it to stop.
+   *
+   * Cancellation used to be a flag and nothing else. The runner races the workflow against
+   * a promise that rejects when the flag appears, so the run's own bookkeeping unwound
+   * within half a second and the UI said "cancelled" — but Promise.race does not abort the
+   * loser. The step carried on inside the browser: a long AFK task has no checkpoint to
+   * notice a flag, so it kept clicking, the session stayed up, and the task could not be
+   * killed at all. Meanwhile the row said one thing and the process another.
+   *
+   * Closing the page is what actually stops it. Every pending Playwright call against a
+   * closed page rejects at once, so the step unwinds wherever it happens to be, and the
+   * session goes with it. This holds that lever for as long as there is one to hold.
+   */
+  const killSwitch = new Map<number, () => Promise<void>>();
 
   export function isTaskRunning(taskId: number): boolean {
     return runningTasks.has(taskId);
   }
 
-  /** Request cancellation of a running task. Effective between steps. */
+  /**
+   * Request cancellation of a running task.
+   *
+   * Sets the flag AND tears the browser down, so a step that is mid-wait stops now rather
+   * than at the next checkpoint it happens to reach — which, for a task that spends an hour
+   * in one loop, was never.
+   */
   export function requestCancelTask(taskId: number): void {
     cancelRequested.add(taskId);
+    const kill = killSwitch.get(taskId);
+    if (!kill) return;
+    killSwitch.delete(taskId);
+    // Fire and forget: the caller is an HTTP handler answering "cancellation requested",
+    // and a sidecar that is slow to close must not hold that response open.
+    void kill().catch((err) => logger.warn({ taskId, err }, "Cancel: tearing the browser down failed"));
   }
 
   /**
@@ -643,6 +670,11 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
         throw new Error("Task cancelled by user");
       }
       screenshotPage = page;
+      // From here a cancel can do more than set a flag.
+      killSwitch.set(taskId, async () => {
+        logger.warn({ taskId }, "Cancel: closing the browser so the running step stops now");
+        await page.close().catch(() => {});
+      });
       let finalPage = page;
       let screenshotPath: string | undefined;
 
@@ -1047,6 +1079,7 @@ function parseCookieHeader(raw: string, targetUrl: string): Array<Record<string,
       }
       runningTasks.delete(taskId);
       cancelRequested.delete(taskId);
+      killSwitch.delete(taskId);
       if (semaphoreAcquired) releaseSemaphore(concKey);
     }
   }

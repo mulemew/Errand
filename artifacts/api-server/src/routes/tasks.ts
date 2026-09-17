@@ -1605,10 +1605,32 @@ router.patch("/tasks/:id/enabled", async (req, res): Promise<void> => {
   router.post("/tasks/:id/stop", async (req, res): Promise<void> => {
     const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) { res.status(400).json({ error: "Invalid task id" }); return; }
-    if (!isTaskRunning(id)) { res.status(409).json({ error: "Task is not currently running" }); return; }
-    requestCancelTask(id);
-    req.log.info({ taskId: id }, "Task cancellation requested");
-    res.json({ ok: true, message: "Cancellation requested" });
+
+    if (isTaskRunning(id)) {
+      requestCancelTask(id);
+      req.log.info({ taskId: id }, "Task cancellation requested");
+      res.json({ ok: true, message: "Cancellation requested" });
+      return;
+    }
+
+    // Not running HERE — but the row may still say it is.
+    //
+    // runningTasks lives in this process and nowhere else, so a restart empties it while
+    // the database keeps whatever the interrupted run last wrote. That leaves a task stuck
+    // at "running" with nothing driving it: the dashboard shows a spinner forever, Stop
+    // answers 409 "not currently running", and Run answers 409 "already running". There was
+    // no way out of that from the UI at all.
+    //
+    // Nothing is running, so there is nothing to cancel — just a stale row to put right.
+    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, id));
+    if (!task) { res.status(404).json({ error: "Task not found" }); return; }
+    if (task.status !== "running") {
+      res.status(409).json({ error: "Task is not currently running" });
+      return;
+    }
+    await db.update(tasksTable).set({ status: "idle" }).where(eq(tasksTable.id, id));
+    req.log.warn({ taskId: id }, "Cleared a stale 'running' status left behind by a restart");
+    res.json({ ok: true, message: "This task was not running — cleared a stale 'running' status left by a restart." });
   });
 
 

@@ -51,13 +51,19 @@ async function liveViewTarget(id: string): Promise<{ host: string; port: number 
     const taskId = Number(taskMatch[1]);
     const own = getView(taskViewKey(taskId));
     if (own) return own;
-    // Not running (or the sidecar could not give it a display): fall back to whichever
-    // provider this task uses.
-    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
-    const bc = task?.browserConfig as { providerId?: number | null } | null;
-    if (bc?.providerId) return providerTarget(bc.providerId);
-    const [def] = await db.select().from(providersTable).where(eq(providersTable.isDefault, true));
-    return def ? providerTarget(def.id) : null;
+    // NO fallback to the provider's container-wide display — the same rule the bi_ branch
+    // above already follows, and for the same reason. Nothing is ever drawn on that
+    // display, so falling back to it serves a bare X root window: the blue screen.
+    //
+    // Worse than useless, because the websocket target is resolved ONCE, at upgrade. Open
+    // the view while the run is still starting its proxy and restoring cookies — before the
+    // browser exists — and the socket is pinned to that empty display for as long as it
+    // stays open. The session appears seconds later and the viewer never knows: waiting
+    // does nothing, and only closing and reopening re-resolves it. Which is exactly what
+    // this looked like from the outside.
+    //
+    // Answer "not yet" instead, and let the caller retry.
+    return null;
   }
   const providerId = parseInt(id, 10);
   return isNaN(providerId) ? null : providerTarget(providerId);
@@ -91,6 +97,17 @@ router.use("/live-view/:id", async (req, res): Promise<void> => {
       res.status(503).json({
         error:
           "This browser is running but has no screen of its own — the sidecar had no free display when it started. Close it and open it again.",
+      });
+      return;
+    }
+    // 503, not 404: a run that is still standing up its proxy and restoring cookies has no
+    // browser yet, and will have one shortly. The caller polls this and mounts the viewer
+    // when it turns 200, instead of being handed an empty display it can never recover from.
+    const tm = viewId.match(/^task-(\d+)$/);
+    if (tm) {
+      res.status(503).json({
+        error: "This task has no browser on screen yet — it is still starting, or it is not running.",
+        retry: true,
       });
       return;
     }

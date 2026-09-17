@@ -21,7 +21,22 @@ export function getView(key: string): { host: string; port: number } | undefined
   return views.get(key);
 }
 
-export function clearView(key: string): void {
+/**
+ * Forget a session's view — but only if it is still the one registered.
+ *
+ * A task that retries stands a new session up under the SAME key, and the old session's
+ * release runs afterwards. Deleting unconditionally threw away the mapping the new session
+ * had just written, and the live view then had nothing to proxy: the X root window with no
+ * client on it, which is the blue screen that would not go away for the rest of the run.
+ *
+ * The port identifies the session, so a release that names its own port cannot delete a
+ * successor's. A caller with no port still clears outright — that is the shutdown path,
+ * where nothing is coming after it.
+ */
+export function clearView(key: string, port?: number): void {
+  if (port == null) { views.delete(key); return; }
+  const cur = views.get(key);
+  if (cur && cur.port !== port) return;   // a newer session owns this key now
   views.delete(key);
 }
 

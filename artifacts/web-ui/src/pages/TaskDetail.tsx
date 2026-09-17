@@ -398,6 +398,34 @@ export default function TaskDetail() {
   // Watching the browser's screen. Only possible on camoufox (the only backend whose
   // display is served), and only worth offering while there is something to see.
   const [watching, setWatching] = useState(false);
+  // Is there a browser on screen to watch RIGHT NOW?
+  //
+  // The viewer's websocket target is resolved once, when the socket upgrades, and never
+  // re-resolved. Mount the iframe while the run is still starting its proxy and restoring
+  // cookies — before any browser exists — and it is pinned for the life of that connection:
+  // the session appears seconds later and the view stays dead until it is closed and
+  // reopened by hand. So ask first, and keep asking, and only mount once the answer is yes.
+  const [liveViewReady, setLiveViewReady] = useState(false);
+  const [liveViewMsg, setLiveViewMsg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!watching) { setLiveViewReady(false); setLiveViewMsg(null); return; }
+    if (liveViewReady) return;
+    let stopped = false;
+    const ask = async () => {
+      try {
+        const r = await fetch(`/api/live-view/task-${taskId}/`, { credentials: "include" });
+        if (stopped) return;
+        if (r.ok || r.redirected) { setLiveViewReady(true); setLiveViewMsg(null); return; }
+        const body = (await r.json().catch(() => null)) as { error?: string } | null;
+        setLiveViewMsg(body?.error ?? null);
+      } catch {
+        /* a blip between polls is not worth reporting — the next tick asks again */
+      }
+    };
+    void ask();
+    const id = setInterval(() => void ask(), 2000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [watching, liveViewReady, taskId]);
     const [isStopping, setIsStopping] = useState(false);
 
     const handleStop = async () => {
@@ -1441,14 +1469,28 @@ export default function TaskDetail() {
         <DialogContent className="max-w-6xl w-full p-2">
           <p className="text-xs text-muted-foreground px-1 pb-2">{t.watchLiveHint}</p>
           {watching && liveViewProviderId != null && (
-            <iframe
-              // "task-<id>" asks for THIS run's own display; the server falls back to the
-              // provider's shared one when the task is not currently running.
-              src={`/api/live-view/task-${taskId}/`}
-              title={t.watchLive}
-              className="w-full rounded border border-border bg-black"
-              style={{ height: "70vh" }}
-            />
+            liveViewReady ? (
+              <iframe
+                // "task-<id>" asks for THIS run's own display. Mounted only once the server
+                // says there IS one: the websocket target is resolved at upgrade and never
+                // again, so an iframe opened a second too early stays pinned to nothing and
+                // no amount of waiting recovers it — only closing and reopening did.
+                src={`/api/live-view/task-${taskId}/`}
+                title={t.watchLive}
+                className="w-full rounded border border-border bg-black"
+                style={{ height: "70vh" }}
+              />
+            ) : (
+              <div
+                className="w-full rounded border border-border bg-black flex items-center justify-center"
+                style={{ height: "70vh" }}
+              >
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {liveViewMsg ?? t.watchLiveWaiting}
+                </div>
+              </div>
+            )
           )}
         </DialogContent>
       </Dialog>

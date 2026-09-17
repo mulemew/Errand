@@ -317,6 +317,9 @@ export interface Translations {
       stepScreenshotTypeDesc: string;
       stepSwitchTab: string;
       stepSwitchTabDesc: string;
+      stepSwitchTabDesc2: string;
+      stepSwitchTabUrlContains: string;
+      stepSwitchTabUrlContainsHint: string;
       stepKeyPress: string;
       stepKeyPressDesc: string;
       stepCondition: string;
@@ -804,6 +807,7 @@ export interface Translations {
       sessionProfileFieldHint: string;
       watchLive: string;
       watchLiveHint: string;
+      watchLiveWaiting: string;
   }
 
   export const zh: Translations = {
@@ -1104,6 +1108,9 @@ export interface Translations {
       stepScreenshotTypeDesc: "截取当前页面",
       stepSwitchTab: "切换新标签页",
       stepSwitchTabDesc: "切换焦点到新打开的标签页",
+      stepSwitchTabDesc2: "等待新标签页打开，之后的步骤都在那个标签页里执行。",
+      stepSwitchTabUrlContains: "目标网址包含（选填）",
+      stepSwitchTabUrlContainsHint: "一次点击弹出多个标签页时，用它挑出要的那个：填网址里的一段，不区分大小写。留空＝取最新打开的那个。",
       stepKeyPress: "按键",
       stepKeyPressDesc: "发送键盘快捷键或按键",
       stepCondition: "条件",
@@ -1582,7 +1589,8 @@ export interface Translations {
       sessionProfileField: "会话档案",
       sessionProfileFieldHint: "选一个在「浏览器」页手工登录后保存的会话。注意后端/指纹/代理要和这里选的一致，否则站点会看到环境突变。",
       watchLive: "看画面",
-      watchLiveHint: "看这个任务自己的浏览器屏幕——每个会话有独立显示器，并发运行互不干扰。任务没在跑时显示的是该后端的公共屏幕。",
+      watchLiveHint: "看这个任务自己的浏览器屏幕——每个会话有独立显示器，并发运行互不干扰。",
+      watchLiveWaiting: "浏览器还没启动，等它起来会自动接上……",
   };
 
   export const en: Translations = {
@@ -1881,6 +1889,9 @@ export interface Translations {
       stepScreenshotTypeDesc: "Capture current page",
       stepSwitchTab: "Switch to New Tab",
       stepSwitchTabDesc: "Switch focus to the newly opened tab",
+      stepSwitchTabDesc2: "Waits for a new browser tab to open and switches all subsequent steps to that tab.",
+      stepSwitchTabUrlContains: "Target URL contains (optional)",
+      stepSwitchTabUrlContainsHint: "When one click opens several tabs, this picks the right one: any case-insensitive part of its URL. Leave empty to take the newest tab.",
       stepKeyPress: "Key Press",
       stepKeyPressDesc: "Send a keyboard shortcut or key",
       stepCondition: "Condition",
@@ -2362,6 +2373,7 @@ export interface Translations {
       sessionProfileField: "Session profile",
       sessionProfileFieldHint: "A session captured by hand on the Browsers page. Use the same backend, fingerprint and proxy as it was captured with, or the site sees the environment change underneath the cookies.",
       watchLive: "Watch",
-      watchLiveHint: "This task's own browser screen — each session gets its own display, so concurrent runs do not overlap. When the task is not running this shows the backend's shared screen.",
+      watchLiveHint: "This task's own browser screen — each session gets its own display, so concurrent runs do not overlap.",
+      watchLiveWaiting: "No browser on screen yet — this connects itself as soon as one starts…",
   };
   
