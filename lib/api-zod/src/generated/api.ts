@@ -86,10 +86,10 @@ export const ListTasksResponseItem = zod.object({
               "CSS selector or text string to wait for (depends on selectorType)",
             ),
           selectorType: zod
-            .enum(["css", "text"])
+            .enum(["auto", "css", "xpath", "text"])
             .optional()
             .describe(
-              "css = CSS selector (default); text = wait for text content to appear on the page",
+              'auto (the default) works it out from the value, the same rule the click and condition steps use: a leading \"\/\" is XPath, otherwise it is tried as a selector and read as page text when nothing matches it. css \/ xpath \/ text say so outright.\n',
             ),
           timeout: zod
             .number()
@@ -157,6 +157,12 @@ export const ListTasksResponseItem = zod.object({
             .optional()
             .describe(
               "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+          urlContains: zod
+            .string()
+            .optional()
+            .describe(
+              "Optional. Which tab to take when the click opened several — a case-insensitive substring of the tab's URL. Leave empty to take the newest tab (the original behaviour).\n",
             ),
         }),
         zod
@@ -457,10 +463,10 @@ export const CreateTaskBody = zod.object({
               "CSS selector or text string to wait for (depends on selectorType)",
             ),
           selectorType: zod
-            .enum(["css", "text"])
+            .enum(["auto", "css", "xpath", "text"])
             .optional()
             .describe(
-              "css = CSS selector (default); text = wait for text content to appear on the page",
+              'auto (the default) works it out from the value, the same rule the click and condition steps use: a leading \"\/\" is XPath, otherwise it is tried as a selector and read as page text when nothing matches it. css \/ xpath \/ text say so outright.\n',
             ),
           timeout: zod
             .number()
@@ -528,6 +534,12 @@ export const CreateTaskBody = zod.object({
             .optional()
             .describe(
               "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+          urlContains: zod
+            .string()
+            .optional()
+            .describe(
+              "Optional. Which tab to take when the click opened several — a case-insensitive substring of the tab's URL. Leave empty to take the newest tab (the original behaviour).\n",
             ),
         }),
         zod
@@ -813,10 +825,10 @@ export const GetTaskResponse = zod
                 "CSS selector or text string to wait for (depends on selectorType)",
               ),
             selectorType: zod
-              .enum(["css", "text"])
+              .enum(["auto", "css", "xpath", "text"])
               .optional()
               .describe(
-                "css = CSS selector (default); text = wait for text content to appear on the page",
+                'auto (the default) works it out from the value, the same rule the click and condition steps use: a leading \"\/\" is XPath, otherwise it is tried as a selector and read as page text when nothing matches it. css \/ xpath \/ text say so outright.\n',
               ),
             timeout: zod
               .number()
@@ -884,6 +896,12 @@ export const GetTaskResponse = zod
               .optional()
               .describe(
                 "Max ms to wait for a new page\/tab to open (default 30000)",
+              ),
+            urlContains: zod
+              .string()
+              .optional()
+              .describe(
+                "Optional. Which tab to take when the click opened several — a case-insensitive substring of the tab's URL. Leave empty to take the newest tab (the original behaviour).\n",
               ),
           }),
           zod
@@ -1212,10 +1230,10 @@ export const UpdateTaskBody = zod.object({
               "CSS selector or text string to wait for (depends on selectorType)",
             ),
           selectorType: zod
-            .enum(["css", "text"])
+            .enum(["auto", "css", "xpath", "text"])
             .optional()
             .describe(
-              "css = CSS selector (default); text = wait for text content to appear on the page",
+              'auto (the default) works it out from the value, the same rule the click and condition steps use: a leading \"\/\" is XPath, otherwise it is tried as a selector and read as page text when nothing matches it. css \/ xpath \/ text say so outright.\n',
             ),
           timeout: zod
             .number()
@@ -1283,6 +1301,12 @@ export const UpdateTaskBody = zod.object({
             .optional()
             .describe(
               "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+          urlContains: zod
+            .string()
+            .optional()
+            .describe(
+              "Optional. Which tab to take when the click opened several — a case-insensitive substring of the tab's URL. Leave empty to take the newest tab (the original behaviour).\n",
             ),
         }),
         zod
@@ -1560,10 +1584,10 @@ export const UpdateTaskResponse = zod.object({
               "CSS selector or text string to wait for (depends on selectorType)",
             ),
           selectorType: zod
-            .enum(["css", "text"])
+            .enum(["auto", "css", "xpath", "text"])
             .optional()
             .describe(
-              "css = CSS selector (default); text = wait for text content to appear on the page",
+              'auto (the default) works it out from the value, the same rule the click and condition steps use: a leading \"\/\" is XPath, otherwise it is tried as a selector and read as page text when nothing matches it. css \/ xpath \/ text say so outright.\n',
             ),
           timeout: zod
             .number()
@@ -1631,6 +1655,12 @@ export const UpdateTaskResponse = zod.object({
             .optional()
             .describe(
               "Max ms to wait for a new page\/tab to open (default 30000)",
+            ),
+          urlContains: zod
+            .string()
+            .optional()
+            .describe(
+              "Optional. Which tab to take when the click opened several — a case-insensitive substring of the tab's URL. Leave empty to take the newest tab (the original behaviour).\n",
             ),
         }),
         zod

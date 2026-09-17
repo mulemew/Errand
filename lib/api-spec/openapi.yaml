@@ -563,8 +563,12 @@ components:
           description: CSS selector or text string to wait for (depends on selectorType)
         selectorType:
           type: string
-          enum: [css, text]
-          description: "css = CSS selector (default); text = wait for text content to appear on the page"
+          enum: [auto, css, xpath, text]
+          description: >
+            auto (the default) works it out from the value, the same rule the click and
+            condition steps use: a leading "/" is XPath, otherwise it is tried as a selector
+            and read as page text when nothing matches it. css / xpath / text say so
+            outright.
         timeout:
           type: integer
           description: Max wait time in ms (default 30000)
@@ -666,6 +670,12 @@ components:
         timeout:
           type: integer
           description: Max ms to wait for a new page/tab to open (default 30000)
+        urlContains:
+          type: string
+          description: >
+            Optional. Which tab to take when the click opened several — a
+            case-insensitive substring of the tab's URL. Leave empty to take the
+            newest tab (the original behaviour).
       required: [type]
 
     LoginStep:
@@ -742,18 +752,32 @@ components:
     ConditionalAction:
       type: object
       description: >-
-        An if/else branch action. Either performs a sub-step
-        (click/fill/navigate/wait/keypress/screenshot/scroll), or a control-flow
-        action: continue to the next step, or end the task (exitSuccess/exitFailure).
+        An if/else branch action. Either performs a sub-step, or a control-flow action:
+        continue to the next step, or end the task (exitSuccess/exitFailure).
+
+        The engine runs a branch action by handing it to the step executor, so every step
+        type already worked here — this list was simply shorter than the switch it feeds.
+        A branch that clicked something opening a tab had no way to follow it, and one that
+        walked into a bot check had no way to clear it. login is deliberately absent: it is
+        a whole flow with its own retries and criterion, not something to nest inside an if.
       properties:
         type:
           type: string
-          enum: [click, fill, navigate, wait, keypress, screenshot, scroll, continue, exitSuccess, exitFailure, condition]
+          enum: [click, fill, select, navigate, wait, waitFor, keypress, screenshot, scroll, hover, dismissPopups, cfVerify, switchToNewPage, continue, exitSuccess, exitFailure, condition]
         selector:
           type: string
         selectorType:
           type: string
-          enum: [text, css, xpath]
+          enum: [auto, text, css, xpath]
+        timeout:
+          type: integer
+          description: switchToNewPage / waitFor — how long to wait, in ms.
+        urlContains:
+          type: string
+          description: switchToNewPage — optional substring of the URL of the tab to switch to.
+        maxReloads:
+          type: integer
+          description: cfVerify — how many times to reload while clearing a full-page challenge.
         url:
           type: string
         value:

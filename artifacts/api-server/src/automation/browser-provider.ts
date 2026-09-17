@@ -659,9 +659,17 @@ class PuppeteerCDPProvider implements BrowserProvider {
       if (_resolvedProxy) await _resolvedProxy.stop().catch(() => {});
     };
 
-    const makePuppeteerNewPageWaiter = (opts?: { timeout?: number }): Promise<PageAdapter> =>
+    const makePuppeteerNewPageWaiter = (opts?: { timeout?: number; urlContains?: string }): Promise<PageAdapter> =>
       new Promise<PageAdapter>((resolve, reject) => {
         const timeout = opts?.timeout ?? 30000;
+        // Only the Playwright backends can pick a tab by URL. Say so rather than
+        // silently handing back whichever tab opened first.
+        if (opts?.urlContains) {
+          logger.warn(
+            { urlContains: opts.urlContains },
+            "switchToNewPage: urlContains is not supported on the Puppeteer backend — taking the first new tab",
+          );
+        }
         const timer = setTimeout(
           () => reject(new Error(`Timeout waiting for new page (${timeout}ms)`)),
           timeout,
@@ -692,6 +700,63 @@ class PuppeteerCDPProvider implements BrowserProvider {
   }
 
   async close(): Promise<void> {}
+}
+
+/**
+ * The tab a click just opened — whether or not we were listening when it did.
+ *
+ * waitForEvent("page") only ever hears the FUTURE. A click step opens the tab and returns;
+ * the switchToNewPage that follows starts listening a moment later, the event is already
+ * spent, and it waits out its whole timeout before failing the step. Watched in VNC this
+ * looks like the automation freezing on a page it is plainly sitting on — the tab is right
+ * there, and the run dies 30s later without touching it.
+ *
+ * So look before waiting: any page in the context that is not the one we are driving is
+ * the one the click produced. The most recent wins, because that is the one just opened.
+ */
+async function adoptOrAwaitNewPage(
+  context: { pages: () => unknown[]; waitForEvent: (e: string, o?: { timeout?: number }) => Promise<unknown> },
+  current: unknown,
+  timeout: number,
+  urlContains?: string,
+): Promise<unknown> {
+  const want = (urlContains ?? "").trim().toLowerCase();
+  if (!want) {
+    const already = context.pages().filter((pg) => pg !== current);
+    if (already.length) return already[already.length - 1];
+    return await context.waitForEvent("page", { timeout });
+  }
+
+  // A filter is set, so "the newest tab" is no longer good enough. One click on an
+  // ad-funded page opens several tabs at once — a submit button that also fired
+  // window.open sent the run to a YouTube ad while the tab it had actually submitted to
+  // sat there unread. Keep looking until a tab MATCHES.
+  //
+  // Polling rather than waiting on events alone: a tab opens as about:blank and gets its
+  // real URL a moment later, so the event fires before there is anything to match against.
+  const urlOf = (pg: unknown): string => {
+    try { return (pg as { url?: () => string }).url?.() ?? ""; } catch { return ""; }
+  };
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const others = context.pages().filter((pg) => pg !== current);
+    // Newest first: with several matches the one just opened is the one meant.
+    for (let i = others.length - 1; i >= 0; i -= 1) {
+      if (urlOf(others[i]).toLowerCase().includes(want)) return others[i];
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    // Wake early when a tab opens, but never block past the deadline.
+    await context
+      .waitForEvent("page", { timeout: Math.min(700, Math.max(50, left)) })
+      .catch(() => undefined);
+  }
+
+  const open = context.pages().filter((pg) => pg !== current).map(urlOf);
+  throw new Error(
+    `No open tab matched urlContains="${urlContains}" within ${timeout}ms. ` +
+      `Other open tabs: ${open.length ? open.join(" , ") : "(none)"}`,
+  );
 }
 
 // ── Playwright CDP provider ───────────────────────────────────────────────────
@@ -761,7 +826,9 @@ class PlaywrightCDPProvider implements BrowserProvider {
       const a = wrapPlaywrightPage(p);
       a.close = async () => { await p.close().catch(() => {}); };
       a.waitForNewPage = async (opts) => {
-        const newPage = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
+        const newPage = (await adoptOrAwaitNewPage(
+          context as never, p, opts?.timeout ?? 30000, opts?.urlContains,
+        )) as typeof p;
         try { await newPage.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
         return makeAdapter(newPage);
       };
@@ -821,6 +888,8 @@ class CamoufoxProvider implements BrowserProvider {
   private readonly _ids = new Map<import("playwright-core").Browser, string>();
   // Per-browser sing-box helper (for advanced proxy protocols) to tear down on close.
   private readonly _proxies = new Map<import("playwright-core").Browser, ResolvedProxy>();
+  /** sessionId → the websockify port its live view is proxied through. */
+  private readonly _viewPorts = new Map<string, number>();
   // A registered fox instance (auto-distributed) wins over the env default.
   private readonly baseUrl: string;
   constructor(private readonly config: BrowserProviderConfig) {
@@ -868,8 +937,12 @@ class CamoufoxProvider implements BrowserProvider {
 
   private async release(id: string): Promise<void> {
     const _tid = currentTaskId();
-    if (this.config.viewKey) clearView(this.config.viewKey);
-    else if (_tid != null) clearView(taskViewKey(_tid));
+    // Named with THIS session's port so a retry that already registered its own view keeps
+    // it — see clearView.
+    const _port = this._viewPorts.get(id);
+    this._viewPorts.delete(id);
+    if (this.config.viewKey) clearView(this.config.viewKey, _port);
+    else if (_tid != null) clearView(taskViewKey(_tid), _port);
     try {
       await fetch(`${this.baseUrl}/release`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
@@ -925,6 +998,11 @@ class CamoufoxProvider implements BrowserProvider {
           // camoufox knobs from the provider (undefined = sidecar default).
           ...(this.config.humanize != null ? { humanize: this.config.humanize } : {}),
           ...(this.config.blockWebrtc != null ? { blockWebrtc: this.config.blockWebrtc } : {}),
+          // Camoufox ships uBlock Origin as a default addon, so "block ads = off" has to
+          // reach the SIDECAR to mean anything — the context.route rules below only cover
+          // what this process can see. Without this the switch was decorative and an
+          // anti-adblock wall could not be got past.
+          ...(this.config.blockAds != null ? { blockAds: this.config.blockAds } : {}),
           // Exempt from the sidecar's age reaper. Set only for browsers opened by hand.
           ...(this.config.keepAlive ? { keepAlive: true } : {}),
           proxy: parseProxyForCamoufox(proxyServerUrl),
@@ -1089,6 +1167,7 @@ class CamoufoxProvider implements BrowserProvider {
       if (_viewKey && viewPort) {
         try {
           setView(_viewKey, new URL(this.baseUrl).hostname, viewPort);
+          this._viewPorts.set(id, viewPort);
         } catch { /* a malformed base URL is not worth failing a run over */ }
       }
 
@@ -1112,7 +1191,9 @@ class CamoufoxProvider implements BrowserProvider {
       const a = wrapPlaywrightPage(p);
       a.close = async () => { await p.close().catch(() => {}); };
       a.waitForNewPage = async (opts) => {
-        const np = await context.waitForEvent("page", { timeout: opts?.timeout ?? 30000 });
+        const np = (await adoptOrAwaitNewPage(
+          context as never, p, opts?.timeout ?? 30000, opts?.urlContains,
+        )) as typeof p;
         try { await np.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch { /* ignore */ }
         return makeAdapter(np);
       };

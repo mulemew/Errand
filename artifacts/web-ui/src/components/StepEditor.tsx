@@ -12,7 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 export type StepType = "navigate" | "click" | "fill" | "select" | "scroll" | "hover" | "wait" | "waitFor" | "screenshot" | "dismissPopups" | "switchToNewPage" | "keypress" | "login" | "condition" | "cfVerify";
 
 export type ConditionType = "text_contains" | "text_not_contains" | "element_visible" | "element_not_visible" | "element_clickable" | "element_not_clickable" | "url_contains";
-export type ThenActionType = "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll" | "continue" | "exitSuccess" | "exitFailure" | "condition";
+export type ThenActionType = "click" | "fill" | "select" | "navigate" | "wait" | "waitFor" | "keypress" | "screenshot" | "scroll" | "hover" | "dismissPopups" | "cfVerify" | "switchToNewPage" | "continue" | "exitSuccess" | "exitFailure" | "condition";
 /** How a condition's selector should be read. "auto" works it out from the string. */
 export type SelectorKind = "auto" | "css" | "xpath" | "text";
 
@@ -27,6 +27,12 @@ export interface ConditionalAction {
   x?: number;
   y?: number;
   message?: string;
+  /** switchToNewPage / waitFor. */
+  timeout?: number;
+  /** switchToNewPage — which tab to take when a click opened several. */
+  urlContains?: string;
+  /** cfVerify. */
+  maxReloads?: number;
   // Only when type === "condition" — a branch that is itself an if/else.
   conditionType?: ConditionType;
   conditionValue?: string;
@@ -72,6 +78,8 @@ export interface WorkflowStep {
   ms?: number;
   timeout?: number;
   maxReloads?: number;
+  /** switchToNewPage — which tab to take when a click opened several. */
+  urlContains?: string;
   x?: number;
   y?: number;
   key?: string;
@@ -207,6 +215,10 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 
     if (v === "keypress") { na.key = "Enter"; }
     if (v === "scroll") { na.x = 0; na.y = 300; }
     if (v === "exitSuccess" || v === "exitFailure") { na.message = ""; }
+    if (v === "select") { na.selector = ""; na.value = ""; }
+    if (v === "hover") { na.selector = ""; na.selectorType = "css"; }
+    if (v === "waitFor") { na.selector = ""; na.selectorType = "css"; na.timeout = 10000; }
+    if (v === "switchToNewPage") { na.timeout = 30000; }
     if (v === "condition") { na.conditionType = "text_contains"; na.conditionValue = ""; na.conditionSelectorType = "auto"; }
     onChange(na);
   };
@@ -226,6 +238,12 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 
           <SelectItem value="keypress" className="text-xs">{t.stepKeyPress}</SelectItem>
           <SelectItem value="screenshot" className="text-xs">{t.stepScreenshotType}</SelectItem>
           <SelectItem value="scroll" className="text-xs">{t.stepScroll}</SelectItem>
+          <SelectItem value="select" className="text-xs">{t.stepSelectOpt}</SelectItem>
+          <SelectItem value="hover" className="text-xs">{t.stepHover}</SelectItem>
+          <SelectItem value="waitFor" className="text-xs">{t.stepWaitFor}</SelectItem>
+          <SelectItem value="dismissPopups" className="text-xs">{t.stepDismissPopups}</SelectItem>
+          <SelectItem value="cfVerify" className="text-xs">{t.stepCfVerify}</SelectItem>
+          <SelectItem value="switchToNewPage" className="text-xs">{t.stepSwitchTab}</SelectItem>
           {depth < MAX_UI_NESTING && (
             <SelectItem value="condition" className="text-xs">{t.nestedCondition}</SelectItem>
           )}
@@ -267,6 +285,45 @@ function ConditionalActionEditor({ action, onChange, label, idPrefix, depth = 0 
       {a.type === "navigate" && (
         <Input className="font-mono text-xs h-8" placeholder="https://example.com/next"
           value={a.url ?? ""} onChange={(e) => patch({ url: e.target.value })} />
+      )}
+      {a.type === "select" && (
+        <div className="space-y-2">
+          <Input className="font-mono text-xs h-8" placeholder={t.cssSelectorLabel}
+            value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
+          <Input className="font-mono text-xs h-8" placeholder={t.valueToType}
+            value={a.value ?? ""} onChange={(e) => patch({ value: e.target.value })} />
+        </div>
+      )}
+      {a.type === "hover" && (
+        <Input className="font-mono text-xs h-8" placeholder={t.cssSelectorLabel}
+          value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
+      )}
+      {a.type === "waitFor" && (
+        <div className="space-y-2">
+          <Input className="font-mono text-xs h-8" placeholder={t.cssSelectorLabel}
+            value={a.selector ?? ""} onChange={(e) => patch({ selector: e.target.value })} />
+          <Input type="number" className="font-mono text-xs h-8 w-36" placeholder="ms"
+            value={a.timeout ?? 10000} onChange={(e) => patch({ timeout: parseInt(e.target.value, 10) || 0 })} />
+        </div>
+      )}
+      {a.type === "switchToNewPage" && (
+        <div className="space-y-2">
+          <Input type="number" className="font-mono text-xs h-8 w-36" placeholder="ms"
+            value={a.timeout ?? 30000} onChange={(e) => patch({ timeout: parseInt(e.target.value, 10) || 0 })} />
+          <Input className="font-mono text-xs h-8" placeholder={t.stepSwitchTabUrlContains}
+            value={a.urlContains ?? ""} onChange={(e) => patch({ urlContains: e.target.value })} />
+        </div>
+      )}
+      {a.type === "cfVerify" && (
+        <div className="space-y-2">
+          <Input className="font-mono text-xs h-8" placeholder={t.stepCfVerifyUrl}
+            value={a.url ?? ""} onChange={(e) => patch({ url: e.target.value })} />
+          <Input type="number" className="font-mono text-xs h-8 w-36" placeholder={t.stepCfVerifyReloads}
+            value={a.maxReloads ?? 3} onChange={(e) => patch({ maxReloads: parseInt(e.target.value, 10) || 0 })} />
+        </div>
+      )}
+      {a.type === "dismissPopups" && (
+        <p className="text-xs text-muted-foreground font-mono">{t.stepDismissPopupsDesc}</p>
       )}
       {a.type === "wait" && (
         <Input type="number" className="font-mono text-xs h-8 w-36" placeholder="ms"
@@ -964,27 +1021,32 @@ function StepCard({
               <div className="space-y-2">
                 <Label className="text-xs">{t.waitForLabel}</Label>
                 <RadioGroup
-                  value={step.selectorType === "text" ? "text" : "css"}
-                  onValueChange={(v) => set({ selectorType: v as "css" | "text", selector: "" })}
+                  value={step.selectorType ?? "auto"}
+                  onValueChange={(v) => set({ selectorType: v as "auto" | "css" | "xpath" | "text" })}
                   className="flex gap-4"
                 >
-                  <div className="flex items-center gap-1.5">
-                    <RadioGroupItem value="css" id={`waitfor-css-${index}`} />
-                    <Label htmlFor={`waitfor-css-${index}`} className="text-xs cursor-pointer">{t.cssSelectorPlain}</Label>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <RadioGroupItem value="text" id={`waitfor-text-${index}`} />
-                    <Label htmlFor={`waitfor-text-${index}`} className="text-xs cursor-pointer">{t.textOnPage}</Label>
-                  </div>
+                  {(["auto", "text", "css", "xpath"] as const).map((k) => (
+                    <div key={k} className="flex items-center gap-1.5">
+                      <RadioGroupItem value={k} id={`waitfor-${k}-${index}`} />
+                      <Label htmlFor={`waitfor-${k}-${index}`} className="text-xs font-mono cursor-pointer">{k}</Label>
+                    </div>
+                  ))}
                 </RadioGroup>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">
-                  {step.selectorType === "text" ? t.textToWaitFor : t.cssSelectorPlain}
+                  {step.selectorType === "text" ? t.textToWaitFor :
+                   step.selectorType === "css" ? t.cssSelectorPlain :
+                   step.selectorType === "xpath" ? t.xpathExpression : t.selectorOrText}
                 </Label>
                 <Input
                   className="font-mono text-xs h-8"
-                  placeholder={step.selectorType === "text" ? "Login successful" : ".success-message  or  #result-table"}
+                  placeholder={
+                    step.selectorType === "text" ? "Login successful" :
+                    step.selectorType === "css" ? ".success-message  or  #result-table" :
+                    step.selectorType === "xpath" ? "//div[@id='result']" :
+                    "Login successful    .success-message    //div[@id='result']"
+                  }
                   value={step.selector ?? ""}
                   onChange={(e) => set({ selector: e.target.value })}
                 />
@@ -1056,9 +1118,13 @@ function StepCard({
             <Input type="number" className="font-mono text-xs h-8 w-36" min={1000} max={3600000}
               value={step.timeout ?? 30000} onChange={(e) => set({ timeout: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
           </div>
-          <p className="text-xs text-muted-foreground">
-            Waits for a new browser tab to open and switches all subsequent steps to that tab.
-          </p>
+          <div className="space-y-1">
+            <Label className="text-xs">{t.stepSwitchTabUrlContains}</Label>
+            <Input className="font-mono text-xs h-8" placeholder="example.com/renew"
+              value={step.urlContains ?? ""} onChange={(e) => set({ urlContains: e.target.value })} />
+            <p className="text-xs text-muted-foreground">{t.stepSwitchTabUrlContainsHint}</p>
+          </div>
+          <p className="text-xs text-muted-foreground">{t.stepSwitchTabDesc2}</p>
         </div>
       )}
     </div>

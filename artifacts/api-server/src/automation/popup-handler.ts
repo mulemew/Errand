@@ -29,15 +29,39 @@ export interface PopupCleanupResult {
 }
 
 /**
- * Cookie-consent / GDPR accept-button text in many languages. Matched
- * case-insensitively against button/anchor text and aria-labels.
+ * Cookie-consent accept text that means only one thing. A button labelled
+ * "accept all cookies" is a consent button wherever it sits, so text alone is
+ * enough to click it.
  */
-const CONSENT_TEXTS = [
-  "accept all", "accept all cookies", "accept cookies", "accept", "allow all",
-  "i agree", "agree", "got it", "ok", "okay", "understood", "continue",
-  "allow", "enable all", "yes, i agree", "consent",
+const CONSENT_TEXTS_UNAMBIGUOUS = [
+  "accept all", "accept all cookies", "accept cookies", "allow all", "enable all",
+  "i agree", "yes, i agree",
   // zh
-  "接受", "全部接受", "同意", "允许", "我同意", "知道了", "同意并继续", "全部允许",
+  "全部接受", "同意并继续", "全部允许", "我同意",
+];
+
+/**
+ * Words that mean "accept" ONLY because a consent banner is asking. On the rest of the
+ * page they are ordinary controls, and clicking one is not a dismissal — it is taking an
+ * action the task never asked for.
+ *
+ * This is not hypothetical. "continue" was in the single flat list, and a URL shortener's
+ * own submit button
+ *
+ *   <button id="continue" class="btn btn-primary btn-captcha">Continue</button>
+ *
+ * matched it exactly. dismissPopups clicked it, the form submitted, the tab navigated to
+ * the destination article — and the NEXT step, whose whole job was to click that same
+ * Continue, then failed with "no visible element with text Continue found". The click had
+ * worked; the wrong step had done it. That took days to find because the log said only
+ * that the button was missing.
+ *
+ * So these are clicked only inside something that is actually a popup — see inPopup().
+ */
+const CONSENT_TEXTS_GENERIC = [
+  "accept", "agree", "got it", "ok", "okay", "understood", "continue", "allow", "consent",
+  // zh
+  "接受", "同意", "允许", "知道了",
   // other
   "aceptar", "accepter", "akzeptieren", "accetta", "aceitar", "принять", "同意する",
 ];
@@ -152,8 +176,29 @@ export async function dismissCookieConsent(page: PageAdapter): Promise<boolean> 
   //    unambiguous accept phrases so "Accept all cookies", "Accept & continue",
   //    etc. are caught too.
   try {
-    const clicked = await page.evaluate((arg: unknown) => {
-      const { exact, prefix } = arg as { exact: string[]; prefix: string[] };
+    const hit = await page.evaluate((arg: unknown) => {
+      const { exact, prefix, generic } = arg as { exact: string[]; prefix: string[]; generic: string[] };
+      // Is this button part of a popup, rather than part of the page? Only then may a
+      // generic word like "ok" or "continue" be treated as "dismiss this thing".
+      const POPUPISH = /(cookie|consent|gdpr|ccpa|privacy|banner|modal|popup|overlay|dialog|notice|toast|lightbox)/i;
+      const inPopup = (el: HTMLElement): boolean => {
+        let node: HTMLElement | null = el;
+        let hops = 0;
+        while (node && node !== document.body && hops < 12) {
+          const role = (node.getAttribute("role") || "").toLowerCase();
+          if (role === "dialog" || role === "alertdialog") return true;
+          if (node.getAttribute("aria-modal") === "true") return true;
+          const cls = typeof node.className === "string" ? node.className : "";
+          if (POPUPISH.test(`${node.id || ""} ${cls}`)) return true;
+          const st = window.getComputedStyle(node);
+          // Banners and modals are lifted out of the document flow; a form button is not.
+          if (st.position === "fixed" || st.position === "sticky") return true;
+          if (st.position === "absolute" && Number(st.zIndex) >= 100) return true;
+          node = node.parentElement;
+          hops += 1;
+        }
+        return false;
+      };
       const nodes = Array.from(
         document.querySelectorAll<HTMLElement>("button, a[role='button'], [role='button'], input[type='button'], input[type='submit'], [class*='btn']"),
       );
@@ -170,13 +215,21 @@ export async function dismissCookieConsent(page: PageAdapter): Promise<boolean> 
         if (!label || label.length > 40) continue;
         if (exact.some((tx) => label === tx) || prefix.some((tx) => label.startsWith(tx))) {
           btn.click();
-          return true;
+          return { label, why: "unambiguous consent text" };
+        }
+        if (generic.some((tx) => label === tx) && inPopup(btn)) {
+          btn.click();
+          return { label, why: "generic word inside a popup container" };
         }
       }
-      return false;
-    }, { exact: CONSENT_TEXTS, prefix: CONSENT_TEXTS_PREFIX } as never) as boolean;
-    if (clicked) {
-      logger.debug("Dismissed cookie/consent overlay (text match)");
+      return null;
+    }, { exact: CONSENT_TEXTS_UNAMBIGUOUS, prefix: CONSENT_TEXTS_PREFIX, generic: CONSENT_TEXTS_GENERIC } as never) as
+      | { label: string; why: string }
+      | null;
+    if (hit) {
+      // Say WHAT was clicked. A dismissal that quietly advances the page looks identical
+      // to a dismissal that closed a banner, until a later step fails for no visible reason.
+      logger.debug({ clickedLabel: hit.label, matched: hit.why }, "Dismissed cookie/consent overlay (text match)");
       await sleep(300);
       return true;
     }

@@ -70,8 +70,15 @@ export interface PageAdapter {
   mouse: MouseAdapter;
   viewport(): { width: number; height: number } | null;
   frames(): FrameAdapter[];
-  /** Wait for a new browser tab/window to open and return it as a PageAdapter. */
-  waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter>;
+  /**
+   * Wait for a new browser tab/window to open and return it as a PageAdapter.
+   *
+   * `urlContains` picks WHICH tab when a click opens several at once. Ad-funded pages do
+   * this routinely — one click spawned a YouTube tab alongside the real destination, and
+   * "the most recently opened one" landed on the ad. Case-insensitive substring of the
+   * tab's URL; omitted means the old behaviour (take the newest tab).
+   */
+  waitForNewPage(options?: { timeout?: number; urlContains?: string }): Promise<PageAdapter>;
   /** Returns true if the underlying page has been closed / detached. */
   isClosed(): boolean;
   /**

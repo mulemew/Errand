@@ -369,8 +369,15 @@
       }
     }
 
-    async waitForNewPage(options?: { timeout?: number }): Promise<PageAdapter> {
+    async waitForNewPage(options?: { timeout?: number; urlContains?: string }): Promise<PageAdapter> {
       const timeout = options?.timeout ?? 30_000;
+      // The sidecar returns whichever tab it opened; it has no tab picker.
+      if (options?.urlContains) {
+        logger.warn(
+          { urlContains: options.urlContains },
+          "switchToNewPage: urlContains is not supported on the SeleniumBase backend — taking the new tab as-is",
+        );
+      }
       const data = await cfPost(this.baseUrl, `/sessions/${this.sid}/wait-for-new-page`, { timeout });
       // Carry the proxy handle (and the rotation cap) over to the new tab's adapter.
       // It's the same browser behind the same tunnel, but this adapter used to be

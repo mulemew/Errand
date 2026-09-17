@@ -21,12 +21,30 @@ export type ConditionType = "text_contains" | "text_not_contains" | "element_vis
 // An if/else branch action. Either performs a sub-step (click/fill/…), or is a
 // control-flow action: continue to the next step, or end the whole task.
 export interface ConditionalAction {
-  type: "click" | "fill" | "navigate" | "wait" | "keypress" | "screenshot" | "scroll"
+  // The engine runs a branch action by handing it to executeStep, so every step type
+  // already worked here — the list was just shorter than the switch it feeds. Reported
+  // when a branch clicked something that opened a tab and had no way to follow it: the
+  // remaining actions kept operating on the page left behind. cfVerify was missing for the
+  // same reason, so a branch could not clear a bot check it had just walked into.
+  //
+  // login stays out: it is a whole flow with its own retries and criterion, not something
+  // to nest inside an if.
+  type: "click" | "fill" | "select" | "navigate" | "wait" | "waitFor" | "keypress"
+    | "screenshot" | "scroll" | "hover" | "dismissPopups" | "cfVerify" | "switchToNewPage"
     | "continue" | "exitSuccess" | "exitFailure"
     /** A branch may itself be a condition — see BranchAction. */
     | "condition";
   selector?: string;
-  selectorType?: "text" | "css" | "xpath";
+  selectorType?: SelectorKind;
+  /** switchToNewPage / waitFor: how long to wait. */
+  timeout?: number;
+  /**
+   * switchToNewPage: which tab to take when a click opened several. Case-insensitive
+   * substring of the URL; omitted keeps the old "newest tab wins" behaviour.
+   */
+  urlContains?: string;
+  /** cfVerify: the page to reload while clearing a full-page challenge. */
+  maxReloads?: number;
   url?: string;
   value?: string;
   ms?: number;
@@ -95,8 +113,21 @@ const IN_PAGE_PROBE = (arg: unknown) => {
     if ((h as HTMLButtonElement).disabled) return false;
     if (h.getAttribute("aria-disabled") === "true") return false;
     if (getComputedStyle(h).pointerEvents === "none") return false;
-    // A control greyed out by class rather than by attribute is still unusable.
-    if (/(disabled|is-disabled|btn-disabled)/.test(h.className || "")) return false;
+    // A control greyed out by class rather than by attribute is still unusable — but the
+    // test has to be a whole class name, not a substring. Tailwind writes the styling for a
+    // state as a variant class that names it: an enabled button carries
+    //
+    //   class="… disabled:opacity-50 hover:bg-opacity-75 …"
+    //
+    // meaning "half-opacity WHEN disabled", and a substring match read that as "disabled".
+    // A live, clickable renewal button was reported as not clickable by its own condition
+    // for exactly this reason, while the click step — which has no such rule — could click
+    // it. Variant classes carry a ":", and the state they describe is not the state now.
+    const DISABLED_CLASSES = ["disabled", "is-disabled", "btn-disabled"];
+    for (const c of Array.from(h.classList || [])) {
+      if (c.includes(":")) continue;
+      if (DISABLED_CLASSES.includes(c)) return false;
+    }
     return true;
   };
 
@@ -111,10 +142,25 @@ const IN_PAGE_PROBE = (arg: unknown) => {
   const byCss = (): Element[] => {
     try { return Array.from(document.querySelectorAll(want)); } catch { return []; }
   };
-  const byText = (): Element[] =>
-    Array.from(document.querySelectorAll("body *")).filter(
-      (el) => el.children.length === 0 && (el.textContent || "").trim() === want,
+  const byText = (): Element[] => {
+    // Not "leaf elements only". A button with an icon in it is not a leaf:
+    //
+    //   <a>Add 32 Hours (shrink)<svg>…</svg></a>
+    //
+    // and requiring children.length === 0 skipped every one of them, so an
+    // element_clickable condition reported "not met" about a button plainly on the page
+    // and enabled — while a click step, which uses its own matcher and has no such rule,
+    // would have found and clicked it. Reported on a renewal button whose whole condition
+    // silently took the else branch.
+    //
+    // The rule is the text, and then the innermost element carrying it: a wrapper whose
+    // only content is the match has the same textContent, and it is the button that was
+    // meant, not the div around it.
+    const all = Array.from(document.querySelectorAll("body *")).filter(
+      (el) => (el.textContent || "").trim() === want,
     );
+    return all.filter((el) => !all.some((other) => other !== el && el.contains(other)));
+  };
 
   let hits: Element[] = [];
   let how = "";
@@ -141,12 +187,18 @@ const ONE_ELEMENT_PROBE = (el: Element) => {
   const st = getComputedStyle(h);
   const r = h.getBoundingClientRect();
   const visible = st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+  // Whole class names only — a Tailwind variant like "disabled:opacity-50" describes what
+  // an ENABLED button looks like once disabled, and a substring test read it as the state
+  // itself. See the same check in IN_PAGE_PROBE.
+  const looksDisabledByClass = Array.from(h.classList || []).some(
+    (c) => !c.includes(":") && (c === "disabled" || c === "is-disabled" || c === "btn-disabled"),
+  );
   const usable =
     visible &&
     !(h as HTMLButtonElement).disabled &&
     h.getAttribute("aria-disabled") !== "true" &&
     st.pointerEvents !== "none" &&
-    !/(disabled|is-disabled|btn-disabled)/.test(h.className || "");
+    !looksDisabledByClass;
   return { visible, usable };
 };
 
@@ -261,11 +313,11 @@ export type WorkflowStep =
   | { type: "scroll"; selector?: string; x?: number; y?: number }
   | { type: "hover"; selector: string; selectorType: "css" | "xpath" }
   | { type: "wait"; ms: number }
-  | { type: "waitFor"; selector: string; selectorType?: "css" | "text"; timeout?: number }
+  | { type: "waitFor"; selector: string; selectorType?: SelectorKind; timeout?: number }
   | { type: "screenshot" }
   | { type: "dismissPopups" }
   | { type: "cfVerify"; url?: string; maxReloads?: number }
-  | { type: "switchToNewPage"; timeout?: number }
+  | { type: "switchToNewPage"; timeout?: number; urlContains?: string }
   | { type: "keypress"; key: string }
   | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successCriterion?: string; successCriterionType?: SelectorKind; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
   | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; conditionSelectorType?: SelectorKind; thenAction: BranchAction; elseAction?: BranchAction };
@@ -638,7 +690,12 @@ async function executeStep(
             return { message: `Checkbox matching text "${step.selector}" is now ${cb.checked ? "checked" : "UNCHECKED (the click did not take)"} [${cb.method}]` };
           }
         }
-        if (!res.found) throw new Error(`No visible element with text "${step.selector}" found`);
+        if (!res.found) {
+          // Say WHY, not just "not found" — present-but-disabled, present-but-zero-size and
+          // never-there all reached this line with the same message before.
+          const diag = await describeTextCandidates(page, step.selector);
+          throw new Error(`No visible element with text "${step.selector}" found — ${diag}`);
+        }
         await settleAfterClick(page, urlBefore);
         const reaction = res.reacted
           ? `page reacted (${res.changes} DOM changes)`
@@ -750,9 +807,10 @@ async function executeStep(
 
     case "waitFor": {
           const timeout = step.timeout ?? 120_000;
-          const isTextWait = step.selectorType === "text" || step.selector.startsWith("text:");
+          const kind: SelectorKind = step.selectorType ?? "auto";
+          const isTextWait = kind === "text" || step.selector.startsWith("text:");
           if (isTextWait) {
-            const needle = step.selectorType === "text" ? step.selector : step.selector.slice("text:".length).trim();
+            const needle = kind === "text" ? step.selector : step.selector.slice("text:".length).trim();
             const deadline = Date.now() + timeout;
             while (true) {
               if (page.isClosed()) throw new Error(`waitFor aborted — page was closed before text "${needle}" appeared`);
@@ -762,8 +820,34 @@ async function executeStep(
             }
             return { message: `Text "${needle}" appeared within ${timeout}ms` };
           }
-          await page.waitForSelector(step.selector, { timeout });
-          return { message: `Element "${step.selector}" appeared within ${timeout}ms` };
+          if (kind === "css" || kind === "xpath") {
+            const sel = kind === "xpath" ? `xpath=${step.selector}` : step.selector;
+            await page.waitForSelector(sel, { timeout });
+            return { message: `Element "${step.selector}" appeared within ${timeout}ms [${kind}]` };
+          }
+          // "auto": the same rule the condition and click steps use, applied on every poll
+          // rather than once — what we are waiting for does not exist yet, so it cannot be
+          // classified by looking at the page. A leading "/" is XPath; otherwise the value
+          // is tried as a selector and read as text when nothing matches it.
+          const looksXPath = /^\(?\s*\//.test(step.selector.trim());
+          const deadline = Date.now() + timeout;
+          for (;;) {
+            if (page.isClosed()) throw new Error(`waitFor aborted — page was closed before "${step.selector}" appeared`);
+            if (looksXPath) {
+              const hit = await page.$(`xpath=${step.selector}`).catch(() => null);
+              if (hit) return { message: `Element "${step.selector}" appeared within ${timeout}ms [xpath]` };
+            } else {
+              const hit = await page.$(step.selector).catch(() => null);
+              if (hit) return { message: `Element "${step.selector}" appeared within ${timeout}ms [css]` };
+              if (await pageHasExactText(page, step.selector)) {
+                return { message: `Text "${step.selector}" appeared within ${timeout}ms [text]` };
+              }
+            }
+            if (Date.now() >= deadline) {
+              throw new Error(`"${step.selector}" did not appear within ${timeout}ms (tried as selector and as text)`);
+            }
+            await new Promise((r) => setTimeout(r, 500));
+          }
         }
 
     case "screenshot": {
@@ -815,8 +899,12 @@ async function executeStep(
 
     case "switchToNewPage": {
       const timeout = step.timeout ?? 30000;
-      const newPage = await page.waitForNewPage({ timeout });
-      return { message: `Switched to new page: ${newPage.url()}`, newPage };
+      const urlContains = step.urlContains?.trim() || undefined;
+      const newPage = await page.waitForNewPage({ timeout, urlContains });
+      return {
+        message: `Switched to new page: ${newPage.url()}` + (urlContains ? ` (matched "${urlContains}")` : ""),
+        newPage,
+      };
     }
 
     case "dismissPopups": {
@@ -1297,6 +1385,18 @@ async function executeStep(
         let branchPage = page;
         let newPage: PageAdapter | undefined;
         const done: string[] = [];
+        // Sub-steps used to be invisible in the log. On success their messages were joined
+        // into the condition's own line with no numbering; on FAILURE the inner error
+        // propagated untouched, so the task log read
+        //
+        //   Step 3 [condition] FAILED: No visible element with text "Continue" found
+        //
+        // with no way to tell WHICH action in the branch threw, or how far the branch had
+        // got before it did — which is exactly the information needed to fix the task.
+        // Number them, log each as it runs, and on failure re-throw with that context.
+        const runnable = actions.filter((a) => a && a.type !== "continue");
+        const total = runnable.length;
+        let n = 0;
         for (const action of actions) {
           if (action.type === "continue") continue;
           if (action.type === "exitSuccess" || action.type === "exitFailure") {
@@ -1306,14 +1406,30 @@ async function executeStep(
                 (action.message ? ` — ${action.message}` : ""),
             );
           }
+          n += 1;
+          const label =
+            `${stepIndex + 1}.${n}/${total} [${action.type}]` +
+            (action.selector ? ` "${action.selector}"` : "");
           // A FAILURE here aborts the task like a normal step (the user asked for this):
           // only the condition itself not matching is non-fatal.
           const subStep = action as unknown as WorkflowStep;
-          const subResult = await executeStep(
-            branchPage, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl, depth + 1,
-          );
+          let subResult: StepExecResult;
+          try {
+            subResult = await executeStep(
+              branchPage, subStep, dataDir, taskId, stepIndex, creds, solver, targetUrl, depth + 1,
+            );
+          } catch (subErr) {
+            // exitSuccess/exitFailure raised deeper in the tree is a control-flow signal,
+            // not a failure — let it through untouched.
+            if (subErr instanceof TaskExitError) throw subErr;
+            const reason = subErr instanceof Error ? subErr.message : String(subErr);
+            logger.warn({ subStep: label, error: reason }, "Condition branch sub-step FAILED");
+            const soFar = done.length ? ` | branch had completed: ${done.join(" ; ")}` : "";
+            throw new Error(`${label} FAILED: ${reason}${soFar}`);
+          }
+          logger.info({ subStep: label, result: subResult.message }, "Condition branch sub-step");
           if (subResult.newPage) { branchPage = subResult.newPage; newPage = subResult.newPage; }
-          done.push(subResult.message);
+          done.push(`${label} → ${subResult.message}`);
         }
 
         const condShot = await saveStepScreenshot(branchPage, dataDir, taskId, stepIndex, "cond");
@@ -1387,6 +1503,9 @@ async function settleAfterClick(page: PageAdapter, urlBefore: string): Promise<v
  * gets a vote. A genuinely logged-out run therefore waits out the budget before logging in —
  * a few seconds, which is the right price for not failing a run whose session was fine.
  */
+/** How long a login shell gets to hydrate into a dashboard before it counts as logged out. */
+const LOGGED_OUT_GRACE_MS = 8000;
+
 async function isSessionAuthenticated(
   page: PageAdapter,
   successSelector?: string,
@@ -1407,10 +1526,35 @@ async function isSessionAuthenticated(
   const budgetMs =
     opts?.settleMs ??
     (hasConfiguredCriterion ? CRITERION_WAIT_MS : Number(process.env.SESSION_PROBE_MS ?? 8000));
-  const deadline = Date.now() + budgetMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + budgetMs;
+  // Consecutive looks that saw a login form. Only ever used to say "no" EARLY — a "yes"
+  // still comes from the criterion alone.
+  let loggedOutStreak = 0;
   for (let attempt = 1; ; attempt++) {
     const done = await probeSessionOnce(page, successSelector, successText, attempt);
     if (done !== null) return done;
+
+    // A dead session used to cost the whole 25s budget on every run before the login even
+    // started: with a criterion configured nothing but the criterion could end the wait.
+    //
+    // The reason for that rule is still good for the first few seconds — a client-rendered
+    // app may paint its login shell before hydrating into the dashboard. It is not good for
+    // twenty-five. So after a grace period, a login form that is STILL visible on several
+    // looks in a row ends the wait. A dashboard's "change password" form is the case this
+    // could misread, and by then the criterion describing that dashboard has had 8s to match.
+    if (hasConfiguredCriterion && Date.now() - startedAt >= LOGGED_OUT_GRACE_MS) {
+      const { verdict, evidence } = await detectLoginState(page).catch(() => ({ verdict: "unknown", evidence: "" }));
+      loggedOutStreak = verdict === "logged_out" ? loggedOutStreak + 1 : 0;
+      if (loggedOutStreak >= 3) {
+        logger.debug(
+          { attempt, evidence, waitedMs: Date.now() - startedAt },
+          "Session check: criterion not matched and the login form is still up — not waiting out the full budget",
+        );
+        return false;
+      }
+    }
+
     if (Date.now() >= deadline) {
       logger.debug({ attempt, hadCriterion: !!(successText || successSelector) }, "Session check: nothing conclusive before the deadline");
       return false;
@@ -1661,6 +1805,93 @@ async function tickCheckboxByText(
     logger.debug({ text, reason: result.method }, "No checkbox matched that text");
   }
   return result;
+}
+
+/**
+ * Why did a text click find nothing? Answering that used to mean re-running the task and
+ * watching VNC, because the step said only
+ *
+ *   No visible element with text "Continue" found
+ *
+ * — which reads identically for a button that is present but DISABLED, a button that is
+ * present but zero-size, and a page that never had the button at all. Three different bugs,
+ * one message, and the log carried nothing else.
+ *
+ * So report the page's side of it: every exact match and why it was rejected, plus near
+ * misses. The near misses matter because the text is typed by hand and the match is exact
+ * equality — "Continue..." (three dots) is not "Continue…" (one ellipsis character), and a
+ * trailing space is invisible on screen but fatal here.
+ *
+ * Diagnostic only. It runs after the click has already failed and changes nothing.
+ */
+async function describeTextCandidates(page: PageAdapter, text: string): Promise<string> {
+  try {
+    const report = (await page.evaluate((wanted: unknown) => {
+      const want = wanted as string;
+      // Fold away the differences a human cannot see on screen, so "differs only by
+      // spacing/ellipsis/case" can be told apart from "genuinely different words".
+      const norm = (s: string) => s.replace(/…/g, "...").replace(/\s+/g, " ").trim().toLowerCase();
+      const wantNorm = norm(want);
+      const textOf = (el: HTMLElement) =>
+        (el.textContent || (el instanceof HTMLInputElement ? el.value : "") || el.getAttribute("aria-label") || "").trim();
+      const tag = (el: HTMLElement) => `<${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}>`;
+      // The same rejection rules clickByText applies, but reported instead of silently
+      // failing the element.
+      const why = (el: HTMLElement): string[] => {
+        const st = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        const bad: string[] = [];
+        if (st.display === "none") bad.push("display:none");
+        if (st.visibility === "hidden") bad.push("visibility:hidden");
+        if (r.width === 0 || r.height === 0) bad.push(`size ${Math.round(r.width)}x${Math.round(r.height)}`);
+        if ((el as HTMLButtonElement).disabled) bad.push("disabled");
+        if (el.getAttribute("aria-disabled") === "true") bad.push("aria-disabled");
+        if (st.pointerEvents === "none") bad.push("pointer-events:none");
+        return bad;
+      };
+      // Exactly the set clickByText searches — anything outside it was never a candidate.
+      const CLICKABLE = "button, a, input[type='button'], input[type='submit'], [role='button']";
+      const clickable = Array.from(document.querySelectorAll<HTMLElement>(CLICKABLE));
+      const exact: string[] = [];
+      const near: string[] = [];
+      for (const el of clickable) {
+        const t = textOf(el);
+        if (!t || t.length > 120) continue;
+        if (t === want) {
+          const bad = why(el);
+          exact.push(`${tag(el)} ${bad.length ? `REJECTED (${bad.join(", ")})` : "usable — should have been clicked"}`);
+        } else if (norm(t) === wantNorm) {
+          near.push(`${tag(el)} text=${JSON.stringify(t)}`);
+        }
+      }
+      // The wanted text may be on the page but not on anything clickable (a <div> styled as
+      // a button, say) — that is a different fix, so say so rather than "not found".
+      let elsewhere = 0;
+      if (exact.length === 0 && near.length === 0) {
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+          if (el.children.length === 0 && norm(textOf(el)) === wantNorm) elsewhere += 1;
+        }
+      }
+      return {
+        exact: exact.slice(0, 6),
+        near: near.slice(0, 6),
+        elsewhere,
+        clickableCount: clickable.length,
+        url: location.href,
+      };
+    }, text as never)) as {
+      exact: string[]; near: string[]; elsewhere: number; clickableCount: number; url: string;
+    };
+
+    const bits = [`page=${report.url}`, `${report.clickableCount} clickable elements scanned`];
+    if (report.exact.length) bits.push(`EXACT: ${report.exact.join(" | ")}`);
+    else bits.push("no clickable element had that exact text");
+    if (report.near.length) bits.push(`NEAR (differs only by spacing/ellipsis/case): ${report.near.join(" | ")}`);
+    if (report.elsewhere) bits.push(`the text appears on ${report.elsewhere} NON-clickable element(s) — use a CSS selector`);
+    return bits.join(" ; ");
+  } catch (err) {
+    return `could not inspect the page (${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 async function clickByText(
