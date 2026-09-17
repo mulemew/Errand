@@ -273,3 +273,104 @@ export async function verifyOAuthLanding(
   }
   return null;
 }
+
+/**
+ * Click the button that starts an OAuth flow, found by what it CALLS ITSELF.
+ *
+ * The provider flows each carried a hand-written list: a handful of CSS selectors and a
+ * handful of exact phrases ("sign in with google", "continue with google", …). Every site
+ * that labels its button differently needs a new entry, and the failure is silent — the
+ * step hunts for 15s and reports the button "not present" on a page where it is plainly
+ * visible. ElysianNodes was one line of HTML away from every pattern:
+ *
+ *     <button id="googleSignIn" class="oauth-btn"><svg/>Google</button>
+ *
+ * No href, no `google` in the class, and the visible text is the single word "Google" —
+ * which none of the phrases contain. The one thing that identified it was the id, and no
+ * pattern looked at ids.
+ *
+ * So stop enumerating. A provider button always names its provider SOMEWHERE — id, class,
+ * name, aria-label, title, href or text — and that is the test. Ranking, not matching, is
+ * what keeps it honest: an href into the provider's auth endpoint beats an id, which beats
+ * a stray mention in body text. The blocklist covers the one real false positive, which is
+ * a page that also links to the provider for something other than logging in (Analytics,
+ * Maps, a privacy policy).
+ *
+ * Used as a FALLBACK — each flow keeps its own precise patterns and tries them first, so
+ * nothing that works today takes a different route.
+ */
+export async function clickOAuthButtonByProvider(
+  page: PageAdapter,
+  provider: "google" | "github",
+): Promise<{ text: string; how: string } | null> {
+  const AUTH_HREF: Record<string, string[]> = {
+    google: ["accounts.google.com", "/auth/google", "/oauth/google", "/login/google", "signin/oauth"],
+    github: ["github.com/login/oauth", "/auth/github", "/oauth/github", "/login/github"],
+  };
+  // Links to the provider that are NOT a way in. Matched against href and text.
+  const NOT_LOGIN = [
+    "analytics", "tagmanager", "gtag", "doubleclick", "adsense", "/ads", "advertis",
+    "privacy", "policy", "terms", "cookie", "maps.", "/maps", "fonts.", "recaptcha",
+    "translate", "youtube", "play.google", "drive.google", "docs.google", "chrome",
+    "workspace", "store", "support.", "developer", "status", "blog", "docs/",
+  ];
+
+  const hit = (await page.evaluate(
+    (arg: unknown) => {
+      const { word, authHref, notLogin } = arg as { word: string; authHref: string[]; notLogin: string[] };
+      const visible = (el: HTMLElement) => {
+        const st = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return st.display !== "none" && st.visibility !== "hidden" && r.width > 0 && r.height > 0;
+      };
+      const attr = (el: HTMLElement, n: string) => (el.getAttribute(n) || "").toLowerCase();
+      const textOf = (el: HTMLElement) =>
+        (el instanceof HTMLInputElement ? el.value : el.textContent || "").trim();
+
+      let best: { el: HTMLElement; score: number; text: string; how: string } | null = null;
+      const nodes = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          "a, button, [role='button'], div[tabindex], input[type='submit'], input[type='button']",
+        ),
+      );
+      for (const el of nodes) {
+        if (!visible(el)) continue;
+        const href = attr(el, "href");
+        const id = (el.id || "").toLowerCase();
+        const cls = (typeof el.className === "string" ? el.className : "").toLowerCase();
+        const aria = `${attr(el, "aria-label")} ${attr(el, "title")} ${attr(el, "name")} ${attr(el, "data-provider")}`;
+        const text = textOf(el);
+        const low = text.toLowerCase();
+        const hay = `${href} ${id} ${cls} ${aria} ${low}`;
+        if (!hay.includes(word)) continue;
+        // A link to the provider for some other purpose is not a login button.
+        if (notLogin.some((bad) => href.includes(bad) || low.includes(bad))) continue;
+
+        // What names it decides how much to trust it.
+        let score = 20;
+        let how = "mentions the provider";
+        if (authHref.some((p) => href.includes(p))) { score = 100; how = "href points at the provider's auth endpoint"; }
+        else if (id.includes(word)) { score = 80; how = `id="${el.id}"`; }
+        else if (cls.includes(word) || attr(el, "data-provider").includes(word)) { score = 75; how = "class/data-provider"; }
+        else if (aria.includes(word)) { score = 60; how = "aria-label/title/name"; }
+        else if (low.includes(word)) { score = 45; how = `text "${text.slice(0, 40)}"`; }
+        // A sign-in control is short. A paragraph that happens to say "google" is not one.
+        if (text.length > 0 && text.length <= 30) score += 10;
+        if (text.length > 80) score -= 25;
+        // Inside the login form beats a mention somewhere else on the page.
+        if (el.closest("form")) score += 10;
+
+        if (!best || score > best.score) best = { el, score, text, how };
+      }
+      if (!best) return null;
+      try { best.el.scrollIntoView({ block: "center" }); } catch { /* ignore */ }
+      best.el.click();
+      return { text: best.text || "(no text)", how: best.how, score: best.score };
+    },
+    { word: provider, authHref: AUTH_HREF[provider] ?? [], notLogin: NOT_LOGIN } as never,
+  ).catch(() => null)) as { text: string; how: string; score: number } | null;
+
+  if (!hit) return null;
+  logger.info({ provider, ...hit }, "OAuth button found by provider name");
+  return { text: hit.text, how: hit.how };
+}

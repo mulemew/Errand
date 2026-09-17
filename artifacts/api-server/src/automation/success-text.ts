@@ -53,7 +53,32 @@ async function readPageText(page: PageAdapter): Promise<{ rendered: string; pres
   return (await page
     .evaluate(() => {
       const b = document.body;
-      return { rendered: b?.innerText ?? "", present: b?.textContent ?? "" };
+      if (!b) return { rendered: "", present: "" };
+      // textContent includes the SOURCE of every <script> and <style> in the body, and that
+      // is not page text by any reading a person would recognise. ElysianNodes' login page
+      // ships its navbar translation table inline —
+      //
+      //     const translations = { en: { ... "Active Servers" ... } }
+      //
+      // — so a cookie-mode probe looking for "Active Servers" matched on the LOGIN page,
+      // declared the restored session valid, skipped the login entirely and reported the
+      // run a success. Nothing of the sort was on screen; the words were in a script.
+      //
+      // Reading rendered text only is not the answer either — that is what `rendered` is
+      // for, and it misses text that is in the DOM but not laid out yet, which is the whole
+      // reason `present` exists. So keep `present`, minus the elements that never render.
+      const SKIP: Record<string, true> = { SCRIPT: true, STYLE: true, NOSCRIPT: true, TEMPLATE: true };
+      const parts: string[] = [];
+      const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walk.nextNode())) {
+        let skip = false;
+        for (let p = node.parentElement; p && p !== b; p = p.parentElement) {
+          if (SKIP[p.tagName]) { skip = true; break; }
+        }
+        if (!skip) parts.push(node.nodeValue ?? "");
+      }
+      return { rendered: b.innerText ?? "", present: parts.join(" ") };
     })
     .catch(() => ({ rendered: "", present: "" }))) as { rendered: string; present: string };
 }

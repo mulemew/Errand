@@ -4,7 +4,7 @@ import type { PageAdapter } from "./page-adapter";
   import crypto from "crypto";
   import { logger } from "../lib/logger";
   import { attachPopupHandler, dismissPopups } from "./popup-handler";
-  import { verifyOAuthLanding, detectLoginState, clickFirstMatching, gotoTolerant } from "./login-verify";
+  import { verifyOAuthLanding, detectLoginState, clickFirstMatching, clickOAuthButtonByProvider, gotoTolerant } from "./login-verify";
   import { clearCloudflareInterstitial } from "./cloudflare-bypass";
   import { normalizeTotpSecret } from "../lib/totp";
   import { detectAndHandleCaptcha } from "./captcha";
@@ -164,7 +164,15 @@ import type { PageAdapter } from "./page-adapter";
       return { found: true, href, text };
     }, { css: GITHUB_CSS_PATTERNS, texts: GITHUB_TEXT_PATTERNS } as never) as { found: boolean; href: string | null; text: string };
 
-    if (!info.found) return false;
+    if (!info.found) {
+      // Same fallback as the Google flow: a button that names its provider in its id,
+      // class or bare text ("GitHub") matches none of the phrases above and is still the
+      // way in. See clickOAuthButtonByProvider.
+      const generic = await clickOAuthButtonByProvider(page, "github");
+      if (!generic) return false;
+      await sleep(1500);
+      return true;
+    }
     logger.info({ text: info.text, href: info.href }, "Clicked GitHub OAuth trigger (JS click)");
 
     // Reliability fallback: on the SeleniumBase/cf-proxy backend a synthetic

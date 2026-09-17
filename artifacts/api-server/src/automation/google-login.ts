@@ -1,7 +1,7 @@
 import type { PageAdapter } from "./page-adapter";
 import { logger } from "../lib/logger";
 import { attachPopupHandler, dismissPopups } from "./popup-handler";
-import { verifyOAuthLanding, detectLoginState, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, PhaseTimer } from "./login-verify";
+import { verifyOAuthLanding, detectLoginState, clickFirstMatching, clickButtonByText, closeBlockingDialog, gotoTolerant, clickOAuthButtonByProvider, PhaseTimer } from "./login-verify";
 import { waitForSuccessCriterion } from "./success-text";
 import { clearCloudflareInterstitial } from "./cloudflare-bypass";
 import { generateTotpCode } from "../lib/totp";
@@ -180,6 +180,16 @@ async function clickGoogleButton(page: PageAdapter): Promise<boolean> {
 
   if (found) {
     logger.info({ text: found }, "Found Google OAuth button by text");
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {});
+    return true;
+  }
+
+  // Neither list matched. Before reporting a button that is plainly on screen as absent,
+  // look for one that names its provider ANYWHERE — id, class, aria-label, href or text.
+  // ElysianNodes' <button id="googleSignIn" class="oauth-btn">Google</button> is invisible
+  // to every pattern above and obvious to this.
+  const generic = await clickOAuthButtonByProvider(page, "google");
+  if (generic) {
     await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 }).catch(() => {});
     return true;
   }
