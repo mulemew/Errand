@@ -304,8 +304,15 @@ import type { PageAdapter } from "./page-adapter";
     attachPopupHandler(page);
 
     try {
-      logger.info({ targetUrl }, "GitHub OAuth login — navigating to target");
-      await gotoTolerant(page, targetUrl, 60000);
+      // Empty target: log in on the page the earlier steps left us on.
+      const onCurrentPage = !targetUrl;
+      if (onCurrentPage) {
+        targetUrl = page.url();
+        logger.info({ url: targetUrl }, "GitHub OAuth login — login URL left empty, using the current page");
+      } else {
+        logger.info({ targetUrl }, "GitHub OAuth login — navigating to target");
+        await gotoTolerant(page, targetUrl, 60000);
+      }
       // Same as the Google flow: a full-page challenge has to be cleared before we can
       // look for the OAuth button, or we spend 15 s searching the gate for it.
       const cfCleared = await clearCloudflareInterstitial(page, { url: targetUrl });

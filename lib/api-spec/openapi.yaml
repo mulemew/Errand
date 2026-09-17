@@ -694,7 +694,9 @@ components:
           description: "form=standard username/password form, github=GitHub OAuth, google=Google OAuth"
         loginUrl:
           type: string
-          description: URL of the login page to navigate to
+          description: >
+            URL of the login page to navigate to. Leave empty to log in on the page the
+            previous steps left open, without navigating.
         successSelector:
           type: string
           description: >
@@ -747,7 +749,7 @@ components:
         inlineTotp:
           type: string
           description: Optional inline TOTP secret when credentialSource is "inline"
-      required: [type, loginMethod, loginUrl]
+      required: [type, loginMethod]
 
     ConditionalAction:
       type: object

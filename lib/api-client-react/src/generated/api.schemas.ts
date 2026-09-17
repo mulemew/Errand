@@ -298,7 +298,7 @@ export interface LoginStep {
   /** form=standard username/password form, github=GitHub OAuth, google=Google OAuth */
   loginMethod: LoginStepLoginMethod;
   /** URL of the login page to navigate to */
-  loginUrl: string;
+  loginUrl?: string;
   /** Optional CSS selector for an element that only appears after a successful login (e.g. an avatar, a logout button). When provided, its presence is treated as a definitive success signal and overrides the default form-visibility heuristic.
    */
   successSelector?: string;

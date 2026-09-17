@@ -600,10 +600,11 @@ function StepCard({
               <Label className="text-xs">{t.loginPageUrl}</Label>
               <Input
                 className="font-mono text-xs h-8"
-                placeholder="https://example.com/login"
+                placeholder={t.loginPageUrlPlaceholder}
                 value={step.loginUrl ?? ""}
                 onChange={(e) => set({ loginUrl: e.target.value })}
               />
+              <p className="text-xs text-muted-foreground">{t.loginPageUrlHint}</p>
             </div>
             {/* Credential selection — irrelevant for cookie-only login (no form to fill). */}
             <div className={"space-y-2 pt-1 border-t border-border" + (step.loginMethod === "cookie" ? " hidden" : "")}>

@@ -879,7 +879,7 @@ export default function TaskDetail() {
                         s.type === "keypress"        ? s.key :
                         s.type === "switchToNewPage" ? (s.timeout ? `${s.timeout}ms` : null) :
                         s.type === "cfVerify"        ? (s.maxReloads != null ? `max ${s.maxReloads} reloads` : null) :
-                        s.type === "login"           ? [s.loginMethod, s.loginUrl].filter(Boolean).join(" · ") :
+                        s.type === "login"           ? [s.loginMethod, s.loginUrl?.trim() || t.loginOnCurrentPage].filter(Boolean).join(" · ") :
                         s.type === "condition"       ? [s.conditionType, s.conditionValue].filter(Boolean).join(": ") :
                         null;
                       return (

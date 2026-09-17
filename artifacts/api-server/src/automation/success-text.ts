@@ -137,6 +137,28 @@ export async function selectorIsVisible(page: PageAdapter, selector: string): Pr
  *
  * Returns the evidence, or "" if it never appeared.
  */
+/**
+ * THE definition of "the success criterion is met", looked at once.
+ *
+ * Either half satisfies it: the text is on the page, or the selector is visible. Every login
+ * path and the cookie-mode probe ask this question, and they used to answer it with their own
+ * copies. The copies drifted — the Google flow ended up requiring text AND selector, so in
+ * "auto" mode, where one value arrives as both, "Customize" matched as text and failed as the
+ * CSS selector <customize>, and no value could ever pass. One function, so there is nothing
+ * left to drift.
+ *
+ * Returns the evidence, or "" when neither half is there.
+ */
+export async function criterionMetNow(page: PageAdapter, selector?: string, text?: string): Promise<string> {
+  if (text?.trim() && (await pageHasSuccessText(page, text))) {
+    return `Found the success text: "${text}"`;
+  }
+  if (selector?.trim() && (await selectorIsVisible(page, selector))) {
+    return `The success selector "${selector}" is visible`;
+  }
+  return "";
+}
+
 export async function waitForSuccessCriterion(
   page: PageAdapter,
   selector?: string,
@@ -145,12 +167,8 @@ export async function waitForSuccessCriterion(
 ): Promise<string> {
   const deadline = Date.now() + maxMs;
   for (;;) {
-    if (text?.trim() && (await pageHasSuccessText(page, text))) {
-      return `Found the success text: "${text}"`;
-    }
-    if (selector?.trim() && (await selectorIsVisible(page, selector))) {
-      return `The success selector "${selector}" is visible`;
-    }
+    const evidence = await criterionMetNow(page, selector, text);
+    if (evidence) return evidence;
     if (Date.now() >= deadline) return "";
     await new Promise((r) => setTimeout(r, 500));
   }

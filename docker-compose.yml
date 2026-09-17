@@ -1,5 +1,17 @@
-services:
-    # ── PostgreSQL ────────────────────────────────────────────────
+# =============================================================
+  # Errand — 拉取预构建镜像部署（无需克隆代码）
+  #
+  # 使用方法：
+  #   1. 下载此文件
+  #   2. 同目录创建 .env，至少填入 POSTGRES_PASSWORD
+  #      DASHBOARD_PASSWORD 可不填，首次访问会在浏览器里设置密码
+  #   3. docker compose -f docker-compose.image.yml up -d
+  #
+  # 如需使用 Cloudflare 绕过功能（SeleniumBase），provider-seleniumbase 已包含在内，
+  # 无需额外操作，启动后在设置页选择 SeleniumBase 提供商即可。
+  # =============================================================
+
+  services:
     db:
       image: postgres:16-alpine
       environment:
@@ -8,10 +20,6 @@ services:
         POSTGRES_DB: autoops
       volumes:
         - pgdata:/var/lib/postgresql/data
-      # No host port. The app reaches it over the compose network; publishing 5432 put a
-      # database holding encrypted credentials on the public internet of any host without a
-      # firewall, with POSTGRES_PASSWORD defaulting to "changeme". Use
-      # `docker compose exec db psql` when you need a shell on it.
       healthcheck:
         test: ["CMD-SHELL", "pg_isready -U autoops -d autoops"]
         interval: 5s
@@ -20,7 +28,6 @@ services:
         start_period: 120s
       restart: unless-stopped
 
-    # ── Browserless (remote Chrome via CDP WebSocket) ─────────────
     browserless:
       image: ghcr.io/browserless/chromium:latest
       environment:
@@ -35,15 +42,11 @@ services:
         start_period: 30s
       restart: unless-stopped
 
-    # ── SeleniumBase provider (undetected-chromedriver — Cloudflare bypass) ──
-    # Runs Chrome in headed mode (Xvfb virtual display) via undetected-chromedriver.
-    # Exposes a REST API on port 7317 for the app to create/manage browser sessions
-    # that transparently bypass Cloudflare JS challenges and Turnstile.
-    # Usage: add it on the Providers page (or mark it the default there) and tasks use it.
+    # ── SeleniumBase 提供商（undetected-chromedriver — Cloudflare 绕过）──────────
+    # 通过 undetected-chromedriver 运行 Chrome，绕过 Cloudflare JS 挑战和 Turnstile。
+    # 启动后在设置页将浏览器提供商切换为 SeleniumBase 即可使用。
     provider-seleniumbase:
-      build:
-        context: artifacts/cf-proxy
-        dockerfile: Dockerfile
+      image: ghcr.io/mulemew/provider-seleniumbase:latest
       environment:
         PORT: "7317"
         CF_RECONNECT_TIME: "${CF_RECONNECT_TIME:-4}"
@@ -54,9 +57,8 @@ services:
       shm_size: 2g
       networks:
         default:
-          # Old service name kept as an alias: providers saved in the database store an
-          # instance URL, and existing rows still say http://cf-proxy:7317. Without this
-          # the rename would silently break every task using a saved SeleniumBase provider.
+          # 保留旧服务名作为别名：数据库里已保存的提供商记录仍指向 http://cf-proxy:7317，
+          # 没有这个别名，改名会让所有用到已保存 SeleniumBase 提供商的任务直接失败。
           aliases:
             - cf-proxy
       healthcheck:
@@ -67,15 +69,14 @@ services:
         start_period: 60s
       restart: unless-stopped
 
-    # ── Camoufox provider (anti-detect Firefox) — independent of the SeleniumBase one.
-    # Pick the Camoufox provider on the Providers page (or in a task) to use it.
+    # Camoufox（反检测 Firefox）—— 独立 provider，与 SeleniumBase 互不影响。
+    # 在设置页或任务里把浏览器提供商选 "Camoufox" 即可使用。
     provider-camoufox:
-      build:
-        context: artifacts/camoufox-proxy
-        dockerfile: Dockerfile
+      image: ghcr.io/mulemew/provider-camoufox:latest
       environment:
         PORT: "7318"
-        # 有头(默认,渲染在容器 Xvfb :99);true=无头。launch_server 的 headless 只收 bool。
+        # 有头(默认,渲染在容器自带的 Xvfb :99 上); true=无头(可检测)。
+        # 注意 launch_server 的 headless 只收 bool,别再用 "virtual" 字符串。
         CAMOUFOX_HEADLESS: "${CAMOUFOX_HEADLESS:-false}"
         # The live view is on by default and needs nothing configured: it is never published
         # as a port — the app proxies it on its own origin, behind the same login — so it
@@ -84,7 +85,7 @@ services:
       shm_size: 2g
       networks:
         default:
-          # See the alias note on provider-seleniumbase — saved providers point at the old name.
+          # 同上：已保存的提供商记录指向旧名字。
           aliases:
             - camoufox-proxy
       healthcheck:
@@ -95,10 +96,6 @@ services:
         start_period: 60s
       restart: unless-stopped
 
-    # ── App (API + Web UI) ────────────────────────────────────────
-    # Runs DB migrations automatically on startup (CREATE TABLE IF NOT EXISTS).
-    # Switching databases? Just update DATABASE_URL and restart — tables are
-    # created on first connect, no separate migration step needed.
     app:
       image: ghcr.io/mulemew/errand:latest
       # Long enough for stopAllInstances to dump every open browser's cookies before the
@@ -106,9 +103,6 @@ services:
       # deploy could SIGKILL the app mid-save — a hand-driven browser that was open at that
       # moment lost its session, and under the old code lost its row with it.
       stop_grace_period: 45s
-      build:
-        context: .
-        dockerfile: Dockerfile
       environment:
         DATABASE_URL: ${DATABASE_URL:-postgresql://autoops:${POSTGRES_PASSWORD:-changeme}@db:5432/autoops}
         PORT: "8080"
@@ -141,7 +135,7 @@ services:
           condition: service_healthy
       restart: unless-stopped
 
-
-volumes:
-  pgdata:
-  autoops_data:
+  volumes:
+    pgdata:
+    autoops_data:
+  

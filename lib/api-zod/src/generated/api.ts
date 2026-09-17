@@ -219,6 +219,7 @@ export const ListTasksResponseItem = zod.object({
               ),
             loginUrl: zod
               .string()
+              .optional()
               .describe("URL of the login page to navigate to"),
             successSelector: zod
               .string()
@@ -596,6 +597,7 @@ export const CreateTaskBody = zod.object({
               ),
             loginUrl: zod
               .string()
+              .optional()
               .describe("URL of the login page to navigate to"),
             successSelector: zod
               .string()
@@ -958,6 +960,7 @@ export const GetTaskResponse = zod
                 ),
               loginUrl: zod
                 .string()
+              .optional()
                 .describe("URL of the login page to navigate to"),
               successSelector: zod
                 .string()
@@ -1363,6 +1366,7 @@ export const UpdateTaskBody = zod.object({
               ),
             loginUrl: zod
               .string()
+              .optional()
               .describe("URL of the login page to navigate to"),
             successSelector: zod
               .string()
@@ -1717,6 +1721,7 @@ export const UpdateTaskResponse = zod.object({
               ),
             loginUrl: zod
               .string()
+              .optional()
               .describe("URL of the login page to navigate to"),
             successSelector: zod
               .string()

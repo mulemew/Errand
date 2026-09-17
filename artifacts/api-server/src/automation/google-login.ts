@@ -564,9 +564,12 @@ export async function googleLogin(
   attachPopupHandler(page);
 
   try {
-    logger.info({ targetUrl }, "Starting Google login flow");
+    // Empty target: log in on the page the earlier steps left us on.
+    const onCurrentPage = !targetUrl;
+    if (onCurrentPage) targetUrl = page.url();
+    logger.info({ targetUrl, onCurrentPage }, "Starting Google login flow");
     const timer = new PhaseTimer();
-    await gotoTolerant(page, targetUrl, 60000);
+    if (!onCurrentPage) await gotoTolerant(page, targetUrl, 60000);
     timer.mark("goto");
 
     // Clear a full-page Cloudflare interstitial BEFORE hunting for the OAuth button.
@@ -722,20 +725,17 @@ export async function googleLogin(
       // WAITS, and matches the way every other login path matches. This was a single look
       // 1.5s after landing, compared raw against innerText — see success-text.ts for the
       // three ways that got a successful login reported as a failure.
-      if (successText) {
-        const found = await waitForSuccessCriterion(page, undefined, successText);
+      // ONE check, either half satisfies it — the same shared wait every other login path uses.
+      //
+      // This used to be two: a patient text wait, then a separate single look for the
+      // selector, and BOTH had to pass. With the unified criterion in "auto" the same value
+      // arrives as text AND selector, so "Customize" matched as text and then failed as the
+      // CSS selector <customize>, 59ms after landing on the dashboard. Every value failed.
+      if (successText || successSelector) {
+        const found = await waitForSuccessCriterion(page, successSelector, successText);
         if (!found) {
-          return { success: false, captchaBlocked: false, message: `Login completed but success text "${successText}" not found on page. URL: ${page.url()}` };
+          return { success: false, captchaBlocked: false, message: `Login completed but the success criterion "${successText || successSelector}" never appeared. URL: ${page.url()}` };
         }
-      }
-      if (successSelector) {
-        try {
-          const el = await page.$(successSelector);
-          const visible = el ? await el.evaluate((e: Element) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).catch(() => false) : false;
-          if (!visible) {
-            return { success: false, captchaBlocked: false, message: `Login completed but success selector "${successSelector}" not visible. URL: ${page.url()}` };
-          }
-        } catch { /* 选择器无效，跳过 */ }
       }
       return { success: true, captchaBlocked: false, message: `Already authenticated via Google. Final URL: ${page.url()}` };
     }
@@ -761,20 +761,12 @@ export async function googleLogin(
     // here, retried against a site that was now signed in (so no OAuth button existed), and
     // its session was therefore never saved — so the next run repeated the whole flow, TOTP
     // included, every single day.
-    if (successText) {
-      const found = await waitForSuccessCriterion(page, undefined, successText);
+    // Same single either-satisfies check as the already-signed-in branch above.
+    if (successText || successSelector) {
+      const found = await waitForSuccessCriterion(page, successSelector, successText);
       if (!found) {
-        return { success: false, captchaBlocked: false, message: `Login completed but success text "${successText}" not found on page. URL: ${finalUrl}` };
+        return { success: false, captchaBlocked: false, message: `Login completed but the success criterion "${successText || successSelector}" never appeared. URL: ${finalUrl}` };
       }
-    }
-    if (successSelector) {
-      try {
-        const el = await page.$(successSelector);
-        const visible = el ? await el.evaluate((e: Element) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).catch(() => false) : false;
-        if (!visible) {
-          return { success: false, captchaBlocked: false, message: `Login completed but success selector "${successSelector}" not visible. URL: ${finalUrl}` };
-        }
-      } catch { /* 选择器无效，跳过 */ }
     }
     const finalLandingErr = await verifyOAuthLanding(page, "Google");
     if (finalLandingErr) return { success: false, captchaBlocked: false, message: finalLandingErr };

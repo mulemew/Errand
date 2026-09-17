@@ -6,7 +6,7 @@ import { clickWithFallback, focusForTyping } from "./click-helpers";
 import { dismissPopups } from "./popup-handler";
 import { clearCloudflareInterstitial, bypassCloudflareChallenge } from "./cloudflare-bypass";
 import { detectLoginState } from "./login-verify";
-import { pageHasSuccessText, selectorIsVisible, CRITERION_WAIT_MS } from "./success-text";
+import { criterionMetNow, CRITERION_WAIT_MS } from "./success-text";
 import { detectAndHandleCaptcha } from "./captcha";
 import { formLogin } from "./form-login";
 import { githubLogin } from "./github-login";
@@ -319,7 +319,7 @@ export type WorkflowStep =
   | { type: "cfVerify"; url?: string; maxReloads?: number }
   | { type: "switchToNewPage"; timeout?: number; urlContains?: string }
   | { type: "keypress"; key: string }
-  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successCriterion?: string; successCriterionType?: SelectorKind; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
+  | { type: "login"; loginMethod: "form" | "github" | "google" | "cookie"; loginUrl?: string; inlineUsername?: string; inlinePassword?: string; inlineTotp?: string; successCriterion?: string; successCriterionType?: SelectorKind; successSelector?: string; successText?: string; cookieMode?: boolean; sessionKey?: string; cookies?: string; sessionProfileId?: number }
   | { type: "condition"; conditionType: ConditionType; conditionValue: string; conditionSelector?: string; conditionSelectorType?: SelectorKind; thenAction: BranchAction; elseAction?: BranchAction };
 
 export interface StepResult {
@@ -1075,11 +1075,23 @@ async function executeStep(
     }
 
     case "login": {
-      const loginUrl = step.loginUrl || targetUrl;
+      // An EMPTY login URL means "log in on the page we are on". It used to fall back to the
+      // task's target URL, so a login that could only happen after earlier steps — a page
+      // they navigated to, a modal they opened — was always thrown away by a fresh load.
+      // No stored task relied on that fallback: every login step in the database has a URL.
+      const explicitLoginUrl = (step.loginUrl ?? "").trim();
+      const onCurrentPage = !explicitLoginUrl;
+      // Where the step started. A failed attempt may leave the page elsewhere (an OAuth
+      // provider, an error page), so a RETRY on the current page returns here first.
+      const loginStartUrl = page.url();
+      const loginUrl = explicitLoginUrl;
       // One criterion for every path below — the probe, the affordance check and all three
       // login flows — so they cannot disagree about what the operator asked for.
       const _crit = loginCriterion(step);
-      logger.info({ taskId, stepIndex, loginMethod: step.loginMethod, loginUrl }, "Executing login step");
+      logger.info(
+        { taskId, stepIndex, loginMethod: step.loginMethod, loginUrl: loginUrl || `(current page: ${loginStartUrl})` },
+        "Executing login step",
+      );
 
       // ── Cookie mode: skip login if a restored session is still valid ──────
       // When cookieMode is on, the runner seeds the browser context with the
@@ -1103,7 +1115,7 @@ async function executeStep(
               "没有判据就无法判断 cookie 是否有效，只能一律当作无效。",
           );
         }
-        await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        if (!onCurrentPage) await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await dismissPopups(page);
         const ok = await isSessionAuthenticated(page, _crit.wantSelector, _crit.wantText);
         if (ok) {
@@ -1119,7 +1131,7 @@ async function executeStep(
       const cookieMode = (step as Record<string, unknown>).cookieMode === true;
       if (cookieMode) {
         try {
-          await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+          if (!onCurrentPage) await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
           await dismissPopups(page);
           logger.debug(
             { loginUrl, url: page.url(), hasText: !!_crit.wantText, hasSelector: !!_crit.wantSelector },
@@ -1147,6 +1159,12 @@ async function executeStep(
             try {
               await page.clearCookies();
               logger.info({ taskId, stepIndex }, "Cookie mode — discarded the invalid session's cookies");
+              // The login flows reload an explicit URL themselves, which refetches the page
+              // against the cleared jar. On the current page nothing would, and the form
+              // would still carry the dead session's CSRF token — so reload it here.
+              if (onCurrentPage) {
+                await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+              }
             } catch (clrErr) {
               logger.warn({ taskId, stepIndex, clrErr }, "Could not clear the invalid session's cookies — logging in with them still present");
             }
@@ -1251,14 +1269,32 @@ async function executeStep(
               60_000,
               Math.min(remainingBudget, Number(process.env.LOGIN_ATTEMPT_CAP_MS ?? 300_000)),
             );
+            // On the current page, an attempt stays put — including a retry, as long as the
+            // page is still where the step started. Reloading "just to be safe" undoes what the
+            // earlier steps did: godlike's /login shows only buttons until "Through
+            // login/password" is clicked, and that click survives only while the page is not
+            // reloaded, so a retry that reloaded /login would find no password field at all.
+            //
+            // Only when a failed attempt has left the page somewhere else (an OAuth provider,
+            // an error screen) does a retry go back to where the step started.
+            const wandered = (() => {
+              try { return page.url() !== loginStartUrl; } catch { return true; }
+            })();
+            const attemptUrl = onCurrentPage && attempt > 0 && wandered ? loginStartUrl : loginUrl;
+            if (onCurrentPage && attempt > 0) {
+              logger.info(
+                { taskId, stepIndex, attempt, url: page.url(), startedAt: loginStartUrl },
+                wandered ? "Login retry: page moved away — returning to where the step started" : "Login retry: still on the starting page — retrying in place",
+              );
+            }
             const runLogin = async () => {
               if (step.loginMethod === "github") {
-                return githubLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
+                return githubLogin(page, attemptUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
               }
               if (step.loginMethod === "google") {
-                return googleLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
+                return googleLogin(page, attemptUrl, { username, password, totpSecret }, solver, _crit.wantText, _crit.wantSelector);
               }
-              return formLogin(page, loginUrl, { username, password, totpSecret }, solver, _crit.wantSelector, totpSecret, _crit.wantText);
+              return formLogin(page, attemptUrl, { username, password, totpSecret }, solver, _crit.wantSelector, totpSecret, _crit.wantText);
             };
             loginResult = await Promise.race([
               runLogin(),
@@ -1583,29 +1619,15 @@ async function probeSessionOnce(
 ): Promise<boolean | null> {
   const hasCriterion = !!(successText?.trim() || successSelector?.trim());
 
-  if (successText) {
+  // The one shared definition of "met" (success-text.ts), not a local copy of it.
+  if (hasCriterion) {
     try {
-      // The SHARED matcher, not a raw `includes` on innerText. This probe used to be the
-      // strictest of the three success-text checks in the codebase while pretending to ask
-      // the same question: the very page that satisfied the form path failed here, the task
-      // concluded it was logged out, and it logged in again on top of a working session.
-      if (await pageHasSuccessText(page, successText)) {
-        logger.debug({ attempt, successText }, "Session check: success TEXT found on the page");
+      const evidence = await criterionMetNow(page, successSelector, successText);
+      if (evidence) {
+        logger.debug({ attempt, evidence }, "Session check: success criterion met");
         return true;
       }
-      logger.debug({ attempt, successText }, "Session check: success text not on the page yet");
-    } catch {}
-  }
-  if (successSelector) {
-    // The shared check, not a second copy of it. This one was identical to selectorIsVisible
-    // by luck rather than by construction, and the text check next to it had already drifted
-    // once with exactly that excuse.
-    try {
-      if (await selectorIsVisible(page, successSelector)) {
-        logger.debug({ attempt, successSelector }, "Session check: success SELECTOR matched and is visible");
-        return true;
-      }
-      logger.debug({ attempt, successSelector }, "Session check: success selector not visible yet");
+      logger.debug({ attempt, successText, successSelector }, "Session check: success criterion not met yet");
     } catch {}
   }
   if (hasCriterion) {

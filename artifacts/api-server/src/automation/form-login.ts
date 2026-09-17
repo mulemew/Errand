@@ -952,10 +952,15 @@ export async function formLogin(
     attachPopupHandler(page);
 
     try {
-      logger.info({ targetUrl }, "Starting form login flow");
+      // Empty target: log in on the page the earlier steps left us on, instead of throwing
+      // away whatever they set up with a fresh page load.
+      const onCurrentPage = !targetUrl;
+      if (onCurrentPage) targetUrl = page.url();
+      logger.info({ targetUrl, onCurrentPage }, "Starting form login flow");
       // Tolerant: a self-refreshing CF interstitial can blow the load budget while being
       // perfectly present and clickable. clearCloudflareInterstitial runs right below.
-      await gotoTolerant(page, targetUrl, 20000);
+      if (!onCurrentPage) await gotoTolerant(page, targetUrl, 20000);
+      else logger.info({ url: targetUrl }, "Login URL left empty — logging in on the current page");
 
       // ── 0a. Clear a full-page Cloudflare interstitial FIRST ───────────────
       // Several of the panels we test against

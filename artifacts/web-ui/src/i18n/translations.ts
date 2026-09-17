@@ -335,6 +335,9 @@ export interface Translations {
       loginMethod: string;
       standardForm: string;
       loginPageUrl: string;
+      loginPageUrlHint: string;
+      loginOnCurrentPage: string;
+      loginPageUrlPlaceholder: string;
       useSavedCredential: string;
       enterInline: string;
       selectCredential: string;
@@ -1124,7 +1127,10 @@ export interface Translations {
       stepCfVerifyHint: "在点击/填写目标只有通过 Cloudflare 验证后才可交互时使用。留空网址则对当前页面执行；验证仍未通过时会刷新页面并重试。",
       loginMethod: "登录方式",
       standardForm: "标准表单",
-      loginPageUrl: "登录页 URL",
+      loginPageUrl: "登录页 URL（可选）",
+      loginPageUrlHint: "填了就打开这个页面再登录；留空则直接在前面步骤停留的当前页面上登录，不跳转。",
+      loginOnCurrentPage: "当前页面",
+      loginPageUrlPlaceholder: "留空则直接在当前页面登录",
       useSavedCredential: "使用已保存凭证",
       enterInline: "手动输入",
       selectCredential: "选择已保存的凭证…",
@@ -1905,7 +1911,10 @@ export interface Translations {
       stepCfVerifyHint: "Use before a click/fill whose target only becomes interactive once a Cloudflare / Turnstile challenge is passed. Leave URL blank to run on the current page; if the challenge is not cleared, the page is reloaded and retried.",
       loginMethod: "Login Method",
       standardForm: "Standard Form",
-      loginPageUrl: "Login Page URL",
+      loginPageUrl: "Login Page URL (optional)",
+      loginPageUrlHint: "Filled in: open this page, then log in. Empty: log in on the page the previous steps left open, without navigating.",
+      loginOnCurrentPage: "current page",
+      loginPageUrlPlaceholder: "Leave empty to log in on the current page",
       useSavedCredential: "Use saved credential",
       enterInline: "Enter inline",
       selectCredential: "Select a saved credential…",
