@@ -1,14 +1,14 @@
 # =============================================================
-  # Errand — 拉取预构建镜像部署（无需克隆代码）
+  # Errand — 生产部署（拉取公开的预构建镜像，不需要克隆代码、不需要构建）
   #
   # 使用方法：
-  #   1. 下载此文件
+  #   1. 下载此文件到服务器上的一个空目录
   #   2. 同目录创建 .env，至少填入 POSTGRES_PASSWORD
   #      DASHBOARD_PASSWORD 可不填，首次访问会在浏览器里设置密码
-  #   3. docker compose -f docker-compose.image.yml up -d
+  #   3. docker compose pull && docker compose up -d
   #
-  # 如需使用 Cloudflare 绕过功能（SeleniumBase），provider-seleniumbase 已包含在内，
-  # 无需额外操作，启动后在设置页选择 SeleniumBase 提供商即可。
+  # 完整步骤和环境变量说明见 README「生产部署」。
+  # 开发、从源码构建请用 docker-compose.dev.yml。
   # =============================================================
 
   services:
