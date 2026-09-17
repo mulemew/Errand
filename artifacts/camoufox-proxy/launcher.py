@@ -33,6 +33,13 @@ cfg = json.loads(os.environ["CAMOUFOX_CFG"])
 #  _preset    → a real captured preset dict → launch_server(fingerprint_preset=...).
 # Both funnel into config internally (from_browserforge / from_preset), same as a fresh
 # generation — just fixed. When neither is set, Camoufox generates a fresh one from os.
+# Addons to leave out, by name — camoufox installs uBlock Origin unless told otherwise,
+# and the enum that names it cannot cross the JSON boundary the config takes to get here.
+_excl = cfg.pop("_exclude_addon_names", None)
+if _excl:
+    from camoufox.addons import DefaultAddons
+    cfg["exclude_addons"] = [DefaultAddons[n] for n in _excl if n in DefaultAddons.__members__]
+
 _fp_b64 = cfg.pop("_fp_pickle", None)
 _preset = cfg.pop("_preset", None)
 if _fp_b64:

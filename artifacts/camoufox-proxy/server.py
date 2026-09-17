@@ -91,6 +91,21 @@ def _build_options(body: dict) -> dict:
         "humanize": _bodyflag("humanize", "CAMOUFOX_HUMANIZE", True),
         "block_webrtc": _bodyflag("blockWebrtc", "CAMOUFOX_BLOCK_WEBRTC", True),
     }
+    # Camoufox installs uBlock Origin by default (camoufox.addons.DefaultAddons.UBO), and
+    # nothing in the app knew that. The Providers page has a "block ads" switch; turning it
+    # OFF removed the app's own network rules and left uBO installed and blocking, so a site
+    # that gates on ads rendering — "ADBLOCKER DETECTED, please disable it and continue" —
+    # could not be got past by any setting the operator could see. Worse, uBO loads its
+    # filter lists a few seconds after launch, so a probe run right after startup says the
+    # browser blocks nothing.
+    #
+    # The switch now reaches the addon. Default stays "installed": callers that say nothing
+    # keep the behaviour they have today.
+    # By NAME, not by enum member: these options are handed to the launcher as JSON in an
+    # environment variable, and an enum does not survive that trip. launcher.py turns the
+    # names back into DefaultAddons members.
+    if not _bodyflag("blockAds", "CAMOUFOX_BLOCK_ADS", True):
+        opts["_exclude_addon_names"] = ["UBO"]
     # Extra camoufox knobs, opt-in via env (all off by default):
     if _envflag("CAMOUFOX_BLOCK_IMAGES", False):
         opts["block_images"] = True
