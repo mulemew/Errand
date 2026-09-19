@@ -445,6 +445,30 @@ const CLICK_CAPTCHA_PROVIDERS: ClickCaptchaDetection[] = [
  * Returns null if no click captcha was detected.
  */
 async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaResult | null> {
+  // A token captcha owns the page — stand down and let detectTokenCaptcha have it.
+  //
+  // This matcher knows nothing but CSS class names, and a Turnstile checkbox lives in a
+  // closed shadow root inside a cross-origin iframe, so it cannot reach the real control
+  // however wide its selectors get. What it CAN do is hit something else on the same
+  // dialog. A site that wraps its challenge in a modal tends to name the modal's own
+  // controls after the captcha — a Cancel button classed `…-captcha-btn` is matched by
+  // `[class*='captcha-btn']` — so the "bypass" clicked CANCEL, the dialog vanished, and
+  // the vanishing was read as a pass by the "widget disappeared" check below. The gated
+  // action never happened and the run was recorded as a success.
+  const tokenCaptchaPresent = (await page
+    .evaluate(() =>
+      !!document.querySelector(
+        "input[name='cf-turnstile-response'], textarea[name='cf-turnstile-response'], " +
+          "input[id^='cf-chl-widget-'][id$='_response'], .cf-turnstile, " +
+          "iframe[src*='challenges.cloudflare.com'], iframe[src*='turnstile']",
+      ),
+    )
+    .catch(() => false)) as boolean;
+  if (tokenCaptchaPresent) {
+    logger.info("Cloudflare Turnstile present — generic click matcher stands down, leaving it to the token handler");
+    return null;
+  }
+
   for (const provider of CLICK_CAPTCHA_PROVIDERS) {
     try {
       const container = await page.$(provider.containerSelector);
@@ -457,6 +481,28 @@ async function detectAndBypassClickCaptcha(page: PageAdapter): Promise<CaptchaRe
         return r.width > 0 && r.height > 0 && style.display !== "none" && style.visibility !== "hidden";
       }).catch(() => false) as boolean;
       if (!visible) continue;
+
+      // Never click a dismiss control. No captcha's verify button says "Cancel", so a
+      // match on one means the selector caught the wrong element — clicking it throws the
+      // challenge away, and the resulting empty page reads as success to every check below.
+      const isDismiss = (await container
+        .evaluate((e: Element) => {
+          const txt = (e.textContent ?? "").trim();
+          const act = (e.getAttribute("data-action") ?? "").trim();
+          return (
+            /^(cancel|close|dismiss|abort|no thanks)$/i.test(txt) ||
+            /^(cancel|close|dismiss)$/i.test(act) ||
+            /取消|关闭/.test(txt)
+          );
+        })
+        .catch(() => false)) as boolean;
+      if (isDismiss) {
+        logger.info(
+          { provider: provider.name },
+          "Matched element is a dismiss control (Cancel/Close), not a captcha button — skipping",
+        );
+        continue;
+      }
 
       logger.info({ provider: provider.name }, "Click-to-verify captcha detected — attempting click bypass");
 

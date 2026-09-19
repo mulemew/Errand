@@ -9,6 +9,40 @@
 import puppeteer, { type Page as PuppeteerPage, type Frame as PuppeteerFrame } from "puppeteer";
 import { chromium, firefox, type Page as PlaywrightPage, type Frame as PlaywrightFrame } from "playwright-core";
 
+/**
+ * Stop WAITING on an input operation that the browser is never going to acknowledge.
+ *
+ * Playwright's mouse API takes no `timeout` option and `setDefaultTimeout` does not reach
+ * it, so a page that stops servicing input hangs these forever. `locator.click` DOES carry
+ * the default timeout, and that is the one that is not enough: a run spent 90 minutes on a
+ * single `locator.click` without the 60 s timeout ever firing, and was released only when
+ * the camoufox sidecar killed the over-age session (CAMOUFOX_SESSION_TTL, 5400 s). Nothing
+ * in this codebase noticed. Input is also serialised per page, so the first stuck operation
+ * takes every later one down with it — which is why the whole workflow stalls, not one click.
+ *
+ * The browser-side operation cannot be cancelled from here; this only converts an infinite
+ * wait into an error the caller can handle. 45 s is far above any legitimate move — even
+ * camoufox's humanized cursor crosses the window in about 1.5 s — and the 90 s used for
+ * `locator.click` sits ABOVE its own 60 s timeout so a normal actionability failure still
+ * reports itself in Playwright's own words.
+ *
+ * This is a stopgap. The real fix is liveness supervision at the page level: ask the browser
+ * a cheap question on an interval and tear the page down when it answers while the step does
+ * not — then these wall-clock numbers can go.
+ */
+function boundedInput<T>(op: Promise<T>, what: string, ms = 45_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    Promise.resolve(op).finally(() => clearTimeout(timer)),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${what}: timed out after ${ms}ms — the page is not accepting input`)),
+        ms,
+      );
+    }),
+  ]);
+}
+
 // ── Adapter interfaces ────────────────────────────────────────────────────────
 
 export interface ElementAdapter {
@@ -226,10 +260,10 @@ export function wrapPuppeteerPage(page: PuppeteerPage): PageAdapter {
       press: (key) => page.keyboard.press(key as Parameters<typeof page.keyboard.press>[0]),
     },
     mouse: {
-      move: (x, y) => page.mouse.move(x, y),
-      click: (x, y, opts) => page.mouse.click(x, y, opts),
-      down: () => page.mouse.down(),
-      up: () => page.mouse.up(),
+      move: (x, y) => boundedInput(page.mouse.move(x, y), "mouse.move"),
+      click: (x, y, opts) => boundedInput(page.mouse.click(x, y, opts), "mouse.click"),
+      down: () => boundedInput(page.mouse.down(), "mouse.down"),
+      up: () => boundedInput(page.mouse.up(), "mouse.up"),
     },
     bringToFront: () => page.bringToFront(),
     viewport: () => page.viewport(),
@@ -263,7 +297,7 @@ function wrapPlaywrightFrame(frame: PlaywrightFrame): FrameAdapter {
         const locator = frame.locator(sel).first();
         if ((await locator.count()) === 0) return null;
         return {
-          click: () => locator.click(),
+          click: () => boundedInput(locator.click(), "locator.click", 90_000),
           evaluate: <T>(fn: (el: Element) => T) => locator.evaluate(fn) as Promise<T>,
           boundingBox: () => locator.boundingBox(),
           screenshot: async (opts) => {
@@ -321,7 +355,7 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
         const locator = page.locator(sel).first();
         if ((await locator.count()) === 0) return null;
         return {
-          click: () => locator.click(),
+          click: () => boundedInput(locator.click(), "locator.click", 90_000),
           evaluate: <T>(fn: (el: Element) => T) => locator.evaluate(fn) as Promise<T>,
           boundingBox: () => locator.boundingBox(),
           screenshot: async (opts) => {
@@ -360,10 +394,10 @@ export function wrapPlaywrightPage(page: PlaywrightPage): PageAdapter {
       press: (key) => page.keyboard.press(key),
     },
     mouse: {
-      move: (x, y) => page.mouse.move(x, y),
-      click: (x, y, opts) => page.mouse.click(x, y, opts),
-      down: () => page.mouse.down(),
-      up: () => page.mouse.up(),
+      move: (x, y) => boundedInput(page.mouse.move(x, y), "mouse.move"),
+      click: (x, y, opts) => boundedInput(page.mouse.click(x, y, opts), "mouse.click"),
+      down: () => boundedInput(page.mouse.down(), "mouse.down"),
+      up: () => boundedInput(page.mouse.up(), "mouse.up"),
     },
     clearCookies: async () => { await page.context().clearCookies(); },
     bringToFront: () => page.bringToFront(),
