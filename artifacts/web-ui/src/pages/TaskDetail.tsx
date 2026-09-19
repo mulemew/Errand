@@ -426,6 +426,20 @@ export default function TaskDetail() {
     const id = setInterval(() => void ask(), 2000);
     return () => { stopped = true; clearInterval(id); };
   }, [watching, liveViewReady, taskId]);
+  // Same as the Browsers page: the client sizes its screen when it connects, so mount it
+  // only after the dialog is open AND laid out (two frames), and remount on "reconnect".
+  const [viewEpoch, setViewEpoch] = useState(0);
+  useEffect(() => {
+    if (!watching || !liveViewReady) { setViewEpoch(0); return; }
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setViewEpoch((n) => (n === 0 ? 1 : n)));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [watching, liveViewReady]);
     const [isStopping, setIsStopping] = useState(false);
 
     const handleStop = async () => {
@@ -1467,10 +1481,31 @@ export default function TaskDetail() {
           dialog is open — mounting it is what opens the connection. */}
       <Dialog open={watching} onOpenChange={(o) => !o && setWatching(false)}>
         <DialogContent className="max-w-6xl w-full p-2">
-          <p className="text-xs text-muted-foreground px-1 pb-2">{t.watchLiveHint}</p>
+          <div className="flex items-center gap-2 px-1 pb-2 pr-8">
+            <p className="text-xs text-muted-foreground min-w-0 flex-1 truncate">{t.watchLiveHint}</p>
+            {liveViewReady && (
+              <Button
+                variant="outline" size="sm" className="h-7 text-xs shrink-0"
+                onClick={() =>
+                  window.open(`/api/live-view/task-${taskId}/`, `liveview-task-${taskId}`, "noopener,width=1280,height=800")
+                }
+              >
+                {t.openInNewWindow}
+              </Button>
+            )}
+            {liveViewReady && (
+              <Button
+                variant="ghost" size="sm" className="h-7 text-xs shrink-0"
+                onClick={() => setViewEpoch((n) => n + 1)}
+              >
+                {t.reconnectView}
+              </Button>
+            )}
+          </div>
           {watching && liveViewProviderId != null && (
-            liveViewReady ? (
+            liveViewReady && viewEpoch > 0 ? (
               <iframe
+                key={viewEpoch}
                 // "task-<id>" asks for THIS run's own display. Mounted only once the server
                 // says there IS one: the websocket target is resolved at upgrade and never
                 // again, so an iframe opened a second too early stays pinned to nothing and
